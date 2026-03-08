@@ -1,0 +1,9 @@
+.sconsign.dblite
+*.pdb
+*.obj
+*.o
+*.os
+bin/
+Temp/*.obj
+Temp/*.o
+Temp/*.os
