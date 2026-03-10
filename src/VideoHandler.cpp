@@ -38,24 +38,37 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 #if defined(_WIN32) || defined(__ANDROID__)
     if (data == RETRO_HW_FRAME_BUFFER_VALID)
     {
-        int bytes_per_pixel = 4;
+        pixel_data.resize((int64_t)width * height * 4);
 
-        pixel_data.resize(width * height * bytes_per_pixel);
-        glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
+        if (instance->m_video_handler->m_vulkan_ctx)
+        {
+            // Vulkan path: readback from Vulkan image via staging buffer
+            instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data);
+        }
+        else
+        {
+            // OpenGL path: read pixels from the current framebuffer
+            glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
 #ifdef _WIN32
-        SDL_GL_SwapWindow(instance->m_video_handler->m_sdl_window);
+            SDL_GL_SwapWindow(instance->m_video_handler->m_sdl_window);
 #elif defined(__ANDROID__)
-        eglSwapBuffers(instance->m_video_handler->m_egl_display, instance->m_video_handler->m_egl_surface);
+            eglSwapBuffers(instance->m_video_handler->m_egl_display, instance->m_video_handler->m_egl_surface);
 #endif
+        }
 
         if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
         {
             instance->m_video_handler->m_last_width  = width;
             instance->m_video_handler->m_last_height = height;
-            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, true);
+            // Vulkan images are top-to-bottom; GL framebuffers are bottom-to-top.
+            const bool flip = (instance->m_video_handler->m_vulkan_ctx == nullptr);
+            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, flip);
         }
         else
-            instance->UpdateTexture(pixel_data, true);
+        {
+            const bool flip = (instance->m_video_handler->m_vulkan_ctx == nullptr);
+            instance->UpdateTexture(pixel_data, flip);
+        }
 
         return;
     }
@@ -188,6 +201,13 @@ void VideoHandler::DeInit()
     if (m_image.is_valid())
         m_image.unref();
 
+    // Destroy Vulkan context before platform-specific GL teardown.
+    if (m_vulkan_ctx)
+    {
+        m_vulkan_ctx->Destroy();
+        m_vulkan_ctx.reset();
+    }
+
 #ifdef _WIN32
     if (m_sdl_gl_context)
     {
@@ -230,6 +250,22 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
 {
     if (!m_context_reset)
         return true;
+
+    // ---- Vulkan path (both platforms) ----
+    if (m_hw_context_type == RETRO_HW_CONTEXT_VULKAN)
+    {
+        Log("Creating Vulkan context...");
+        m_vulkan_ctx = std::make_unique<VulkanContext>();
+        if (!m_vulkan_ctx->Init(m_negotiation_iface))
+        {
+            LogError("VulkanContext::Init failed.");
+            m_vulkan_ctx.reset();
+            return false;
+        }
+        LogOK("Vulkan context created successfully.");
+        m_context_reset();
+        return true;
+    }
 
 #ifdef _WIN32
     Log("Creating OpenGL context...");
@@ -458,10 +494,12 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
 #ifdef __ANDROID__
     if (hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES2 &&
         hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES3 &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES_VERSION)
+        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES_VERSION &&
+        hw_render_callback->context_type != RETRO_HW_CONTEXT_VULKAN)
 #else
     if (hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGL &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGL_CORE)
+        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGL_CORE &&
+        hw_render_callback->context_type != RETRO_HW_CONTEXT_VULKAN)
 #endif
     {
         LogError("Unsupported context type: " + std::to_string(hw_render_callback->context_type));
@@ -483,11 +521,9 @@ bool VideoHandler::GetPreferredHwRender(retro_hw_context_type* hw_context_type) 
     if (!hw_context_type)
         return false;
 
-#ifdef __ANDROID__
-    *hw_context_type = RETRO_HW_CONTEXT_OPENGLES3;
-#else
-    *hw_context_type = RETRO_HW_CONTEXT_OPENGL;
-#endif
+    // Advertise Vulkan as the preferred context on both platforms.
+    // Cores that support Vulkan will select it; others will fall back via SET_HW_RENDER.
+    *hw_context_type = RETRO_HW_CONTEXT_VULKAN;
     return true;
 }
 
