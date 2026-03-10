@@ -17,16 +17,24 @@ env.Append(CPPPATH=[
 is_windows = env["platform"] == "windows"
 is_android = env["platform"] == "android"
 
+import os
+
 if is_windows:
     env.Append(CPPPATH=["external/SDL3/include/"])
     env.Append(CXXFLAGS=["/std:c++latest"])
     env.Append(LIBPATH=[r"external/SDL3/lib/x64"])
-    env.Append(LIBS=["user32", "gdi32", "opengl32", "SDL3"])
+    env.Append(LIBS=["user32", "gdi32", "opengl32", "SDL3", "vulkan-1"])
     env.Append(LINKFLAGS=['/IGNORE:4099'])
+    # Locate vulkan-1.lib: prefer VULKAN_SDK env var, fall back to known install path
+    vulkan_sdk = os.environ.get("VULKAN_SDK", r"C:\VulkanSDK\1.4.341.1")
+    env.Append(LIBPATH=[vulkan_sdk + r"\Lib"])
 
 if is_android:
     env.Append(CXXFLAGS=["-std=c++20"])
-    env.Append(LIBS=["dl", "log", "EGL", "GLESv3"])
+    env.Append(LIBS=["dl", "log", "EGL", "GLESv3", "vulkan"])
+
+# Vulkan headers (bundled submodule — used on both platforms)
+env.Append(CPPPATH=["external/vulkan-headers/include/"])
 
 sources = Glob("src/*.cpp")
 sources.extend(Glob("external/libretro-common/compat/*.c"))

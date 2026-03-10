@@ -5,6 +5,7 @@
 #include <godot_cpp/classes/standard_material3d.hpp>
 
 #include <cstdint>
+#include <memory>
 
 #ifdef _WIN32
 #include <SDL3/SDL_video.h>
@@ -13,6 +14,7 @@
 #endif
 
 #include <libretro.h>
+#include "VulkanContext.hpp"
 
 namespace SK
 {
@@ -40,6 +42,16 @@ public:
     bool SetHwRender(retro_hw_render_callback* hw_render_callback);
     bool GetPreferredHwRender(retro_hw_context_type* hw_context_type) const;
 
+    void SetNegotiationInterface(retro_hw_render_context_negotiation_interface_vulkan* iface)
+    {
+        m_negotiation_iface = iface;
+    }
+
+    retro_hw_render_interface_vulkan* GetVulkanInterface()
+    {
+        return m_vulkan_ctx ? m_vulkan_ctx->GetInterface() : nullptr;
+    }
+
 private:
     godot::Ref<godot::StandardMaterial3D> m_original_surface_material_override = nullptr;
     godot::Ref<godot::StandardMaterial3D> m_new_material = nullptr;
@@ -56,6 +68,9 @@ private:
     EGLContext m_egl_context = EGL_NO_CONTEXT;
     EGLSurface m_egl_surface = EGL_NO_SURFACE;
 #endif
+
+    std::unique_ptr<VulkanContext> m_vulkan_ctx;
+    retro_hw_render_context_negotiation_interface_vulkan* m_negotiation_iface = nullptr;
 
     uint32_t m_rotation = 0;
     retro_hw_context_reset_t m_context_reset = nullptr;

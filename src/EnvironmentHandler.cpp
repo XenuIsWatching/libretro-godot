@@ -5,6 +5,8 @@
 #include "Wrapper.hpp"
 #include "Debug.hpp"
 #include "InputHandler.hpp"
+#include "VideoHandler.hpp"
+#include <libretro_vulkan.h>
 
 #include <filesystem>
 
@@ -255,9 +257,20 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_GET_USERNAME:                                        return instance->m_environment_handler->GetUsername(static_cast<const char**>(data));
     case RETRO_ENVIRONMENT_GET_LANGUAGE:                                        return instance->m_environment_handler->GetLanguage(static_cast<retro_language*>(data));
     case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER:                    return EnvironmentNotImplemented(cmd);
-    case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:                             return EnvironmentNotImplemented(cmd);
+    case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
+    {
+        auto** out = static_cast<const retro_hw_render_interface**>(data);
+        *out = reinterpret_cast<const retro_hw_render_interface*>(
+            instance->m_video_handler->GetVulkanInterface());
+        return (*out != nullptr);
+    }
     case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:                            return instance->m_environment_handler->SetSupportAchievements(static_cast<bool*>(data));
-    case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:         return EnvironmentNotImplemented(cmd);
+    case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
+    {
+        auto* iface = static_cast<retro_hw_render_context_negotiation_interface_vulkan*>(data);
+        instance->m_video_handler->SetNegotiationInterface(iface);
+        return true;
+    }
     case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:                            return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT:                               return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_VFS_INTERFACE:                                   return instance->m_environment_handler->GetVfsInterface(static_cast<retro_vfs_interface_info*>(data));
@@ -288,7 +301,13 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_SET_VARIABLE:                                        return instance->m_options_handler->SetVariable(static_cast<const retro_variable*>(data));
     case RETRO_ENVIRONMENT_GET_THROTTLE_STATE:                                  return instance->m_environment_handler->GetThrottleState(static_cast<retro_throttle_state*>(data));
     case RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT:                               return EnvironmentNotImplemented(cmd);
-    case RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT: return EnvironmentNotImplemented(cmd);
+    case RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT:
+    {
+        auto* s = static_cast<retro_hw_render_context_negotiation_interface*>(data);
+        s->interface_type    = RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN;
+        s->interface_version = RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN_VERSION;
+        return true;
+    }
     case RETRO_ENVIRONMENT_GET_JIT_CAPABLE:                                     return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE:                            return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_DEVICE_POWER:                                    return EnvironmentNotImplemented(cmd);
