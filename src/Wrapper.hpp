@@ -20,6 +20,7 @@
 
 #include "ThreadCommand.hpp"
 #include "Core.hpp"
+#include "CallbackTrampolines.hpp"
 #include "EnvironmentHandler.hpp"
 #include "VideoHandler.hpp"
 #include "AudioHandler.hpp"
@@ -80,6 +81,7 @@ public:
     const std::string& GetTempDirectory() const { return m_temp_directory; }
 
     std::unique_ptr<Core> m_core = nullptr;
+    std::unique_ptr<CallbackTrampolines> m_trampolines = nullptr;
     std::unique_ptr<EnvironmentHandler> m_environment_handler = nullptr;
     std::unique_ptr<VideoHandler> m_video_handler = nullptr;
     std::unique_ptr<AudioHandler> m_audio_handler = nullptr;

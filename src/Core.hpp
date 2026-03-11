@@ -10,6 +10,7 @@
 namespace SK
 {
 class Wrapper;
+class CallbackTrampolines;
 
 class Core
 {
@@ -17,7 +18,7 @@ public:
     Core(const std::string& path);
     ~Core() = default;
 
-    bool Load();
+    bool Load(CallbackTrampolines* trampolines);
     void Unload();
 
     const std::string& GetName() const;

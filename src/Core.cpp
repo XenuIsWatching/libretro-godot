@@ -1,6 +1,7 @@
 #include "Core.hpp"
 
 #include "Wrapper.hpp"
+#include "CallbackTrampolines.hpp"
 
 #include <filesystem>
 #include <sstream>
@@ -45,7 +46,7 @@ Core::Core(const std::string& path)
 {
 }
 
-bool Core::Load()
+bool Core::Load(CallbackTrampolines* trampolines)
 {
     if (!std::filesystem::is_regular_file(m_path))
     {
@@ -104,12 +105,12 @@ bool Core::Load()
     LoadFunction(retro_get_memory_data);
     LoadFunction(retro_get_memory_size);
 
-    retro_set_environment(EnvironmentHandler::Callback);
-    retro_set_video_refresh(VideoHandler::RefreshCallback);
-    retro_set_audio_sample(AudioHandler::SampleCallback);
-    retro_set_audio_sample_batch(AudioHandler::SampleBatchCallback);
-    retro_set_input_poll(InputHandler::PollCallback);
-    retro_set_input_state(InputHandler::StateCallback);
+    retro_set_environment(trampolines->GetEnvironmentCallback());
+    retro_set_video_refresh(trampolines->GetVideoRefreshCallback());
+    retro_set_audio_sample(trampolines->GetAudioSampleCallback());
+    retro_set_audio_sample_batch(trampolines->GetAudioSampleBatchCallback());
+    retro_set_input_poll(trampolines->GetInputPollCallback());
+    retro_set_input_state(trampolines->GetInputStateCallback());
 
     retro_init();
 

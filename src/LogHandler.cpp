@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "Wrapper.hpp"
+#include "CallbackTrampolines.hpp"
 
 using namespace godot;
 
@@ -16,7 +17,11 @@ bool LogHandler::GetLogInterface(retro_log_callback* callback)
     if (!callback)
         return true;
 
-    callback->log = LogInterfaceLog;
+    auto* w = Wrapper::GetCurrentThreadWrapper();
+    if (w && w->m_trampolines)
+        callback->log = w->m_trampolines->GetLogCallback();
+    else
+        callback->log = LogInterfaceLog;  // fallback to static handler
     return true;
 }
 
