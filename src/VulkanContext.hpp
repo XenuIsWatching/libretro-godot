@@ -64,6 +64,11 @@ private:
     uint32_t                m_src_queue_family         = VK_QUEUE_FAMILY_IGNORED;
     VkSemaphore             m_signal_semaphore         = VK_NULL_HANDLE;
 
+    VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+#ifdef _WIN32
+    void* m_hidden_hwnd = nullptr;
+#endif
+
     std::mutex m_queue_mutex;
 
     retro_hw_render_context_negotiation_interface_vulkan* m_negotiation = nullptr;

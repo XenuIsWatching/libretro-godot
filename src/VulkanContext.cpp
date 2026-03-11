@@ -4,6 +4,11 @@
 #include <cstring>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
+
 using namespace godot;
 
 namespace SK
@@ -118,6 +123,16 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         ici.pApplicationInfo = app_info_ptr;
 
+        // Enable surface extensions so cores can create a swapchain.
+        std::vector<const char*> inst_exts;
+        inst_exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+#ifdef _WIN32
+        inst_exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
+        inst_exts.push_back("VK_KHR_get_physical_device_properties2");
+        ici.enabledExtensionCount   = static_cast<uint32_t>(inst_exts.size());
+        ici.ppEnabledExtensionNames = inst_exts.data();
+
         VkResult r = vkCreateInstance(&ici, nullptr, &m_instance);
         if (r != VK_SUCCESS)
         {
@@ -174,6 +189,32 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         LogOK("VulkanContext: GPU: " + std::string(props.deviceName));
     }
 
+    // ---- Create a surface for cores that require one (e.g. Dolphin) ----
+#ifdef _WIN32
+    {
+        m_hidden_hwnd = CreateWindowExW(
+            0, L"STATIC", L"SKLibretro_VkSurface", 0,
+            0, 0, 1, 1, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        if (m_hidden_hwnd)
+        {
+            auto createSurface = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
+                vkGetInstanceProcAddr(m_instance, "vkCreateWin32SurfaceKHR"));
+            if (createSurface)
+            {
+                VkWin32SurfaceCreateInfoKHR sci{ VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR };
+                sci.hinstance = GetModuleHandleW(nullptr);
+                sci.hwnd      = static_cast<HWND>(m_hidden_hwnd);
+                VkResult r = createSurface(m_instance, &sci, nullptr, &m_surface);
+                if (r != VK_SUCCESS)
+                    LogWarning("VulkanContext: vkCreateWin32SurfaceKHR failed: " + std::to_string(r));
+                else
+                    LogOK("VulkanContext: VkSurfaceKHR created.");
+            }
+        }
+    }
+#endif
+
     // ---- Create logical device ----
     retro_vulkan_context vk_ctx{};
     bool device_from_negotiation = false;
@@ -183,7 +224,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         if (neg->interface_version >= 2 && neg->create_device2)
         {
             device_from_negotiation = neg->create_device2(
-                &vk_ctx, m_instance, m_gpu, VK_NULL_HANDLE,
+                &vk_ctx, m_instance, m_gpu, m_surface,
                 vkGetInstanceProcAddr, s_CreateDeviceWrapper, this);
 
             if (!device_from_negotiation)
@@ -192,7 +233,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         else if (neg->create_device)
         {
             device_from_negotiation = neg->create_device(
-                &vk_ctx, m_instance, m_gpu, VK_NULL_HANDLE,
+                &vk_ctx, m_instance, m_gpu, m_surface,
                 vkGetInstanceProcAddr, nullptr, 0, nullptr, 0, nullptr);
 
             if (!device_from_negotiation)
@@ -322,6 +363,20 @@ void VulkanContext::Destroy()
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
     }
+
+    if (m_surface != VK_NULL_HANDLE)
+    {
+        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+        m_surface = VK_NULL_HANDLE;
+    }
+
+#ifdef _WIN32
+    if (m_hidden_hwnd)
+    {
+        DestroyWindow(static_cast<HWND>(m_hidden_hwnd));
+        m_hidden_hwnd = nullptr;
+    }
+#endif
 
     if (m_instance != VK_NULL_HANDLE)
     {
