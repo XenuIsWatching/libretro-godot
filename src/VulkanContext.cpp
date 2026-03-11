@@ -109,29 +109,53 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         if (neg && neg->get_application_info)
             app_info_ptr = neg->get_application_info();
 
-        if (!app_info_ptr)
+        // Cores may advertise a low apiVersion (e.g. 1.0) but internally
+        // compile shaders targeting a higher SPIR-V version.  Query the
+        // driver's maximum supported instance version and use that so the
+        // validation environment matches what the core actually needs.
+        uint32_t max_api_version = VK_API_VERSION_1_2;
+        auto enumVer = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+        if (enumVer)
+            enumVer(&max_api_version);
+
+        if (app_info_ptr)
+        {
+            // Copy the core's app info but override the API version.
+            app_info = *app_info_ptr;
+            app_info.apiVersion = max_api_version;
+            app_info_ptr = &app_info;
+        }
+        else
         {
             app_info.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
             app_info.pApplicationName   = "SKLibretro";
             app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
             app_info.pEngineName        = "SKLibretro";
             app_info.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
-            app_info.apiVersion         = VK_API_VERSION_1_1;
+            app_info.apiVersion         = max_api_version;
             app_info_ptr = &app_info;
         }
 
         VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         ici.pApplicationInfo = app_info_ptr;
 
-        // Enable surface extensions so cores can create a swapchain.
+        // Enable extensions needed by cores for Vulkan HW rendering.
         std::vector<const char*> inst_exts;
         inst_exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
 #ifdef _WIN32
         inst_exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #endif
         inst_exts.push_back("VK_KHR_get_physical_device_properties2");
+        inst_exts.push_back("VK_KHR_get_surface_capabilities2");
+        inst_exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         ici.enabledExtensionCount   = static_cast<uint32_t>(inst_exts.size());
         ici.ppEnabledExtensionNames = inst_exts.data();
+
+        // Enable validation layers in debug builds to catch invalid Vulkan usage.
+        const char* validation_layer = "VK_LAYER_KHRONOS_validation";
+        ici.enabledLayerCount   = 1;
+        ici.ppEnabledLayerNames = &validation_layer;
 
         VkResult r = vkCreateInstance(&ici, nullptr, &m_instance);
         if (r != VK_SUCCESS)
@@ -142,6 +166,34 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     }
 
     LogOK("VulkanContext: VkInstance created.");
+
+    // ---- Set up validation debug messenger ----
+    {
+        auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
+        if (createMessenger)
+        {
+            VkDebugUtilsMessengerCreateInfoEXT dbg_ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
+            dbg_ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                                   | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+            dbg_ci.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                                   | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            dbg_ci.pfnUserCallback = [](
+                VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                VkDebugUtilsMessageTypeFlagsEXT /*type*/,
+                const VkDebugUtilsMessengerCallbackDataEXT* data,
+                void* /*user*/) -> VkBool32
+            {
+                if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                    LogError("VkValidation: " + std::string(data->pMessage));
+                else
+                    LogWarning("VkValidation: " + std::string(data->pMessage));
+                return VK_FALSE;
+            };
+            createMessenger(m_instance, &dbg_ci, nullptr, &m_debug_messenger);
+            LogOK("VulkanContext: Validation layers enabled.");
+        }
+    }
 
     // ---- Select physical device ----
     uint32_t gpu_count = 0;
@@ -192,9 +244,12 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     // ---- Create a surface for cores that require one (e.g. Dolphin) ----
 #ifdef _WIN32
     {
+        // Use WS_POPUP so the entire window is client area (no borders/title
+        // bar that shrink it at high DPI).  Size must exceed the core's EFB
+        // dimensions (640×528 at 1×, 1280×1056 at 2×, etc.).
         m_hidden_hwnd = CreateWindowExW(
-            0, L"STATIC", L"SKLibretro_VkSurface", 0,
-            0, 0, 1, 1, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+            0, L"STATIC", L"SKLibretro_VkSurface", WS_POPUP,
+            0, 0, 1920, 1080, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 
         if (m_hidden_hwnd)
         {
@@ -377,6 +432,15 @@ void VulkanContext::Destroy()
         m_hidden_hwnd = nullptr;
     }
 #endif
+
+    if (m_debug_messenger != VK_NULL_HANDLE)
+    {
+        auto destroyMessenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
+        if (destroyMessenger)
+            destroyMessenger(m_instance, m_debug_messenger, nullptr);
+        m_debug_messenger = VK_NULL_HANDLE;
+    }
 
     if (m_instance != VK_NULL_HANDLE)
     {
