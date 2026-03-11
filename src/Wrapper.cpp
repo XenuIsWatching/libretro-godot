@@ -299,6 +299,10 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 
     auto audio_stream_player = memnew(AudioStreamPlayer3D);
     audio_stream_player->set_name("AudioStreamPlayer3D");
+    // Configure spatial audio for better immersion
+    audio_stream_player->set_attenuation_model(AudioStreamPlayer3D::ATTENUATION_INVERSE_DISTANCE);
+    audio_stream_player->set_panning_strength(1.0f);
+    audio_stream_player->set_max_db(0.0f);
     m_libretro_node->add_child(audio_stream_player);
 
 #ifdef __ANDROID__

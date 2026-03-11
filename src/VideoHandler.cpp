@@ -254,6 +254,11 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
     // ---- Vulkan path (both platforms) ----
     if (m_hw_context_type == RETRO_HW_CONTEXT_VULKAN)
     {
+        if (m_vulkan_ctx)
+        {
+            Log("Vulkan context already initialized — skipping.");
+            return true;
+        }
         Log("Creating Vulkan context...");
         m_vulkan_ctx = std::make_unique<VulkanContext>();
         if (!m_vulkan_ctx->Init(m_negotiation_iface))
@@ -512,6 +517,11 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
 
     hw_render_callback->get_current_framebuffer = VideoHandler::HwRenderGetCurrentFramebuffer;
     hw_render_callback->get_proc_address = VideoHandler::HwRenderGetProcAddress;
+
+    // Vulkan context creation is deferred to InitHwRenderContext (called from
+    // EmulationThreadLoop after retro_load_game returns).  Cores like Dolphin
+    // call SET_HW_RENDER *before* SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE,
+    // so the negotiation interface is not yet available here.
 
     return true;
 }
