@@ -27,9 +27,14 @@ namespace SK
 {
 thread_local Wrapper* t_current_wrapper = nullptr;
 
+// Global fallback for audio/video callbacks triggered from core-spawned threads,
+// where the thread-local pointer is not set. Only used when t_current_wrapper is null.
+static std::atomic<Wrapper*> g_fallback_wrapper{nullptr};
+
 Wrapper* Wrapper::GetCurrentThreadWrapper()
 {
-    return t_current_wrapper;
+    Wrapper* w = t_current_wrapper;
+    return w ? w : g_fallback_wrapper.load(std::memory_order_acquire);
 }
 
 void Wrapper::SetCurrentThreadWrapper(Wrapper* wrapper)
@@ -650,6 +655,7 @@ void Wrapper::StopEmulationThread()
 void Wrapper::EmulationThreadLoop()
 {
     t_current_wrapper = this;
+    g_fallback_wrapper.store(this, std::memory_order_release);
     Log("Libretro Thread starting...");
 
     if (!m_core->Load())
@@ -750,6 +756,7 @@ void Wrapper::EmulationThreadLoop()
         {
             m_audio_handler->CallAudioBufferStatusCallback();
 
+            t_current_wrapper = this;  // defensive: re-assert thread-local before core callbacks fire
             m_core->retro_run();
 
             accumulator -= frame_duration_ms;
@@ -759,6 +766,8 @@ void Wrapper::EmulationThreadLoop()
     m_core->retro_deinit();
 
     m_running = false;
+    Wrapper* expected = this;
+    g_fallback_wrapper.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
     t_current_wrapper = nullptr;
     Log("Libretro thread stopped.");
 }

@@ -9,6 +9,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <queue>
@@ -92,7 +93,7 @@ public:
     std::mutex m_mutex;
     bool m_mutex_done = false;
     std::condition_variable m_condition_variable;
-    bool m_running = false;
+    std::atomic<bool> m_running = false;
     bool m_input_enabled = false;   // only true for the actively-controlled instance
 
     std::string m_root_directory;
