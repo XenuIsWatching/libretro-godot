@@ -2,7 +2,7 @@
 
 A GDExtension (C++) that runs libretro emulator cores inside Godot 4.5+. Bridges Godot's scene system with the libretro API, enabling retro game emulation within Godot projects.
 
-Originally forked from [Skurdt/SK.Libretro.Godot](https://github.com/Skurdt/SK.Libretro.Godot).
+Originally forked from [Skurdt/libretro-godot](https://github.com/Skurdt/libretro-godot).
 
 ## Prerequisites
 
@@ -45,11 +45,11 @@ ANDROID_NDK_ROOT="/path/to/android-ndk-r27d" ANDROID_HOME="" \
 
 By default, compiled libraries are placed in `bin/`.
 
-To override the output directory, set the `SKLIBRETRO_OUTPUT_DIR` environment variable:
+To override the output directory, set the `LIBRETRO_GODOT_OUTPUT_DIR` environment variable:
 
 ```bash
 # Output to a Godot project directory
-SKLIBRETRO_OUTPUT_DIR="../MyProject/addons/sklibretro" scons platform=windows arch=x86_64 target=template_debug
+LIBRETRO_GODOT_OUTPUT_DIR="../MyProject/addons/libretro_godot" scons platform=windows arch=x86_64 target=template_debug
 ```
 
 ## Using as a Submodule
@@ -58,11 +58,11 @@ When embedding this repo as a submodule in a Godot project, the parent repo's `S
 
 ```python
 # Parent SConstruct example
-VariantDir('SKLibretro/Temp', 'SKLibretro', duplicate=0)
+VariantDir('libretro-godot/Temp', 'libretro-godot', duplicate=0)
 env = Environment()
-output_dir = '#path/to/godot/project/SKLibretro'
+output_dir = '#path/to/godot/project/libretro-godot'
 
-SConscript('SKLibretro/Temp/SConscript', exports=['env', 'output_dir'])
+SConscript('libretro-godot/Temp/SConscript', exports=['env', 'output_dir'])
 ```
 
 The `#` prefix makes the path relative to the parent project root.

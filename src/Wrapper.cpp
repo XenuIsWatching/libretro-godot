@@ -495,7 +495,7 @@ void Wrapper::_input(const godot::Ref<godot::InputEvent>& event)
                     buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_BUTTON_5);
                 break;
             default:
-                print_line_rich("[color=red][SK.Libretro][/color] Unhandled mouse button: " + String::num_int64(button_index));
+                print_line_rich("[color=red][libretro-godot][/color] Unhandled mouse button: " + String::num_int64(button_index));
                 break;
         }
 

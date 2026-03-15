@@ -26,7 +26,7 @@ void uninitialize(ModuleInitializationLevel p_level)
 
 extern "C"
 {
-GDExtensionBool GDE_EXPORT sklibretro_library_init(GDExtensionInterfaceGetProcAddress p_gde_get_proc_address, const GDExtensionClassLibraryPtr p_library, GDExtensionInitialization *r_initialization)
+GDExtensionBool GDE_EXPORT libretro_godot_library_init(GDExtensionInterfaceGetProcAddress p_gde_get_proc_address, const GDExtensionClassLibraryPtr p_library, GDExtensionInitialization *r_initialization)
 {
     godot::GDExtensionBinding::InitObject init_obj(p_gde_get_proc_address, p_library, r_initialization);
 

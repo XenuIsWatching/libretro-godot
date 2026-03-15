@@ -43,6 +43,6 @@ sources.append("external/libretro-common/streams/file_stream.c")
 sources.append("external/libretro-common/vfs/vfs_implementation.c")
 
 lib_prefix = "lib" if is_android else ""
-library = env.SharedLibrary("{}/{}sklibretro.{}.{}.{}{}".format(output_dir, lib_prefix, env["platform"], env["target"], env["arch"], env["SHLIBSUFFIX"]), source=sources)
+library = env.SharedLibrary("{}/{}libretro_godot.{}.{}.{}{}".format(output_dir, lib_prefix, env["platform"], env["target"], env["arch"], env["SHLIBSUFFIX"]), source=sources)
 
 Default(library)
