@@ -2,3 +2,6 @@
 	path = godot-cpp
 	url = https://github.com/godotengine/godot-cpp.git
 	branch = 4.5
+[submodule "external/libretro-common"]
+	path = external/libretro-common
+	url = https://github.com/libretro/libretro-common
