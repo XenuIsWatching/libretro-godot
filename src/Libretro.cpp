@@ -54,6 +54,32 @@ void Libretro::SetControllerPortDevice(int port, int device)
     m_wrapper->SetControllerPortDevice(static_cast<uint32_t>(port), static_cast<uint32_t>(device));
 }
 
+void Libretro::SetLightgunPosition(int port, int x, int y)
+{
+    m_wrapper->SetLightgunPosition(static_cast<uint32_t>(port), static_cast<int16_t>(x), static_cast<int16_t>(y));
+}
+
+void Libretro::SetLightgunIsOffscreen(int port, bool offscreen)
+{
+    m_wrapper->SetLightgunIsOffscreen(static_cast<uint32_t>(port), offscreen);
+}
+
+void Libretro::SetLightgunButton(int port, int button_id, bool pressed)
+{
+    m_wrapper->SetLightgunButton(static_cast<uint32_t>(port), button_id, pressed);
+}
+
+void Libretro::SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry)
+{
+    m_wrapper->SetJoypadState(
+        static_cast<uint32_t>(port),
+        static_cast<uint16_t>(button_mask),
+        static_cast<int16_t>(analog_lx),
+        static_cast<int16_t>(analog_ly),
+        static_cast<int16_t>(analog_rx),
+        static_cast<int16_t>(analog_ry));
+}
+
 void Libretro::_exit_tree()
 {
     m_wrapper->StopContent();
@@ -136,6 +162,10 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
     ClassDB::bind_method(D_METHOD("SetControllerPortDevice", "port", "device"), &Libretro::SetControllerPortDevice);
+    ClassDB::bind_method(D_METHOD("SetLightgunPosition", "port", "x", "y"), &Libretro::SetLightgunPosition);
+    ClassDB::bind_method(D_METHOD("SetLightgunIsOffscreen", "port", "offscreen"), &Libretro::SetLightgunIsOffscreen);
+    ClassDB::bind_method(D_METHOD("SetLightgunButton", "port", "button_id", "pressed"), &Libretro::SetLightgunButton);
+    ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
 
     ADD_SIGNAL(MethodInfo("options_ready", PropertyInfo(Variant::DICTIONARY, "categories"), PropertyInfo(Variant::DICTIONARY, "definitions"), PropertyInfo(Variant::DICTIONARY, "current_values")));
 }

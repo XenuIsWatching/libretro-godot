@@ -397,6 +397,39 @@ void Wrapper::SetControllerPortDevice(uint32_t port, uint32_t device)
     SetCurrentThreadWrapper(nullptr);
 }
 
+void Wrapper::SetLightgunPosition(uint32_t port, int16_t x, int16_t y)
+{
+    if (m_input_handler)
+        m_input_handler->SetLightgunPosition(port, x, y);
+}
+
+void Wrapper::SetLightgunIsOffscreen(uint32_t port, bool offscreen)
+{
+    if (m_input_handler)
+        m_input_handler->SetLightgunIsOffscreen(port, offscreen ? 1 : 0);
+}
+
+void Wrapper::SetLightgunButton(uint32_t port, int button_id, bool pressed)
+{
+    if (!m_input_handler)
+        return;
+    uint32_t buttons = m_input_handler->GetLightgunButtons(port);
+    if (pressed)
+        buttons |= (1u << button_id);
+    else
+        buttons &= ~(1u << button_id);
+    m_input_handler->SetLightgunButtons(port, buttons);
+}
+
+void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry)
+{
+    if (!m_input_handler)
+        return;
+    m_input_handler->SetJoypadButtonStates(port, button_mask);
+    m_input_handler->SetAnalogLeft(port, analog_lx, analog_ly);
+    m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
+}
+
 void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
 {
     Log("SetCoreOption: key=" + key + " value=" + value);

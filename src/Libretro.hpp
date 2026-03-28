@@ -114,6 +114,14 @@ public:
     /// Tell the running core which device type is active on a given port.
     void SetControllerPortDevice(int port, int device);
 
+    /// Light gun input — called from GDScript each frame when the gun is plugged in.
+    void SetLightgunPosition(int port, int x, int y);
+    void SetLightgunIsOffscreen(int port, bool offscreen);
+    void SetLightgunButton(int port, int button_id, bool pressed);
+
+    /// Per-port joypad input — called from GDScript by physical retro controller objects.
+    void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
+
     void ConnectOptionsReady(const godot::Callable& callable, uint32_t flags = 0u);
 
     void _exit_tree() override;

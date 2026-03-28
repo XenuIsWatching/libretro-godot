@@ -72,6 +72,15 @@ public:
     /// Calls retro_set_controller_port_device and updates the local tracking map.
     void SetControllerPortDevice(uint32_t port, uint32_t device);
 
+    /// Light gun input forwarding — called from Libretro node on the main thread.
+    void SetLightgunPosition(uint32_t port, int16_t x, int16_t y);
+    void SetLightgunIsOffscreen(uint32_t port, bool offscreen);
+    void SetLightgunButton(uint32_t port, int button_id, bool pressed);
+
+    /// Per-port joypad input — replaces the hardcoded port-0 path in _process for
+    /// physical controller objects that know their own port assignment.
+    void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
+
     void _input(const godot::Ref<godot::InputEvent>& event);
     void _process(double delta);
 
