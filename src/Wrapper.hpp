@@ -105,6 +105,7 @@ public:
     bool m_mutex_done = false;
     std::condition_variable m_condition_variable;
     std::atomic<bool> m_running = false;
+    std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
     bool m_input_enabled = false;   // only true for the actively-controlled instance
 
     std::string m_root_directory;

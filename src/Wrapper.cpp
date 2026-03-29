@@ -338,6 +338,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
         }
     }
 
+    m_stop_requested = false;
     m_thread = std::thread(&Wrapper::EmulationThreadLoop, this);
 }
 
@@ -657,7 +658,9 @@ void Wrapper::StopEmulationThread()
         return;
     }
 
+    m_stop_requested = true;
     m_running = false;
+    m_condition_variable.notify_all(); // wake emulation thread if blocked on InitAudio CV wait
     m_thread.join();
 
     // Set the thread-local pointer on the main thread so that handler DeInit
@@ -755,13 +758,18 @@ void Wrapper::EmulationThreadLoop()
         return;
     }
 
+    if (m_stop_requested)
+        return;
+
     m_running = true;
 
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_mutex_done = false;
         m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandInitAudio>(this, 0.1f, systemAvInfo.timing.sample_rate));
-        m_condition_variable.wait(lock, [&]{ return m_mutex_done; });
+        m_condition_variable.wait(lock, [&]{ return m_mutex_done || m_stop_requested.load(); });
+        if (m_stop_requested)
+            return;
     }
 
     double frame_duration_ms = 1000.0 / systemAvInfo.timing.fps;
