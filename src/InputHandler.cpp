@@ -1,6 +1,7 @@
 #include "InputHandler.hpp"
 
 #include "Wrapper.hpp"
+#include "Libretro.hpp"
 #include "Debug.hpp"
 
 namespace SK
@@ -44,9 +45,54 @@ int16_t InputHandler::StateCallback(uint32_t port, uint32_t device, uint32_t ind
 
 bool InputHandler::RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_effect effect, uint16_t strength)
 {
-    Log("Port: " + std::to_string(port) +
-        " Effect: " + (effect == RETRO_RUMBLE_STRONG ? "strong" : "weak") +
-        " Strength: " + std::to_string(strength));
+    // Runs on the emulation thread (inside retro_run). Dedup against the last
+    // known state per port so cores that spam set_rumble_state every frame
+    // don't flood the main thread with redundant signal emissions.
+    auto instance = Wrapper::GetCurrentThreadWrapper();
+    if (!instance || !instance->m_input_handler)
+        return false;
+
+    InputHandler* self = instance->m_input_handler.get();
+
+    bool changed = false;
+    if (effect == RETRO_RUMBLE_STRONG)
+    {
+        auto it = self->m_rumble_strong.find(port);
+        if (it == self->m_rumble_strong.end() || it->second != strength)
+        {
+            self->m_rumble_strong[port] = strength;
+            changed = true;
+        }
+    }
+    else if (effect == RETRO_RUMBLE_WEAK)
+    {
+        auto it = self->m_rumble_weak.find(port);
+        if (it == self->m_rumble_weak.end() || it->second != strength)
+        {
+            self->m_rumble_weak[port] = strength;
+            changed = true;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    if (!changed || instance->m_libretro_node == nullptr)
+        return true;
+
+    // Always forward the combined state (both weak and strong) so GDScript
+    // sees a single coherent view per port regardless of which effect changed.
+    uint16_t weak   = self->m_rumble_weak.count(port)   ? self->m_rumble_weak[port]   : 0;
+    uint16_t strong = self->m_rumble_strong.count(port) ? self->m_rumble_strong[port] : 0;
+
+    instance->m_libretro_node->call_deferred(
+        "emit_signal",
+        "rumble_state_changed",
+        static_cast<int>(port),
+        static_cast<float>(weak)   / 65535.0f,
+        static_cast<float>(strong) / 65535.0f);
+
     return true;
 }
 

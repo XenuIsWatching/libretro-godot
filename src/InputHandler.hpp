@@ -108,6 +108,12 @@ private:
     std::unordered_map<uint32_t, int16_t> m_analog_right_x;
     std::unordered_map<uint32_t, int16_t> m_analog_right_y;
 
+    // Last rumble state per port. Used to dedup the set_rumble_state callback —
+    // cores call it every frame even when values haven't changed, and we only
+    // want to notify the Godot main thread on actual transitions.
+    std::unordered_map<uint32_t, uint16_t> m_rumble_weak;
+    std::unordered_map<uint32_t, uint16_t> m_rumble_strong;
+
     std::vector<std::vector<RetroController>> m_controllers;
     std::unordered_map<uint32_t, uint32_t> m_port_devices;
     std::vector<RetroDevice> m_devices;

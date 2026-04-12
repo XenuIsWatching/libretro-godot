@@ -168,5 +168,9 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
 
     ADD_SIGNAL(MethodInfo("options_ready", PropertyInfo(Variant::DICTIONARY, "categories"), PropertyInfo(Variant::DICTIONARY, "definitions"), PropertyInfo(Variant::DICTIONARY, "current_values")));
+    ADD_SIGNAL(MethodInfo("rumble_state_changed",
+        PropertyInfo(Variant::INT,   "port"),
+        PropertyInfo(Variant::FLOAT, "weak"),
+        PropertyInfo(Variant::FLOAT, "strong")));
 }
 }
