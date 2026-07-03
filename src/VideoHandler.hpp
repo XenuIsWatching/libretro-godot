@@ -42,6 +42,11 @@ public:
     bool SetHwRender(retro_hw_render_callback* hw_render_callback);
     bool GetPreferredHwRender(retro_hw_context_type* hw_context_type) const;
 
+    /// Invoke the core's context_destroy callback. Must run on the emulation
+    /// thread before retro_unload_game (RetroArch's ordering) — Vulkan cores
+    /// like paraLLEl-RDP free all their VkDevice objects only in this callback.
+    void NotifyContextDestroy();
+
     void SetNegotiationInterface(retro_hw_render_context_negotiation_interface_vulkan* iface)
     {
         m_negotiation_iface = iface;

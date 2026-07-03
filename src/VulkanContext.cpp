@@ -287,9 +287,19 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         }
         else if (neg->create_device)
         {
+            // Cores dereference required_features without a null check (e.g.
+            // paraLLEl-RDP does `enabled_features = *required_features`), and
+            // RetroArch always passes a zeroed struct plus VK_KHR_swapchain —
+            // match that exactly.
+            static const char* device_extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+            const VkPhysicalDeviceFeatures required_features{};
+
             device_from_negotiation = neg->create_device(
                 &vk_ctx, m_instance, m_gpu, m_surface,
-                vkGetInstanceProcAddr, nullptr, 0, nullptr, 0, nullptr);
+                vkGetInstanceProcAddr,
+                device_extensions, 1,
+                nullptr, 0,
+                &required_features);
 
             if (!device_from_negotiation)
                 LogWarning("VulkanContext: create_device failed; using self-created device");

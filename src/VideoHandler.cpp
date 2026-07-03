@@ -246,6 +246,17 @@ void VideoHandler::DeInit()
 #endif
 }
 
+void VideoHandler::NotifyContextDestroy()
+{
+    // Scoped to Vulkan for now: the GL path has shipped without this call and
+    // GL cores tolerate the omission; Vulkan cores crash without it.
+    if (m_hw_context_type == RETRO_HW_CONTEXT_VULKAN && m_vulkan_ctx && m_context_destroy)
+    {
+        m_context_destroy();
+        m_context_destroy = nullptr;
+    }
+}
+
 bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
 {
     if (!m_context_reset)

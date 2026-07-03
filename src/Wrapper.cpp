@@ -813,6 +813,7 @@ void Wrapper::EmulationThreadLoop()
             accumulator -= frame_duration_ms;
         }
     }    
+    m_video_handler->NotifyContextDestroy();
     m_core->retro_unload_game();
     m_core->retro_deinit();
 
