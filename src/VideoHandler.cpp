@@ -248,9 +248,10 @@ void VideoHandler::DeInit()
 
 void VideoHandler::NotifyContextDestroy()
 {
-    // Scoped to Vulkan for now: the GL path has shipped without this call and
-    // GL cores tolerate the omission; Vulkan cores crash without it.
-    if (m_hw_context_type == RETRO_HW_CONTEXT_VULKAN && m_vulkan_ctx && m_context_destroy)
+    // Runs on the emulation thread, before retro_unload_game/retro_deinit,
+    // while the GL/Vulkan context is still current on this thread — matches
+    // RetroArch's teardown order so cores can free API objects they own.
+    if (m_context_destroy)
     {
         m_context_destroy();
         m_context_destroy = nullptr;
