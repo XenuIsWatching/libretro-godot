@@ -122,6 +122,21 @@ public:
     /// Per-port joypad input — called from GDScript by physical retro controller objects.
     void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
 
+    // ── Netplay (deterministic lockstep) ─────────────────────────────────────
+    /// Gate the emulation loop: frame N runs only once PostNetplayInputs(N,…)
+    /// arrived. port_mask selects participating ports; start_frame resets the
+    /// frame counter. Call before StartContent for a cold start.
+    void SetNetplayMode(bool enabled, int port_mask, int64_t start_frame);
+    /// Agreed inputs for one frame: flat PackedInt32Array of 4 ports × 5 values
+    /// {button_mask, alx, aly, arx, ary}.
+    void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs);
+    /// Async savestate → savestate_ready(data: PackedByteArray, frame: int).
+    void RequestSaveState();
+    /// Async state load + schedule reset → savestate_loaded(ok: bool).
+    void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
+    /// Frames executed since content start (or since the last state load).
+    int64_t GetFrameCount() const;
+
     void ConnectOptionsReady(const godot::Callable& callable, uint32_t flags = 0u);
 
     void _exit_tree() override;

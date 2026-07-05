@@ -2,6 +2,9 @@
 
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/string_name.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
@@ -13,12 +16,15 @@
 #include <string>
 #include <vector>
 #include <queue>
+#include <map>
+#include <array>
 #include <unordered_map>
 
 #include <libretro.h>
 #include <readerwriterqueue.h>
 
 #include "ThreadCommand.hpp"
+#include "EmuThreadCommands.hpp"
 #include "Core.hpp"
 #include "CallbackTrampolines.hpp"
 #include "EnvironmentHandler.hpp"
@@ -81,6 +87,39 @@ public:
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
 
+    // ── Netplay (deterministic lockstep) ─────────────────────────────────────
+    // In netplay mode the emulation thread runs frame N only once the inputs
+    // for frame N have been posted (all masked ports at once), making every
+    // peer's core execute an identical input timeline.
+
+    /// Enable/disable lockstep gating. port_mask selects which of ports 0-3
+    /// participate; start_frame (>= 0) resets the frame counter (use 0 for a
+    /// cold start, the savestate frame for a late join). Safe to call before
+    /// StartContent.
+    void SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_frame);
+
+    /// Post the agreed inputs for one frame: flat array of 4 ports × 5 values
+    /// {button_mask, analog_lx, analog_ly, analog_rx, analog_ry}.
+    void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& flat);
+
+    /// Serialize the core on the emulation thread; result arrives via the
+    /// savestate_ready(data, frame) signal (empty data on failure).
+    void RequestSaveState();
+
+    /// Unserialize a savestate on the emulation thread and reset the netplay
+    /// schedule to `frame`; result arrives via savestate_loaded(ok).
+    void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
+
+    int64_t GetFrameCount() const { return m_frame_counter.load(std::memory_order_relaxed); }
+
+    /// Queue a signal emission on the owning Libretro node (main thread).
+    /// Callable from the emulation thread.
+    void EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args);
+
+    /// CRC32 of the core's system RAM, emitted as netplay_crc(frame, crc)
+    /// every m_np_crc_interval frames while in netplay mode (desync detection).
+    void EmitNetplayCrc(int64_t frame);
+
     void _input(const godot::Ref<godot::InputEvent>& event);
     void _process(double delta);
 
@@ -107,6 +146,19 @@ public:
     std::atomic<bool> m_running = false;
     std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
     bool m_input_enabled = false;   // only true for the actively-controlled instance
+
+    // Netplay state. The input schedule maps frame → 4 ports × 5 int32s and is
+    // written by the main thread (PostNetplayInputs) and consumed by the
+    // emulation thread under m_np_mutex. In netplay mode the emulation thread
+    // is the ONLY InputHandler writer for the masked ports.
+    moodycamel::ReaderWriterQueue<std::unique_ptr<EmuThreadCommand>> m_emu_thread_commands_queue;
+    std::atomic<bool> m_netplay_enabled = false;
+    std::atomic<int64_t> m_frame_counter = 0;
+    std::atomic<uint32_t> m_np_port_mask = 0x1;
+    std::mutex m_np_mutex;
+    std::condition_variable m_np_cv;
+    std::map<int64_t, std::array<int32_t, 20>> m_np_inputs;
+    int64_t m_np_crc_interval = 60;
 
     std::string m_root_directory;
     std::string m_temp_directory;

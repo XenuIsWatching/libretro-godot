@@ -80,6 +80,31 @@ void Libretro::SetJoypadState(int port, int button_mask, int analog_lx, int anal
         static_cast<int16_t>(analog_ry));
 }
 
+void Libretro::SetNetplayMode(bool enabled, int port_mask, int64_t start_frame)
+{
+    m_wrapper->SetNetplayMode(enabled, static_cast<uint32_t>(port_mask), start_frame);
+}
+
+void Libretro::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs)
+{
+    m_wrapper->PostNetplayInputs(frame, inputs);
+}
+
+void Libretro::RequestSaveState()
+{
+    m_wrapper->RequestSaveState();
+}
+
+void Libretro::RequestLoadState(const godot::PackedByteArray& data, int64_t frame)
+{
+    m_wrapper->RequestLoadState(data, frame);
+}
+
+int64_t Libretro::GetFrameCount() const
+{
+    return m_wrapper->GetFrameCount();
+}
+
 void Libretro::_exit_tree()
 {
     m_wrapper->StopContent();
@@ -166,6 +191,19 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetLightgunIsOffscreen", "port", "offscreen"), &Libretro::SetLightgunIsOffscreen);
     ClassDB::bind_method(D_METHOD("SetLightgunButton", "port", "button_id", "pressed"), &Libretro::SetLightgunButton);
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
+    ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
+    ClassDB::bind_method(D_METHOD("PostNetplayInputs", "frame", "inputs"), &Libretro::PostNetplayInputs);
+    ClassDB::bind_method(D_METHOD("RequestSaveState"), &Libretro::RequestSaveState);
+    ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
+    ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
+
+    ADD_SIGNAL(MethodInfo("savestate_ready",
+        PropertyInfo(Variant::PACKED_BYTE_ARRAY, "data"),
+        PropertyInfo(Variant::INT, "frame")));
+    ADD_SIGNAL(MethodInfo("savestate_loaded", PropertyInfo(Variant::BOOL, "ok")));
+    ADD_SIGNAL(MethodInfo("netplay_crc",
+        PropertyInfo(Variant::INT, "frame"),
+        PropertyInfo(Variant::INT, "crc")));
 
     ADD_SIGNAL(MethodInfo("options_ready", PropertyInfo(Variant::DICTIONARY, "categories"), PropertyInfo(Variant::DICTIONARY, "definitions"), PropertyInfo(Variant::DICTIONARY, "current_values")));
     ADD_SIGNAL(MethodInfo("rumble_state_changed",

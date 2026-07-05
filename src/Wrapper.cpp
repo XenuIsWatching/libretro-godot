@@ -21,6 +21,7 @@
 #include "ThreadCommandInitAudio.hpp"
 #include "ThreadCommandCreateTexture.hpp"
 #include "ThreadCommandUpdateTexture.hpp"
+#include "ThreadCommandEmitSignal.hpp"
 
 using namespace godot;
 
@@ -441,9 +442,116 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
 {
     if (!m_input_handler)
         return;
+    // In netplay mode the emulation thread applies the agreed per-frame inputs
+    // for the masked ports — live main-thread writes would desync peers.
+    if (m_netplay_enabled.load(std::memory_order_acquire) &&
+        (m_np_port_mask.load(std::memory_order_relaxed) & (1u << port)))
+        return;
     m_input_handler->SetJoypadButtonStates(port, button_mask);
     m_input_handler->SetAnalogLeft(port, analog_lx, analog_ly);
     m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
+}
+
+// ── Netplay (deterministic lockstep) ─────────────────────────────────────────
+
+void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_frame)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        m_np_inputs.clear();
+    }
+    m_np_port_mask.store(port_mask == 0 ? 0x1u : port_mask, std::memory_order_relaxed);
+    if (start_frame >= 0)
+        m_frame_counter.store(start_frame, std::memory_order_relaxed);
+    m_netplay_enabled.store(enabled, std::memory_order_release);
+    m_np_cv.notify_all();
+    Log("Netplay mode " + std::string(enabled ? "ON" : "OFF") +
+        " mask=" + std::to_string(port_mask) + " start_frame=" + std::to_string(start_frame));
+}
+
+void Wrapper::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& flat)
+{
+    if (flat.size() < 20)
+        return;
+    std::array<int32_t, 20> values{};
+    for (int i = 0; i < 20; ++i)
+        values[i] = flat[i];
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        if (frame < m_frame_counter.load(std::memory_order_relaxed))
+            return;                     // stale — that frame already ran
+        if (m_np_inputs.size() > 600)
+            return;                     // runaway guard (~10 s of frames)
+        m_np_inputs[frame] = values;
+    }
+    m_np_cv.notify_all();
+}
+
+void Wrapper::RequestSaveState()
+{
+    if (!m_core || !m_running)
+    {
+        if (m_libretro_node)
+            m_libretro_node->call_deferred("emit_signal", "savestate_ready",
+                godot::PackedByteArray(), static_cast<int64_t>(-1));
+        return;
+    }
+    m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSaveState>());
+}
+
+void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame)
+{
+    if (!m_core || !m_running)
+    {
+        if (m_libretro_node)
+            m_libretro_node->call_deferred("emit_signal", "savestate_loaded", false);
+        return;
+    }
+    m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandLoadState>(data, frame));
+}
+
+void Wrapper::EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args)
+{
+    m_main_thread_commands_queue.enqueue(
+        std::make_unique<ThreadCommandEmitSignal>(this, signal_name, args));
+}
+
+// Self-contained CRC32 (polynomial 0xEDB88320) — libretro-common's crc32.c is
+// not part of this build, and the table init must be thread-safe (multiple
+// emulation threads may race the first call).
+static uint32_t Crc32(const uint8_t* data, size_t size)
+{
+    static uint32_t table[256];
+    static std::once_flag once;
+    std::call_once(once, []
+    {
+        for (uint32_t i = 0; i < 256; ++i)
+        {
+            uint32_t crc = i;
+            for (int j = 0; j < 8; ++j)
+                crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+            table[i] = crc;
+        }
+    });
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < size; ++i)
+        crc = table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+void Wrapper::EmitNetplayCrc(int64_t frame)
+{
+    if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* ram = m_core->retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+    if (ram == nullptr || size == 0)
+        return;
+    uint32_t crc = Crc32(static_cast<const uint8_t*>(ram), size);
+    godot::Array args;
+    args.append(frame);
+    args.append(static_cast<int64_t>(crc));
+    EmitSignalOnMainThread("netplay_crc", args);
 }
 
 void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
@@ -676,6 +784,7 @@ void Wrapper::StopEmulationThread()
     m_stop_requested = true;
     m_running = false;
     m_condition_variable.notify_all(); // wake emulation thread if blocked on InitAudio CV wait
+    m_np_cv.notify_all();              // wake emulation thread if blocked on the netplay input gate
     m_thread.join();
 
     // Set the thread-local pointer on the main thread so that handler DeInit
@@ -799,20 +908,75 @@ void Wrapper::EmulationThreadLoop()
         if (!m_running)
             break;
 
+        // Drain main→emu commands (savestates, etc.) strictly between frames
+        // so they never re-enter the core mid-retro_run.
+        {
+            std::unique_ptr<EmuThreadCommand> emu_command;
+            while (m_emu_thread_commands_queue.try_dequeue(emu_command))
+                emu_command->Execute(*this);
+        }
+
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double, std::milli>(now - last_time).count();
         last_time = now;
         accumulator += elapsed;
 
-        while (accumulator >= frame_duration_ms)
+        if (!m_netplay_enabled.load(std::memory_order_acquire))
         {
-            m_audio_handler->CallAudioBufferStatusCallback();
+            while (accumulator >= frame_duration_ms)
+            {
+                m_audio_handler->CallAudioBufferStatusCallback();
 
-            m_core->retro_run();
+                m_core->retro_run();
+                m_frame_counter.fetch_add(1, std::memory_order_relaxed);
 
-            accumulator -= frame_duration_ms;
+                accumulator -= frame_duration_ms;
+            }
+            continue;
         }
-    }    
+
+        // ── Netplay lockstep: run frame N only once its inputs arrived ──────
+        if (accumulator < frame_duration_ms)
+            continue;
+        // Cap catch-up debt after stalls to a few frames.
+        if (accumulator > frame_duration_ms * 4.0)
+            accumulator = frame_duration_ms * 4.0;
+
+        std::array<int32_t, 20> frame_inputs{};
+        {
+            std::unique_lock<std::mutex> lock(m_np_mutex);
+            int64_t frame = m_frame_counter.load(std::memory_order_relaxed);
+            bool ready = m_np_cv.wait_for(lock, std::chrono::milliseconds(4), [&]
+                { return m_stop_requested.load() || m_np_inputs.count(frame) > 0; });
+            if (m_stop_requested)
+                break;
+            if (!ready)
+                continue;   // stall — loop again (drains commands, re-checks stop)
+            frame_inputs = m_np_inputs[frame];
+            m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(frame - 30));
+        }
+
+        // Apply the agreed inputs — in netplay mode the emulation thread is
+        // the sole InputHandler writer for the masked ports.
+        uint32_t mask = m_np_port_mask.load(std::memory_order_relaxed);
+        for (uint32_t port = 0; port < 4; ++port)
+        {
+            if (!(mask & (1u << port)))
+                continue;
+            const int32_t* v = frame_inputs.data() + port * 5;
+            m_input_handler->SetJoypadButtonStates(port, static_cast<uint16_t>(v[0]));
+            m_input_handler->SetAnalogLeft(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
+            m_input_handler->SetAnalogRight(port, static_cast<int16_t>(v[3]), static_cast<int16_t>(v[4]));
+        }
+
+        m_audio_handler->CallAudioBufferStatusCallback();
+        m_core->retro_run();
+        int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+        accumulator -= frame_duration_ms;
+
+        if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
+            EmitNetplayCrc(frame_done);
+    }
     m_video_handler->NotifyContextDestroy();
     m_core->retro_unload_game();
     m_core->retro_deinit();
