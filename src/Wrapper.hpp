@@ -18,6 +18,7 @@
 #include <queue>
 #include <map>
 #include <array>
+#include <deque>
 #include <unordered_map>
 
 #include <libretro.h>
@@ -100,7 +101,29 @@ public:
 
     /// Post the agreed inputs for one frame: flat array of 4 ports × 5 values
     /// {button_mask, analog_lx, analog_ly, analog_rx, analog_ry}.
+    /// Lockstep: releases the gate for `frame`. Rollback: confirms `frame` —
+    /// a mismatch against what was executed triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& flat);
+
+    // ── Rollback (GGPO-style, layered on netplay mode) ───────────────────────
+    // Locally-owned ports apply live with zero added delay; remote ports are
+    // predicted (hold-last-input). Each frame is savestated into a ring before
+    // it runs. When confirmed inputs contradict a prediction the emulation
+    // thread reloads the state at the mispredicted frame and silently replays
+    // (audio dropped, video skipped except the final frame) — so the local
+    // player never feels the network.
+
+    /// Enable rollback within netplay mode. local_mask ⊆ port_mask marks the
+    /// ports whose input is sampled live on this peer; max_ahead caps how far
+    /// past the last confirmed frame the emulation may speculate before
+    /// stalling. Call after SetNetplayMode, before StartContent.
+    void SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahead);
+
+    /// Drain the per-frame local-input records the emulation thread produced:
+    /// flat groups of 7 ints {frame, port, buttons, alx, aly, arx, ary}. These
+    /// are the authoritative "what this peer pressed on frame N" values that
+    /// the session ships to the host for assembly.
+    godot::PackedInt32Array TakeNetplayLocalRecords();
 
     /// Serialize the core on the emulation thread; result arrives via the
     /// savestate_ready(data, frame) signal (empty data on failure).
@@ -112,6 +135,9 @@ public:
 
     int64_t GetFrameCount() const { return m_frame_counter.load(std::memory_order_relaxed); }
 
+    /// How many rewind+replay corrections have happened (diagnostics/HUD).
+    int64_t GetNetplayRollbackCount() const { return m_np_rollback_count.load(std::memory_order_relaxed); }
+
     /// Queue a signal emission on the owning Libretro node (main thread).
     /// Callable from the emulation thread.
     void EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args);
@@ -119,6 +145,14 @@ public:
     /// CRC32 of the core's system RAM, emitted as netplay_crc(frame, crc)
     /// every m_np_crc_interval frames while in netplay mode (desync detection).
     void EmitNetplayCrc(int64_t frame);
+    uint32_t ComputeRamCrc(bool& ok) const;
+
+    // Emulation-thread internals (rollback engine).
+    void NetplayRollbackIteration(double frame_duration_ms, double& accumulator);
+    void NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask);
+    void SaveRollbackState(int64_t frame);
+    void ApplyNetplayInputs(const std::array<int32_t, 20>& inputs, uint32_t mask);
+    void FlushNetplayCrcs();
 
     void _input(const godot::Ref<godot::InputEvent>& event);
     void _process(double delta);
@@ -159,6 +193,27 @@ public:
     std::condition_variable m_np_cv;
     std::map<int64_t, std::array<int32_t, 20>> m_np_inputs;
     int64_t m_np_crc_interval = 60;
+
+    // Rollback state. Everything below m_np_mutex-guarded unless noted.
+    std::atomic<bool> m_np_rollback = false;
+    std::atomic<uint32_t> m_np_local_mask = 0;
+    std::atomic<int64_t> m_np_rollback_count = 0;   // rewind+replay corrections
+    int m_np_max_ahead = 8;
+    std::array<int32_t, 20> m_np_live_local{};              // live local inputs (main thread writes)
+    std::vector<int32_t> m_np_local_records;                // flat {frame,port,5 vals} drained by main thread
+    // Emulation-thread-only rollback bookkeeping (no lock needed):
+    std::map<int64_t, std::array<int32_t, 20>> m_np_used;   // inputs each executed frame actually ran with
+    std::deque<std::pair<int64_t, std::vector<uint8_t>>> m_np_states; // state BEFORE running frame N
+    std::map<int64_t, uint32_t> m_np_crc_pending;           // captured CRCs awaiting confirmation
+    int64_t m_np_watermark = -1;                            // highest contiguous confirmed frame
+    int64_t m_np_verified = -1;                             // highest frame verified/corrected against confirmations
+    bool m_np_replaying = false;                            // true while re-running frames after a rewind
+    bool m_np_replay_mute_video = false;                    // skip video uploads for this replayed frame
+
+    /// True while the emulation thread is silently replaying frames after a
+    /// rollback — audio/video callbacks drop their output. Emu thread only.
+    bool IsNetplayReplaying() const { return m_np_replaying; }
+    bool IsNetplayReplayVideoMuted() const { return m_np_replaying && m_np_replay_mute_video; }
 
     std::string m_root_directory;
     std::string m_temp_directory;

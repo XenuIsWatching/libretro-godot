@@ -22,6 +22,11 @@ void AudioHandler::SampleCallback(int16_t left, int16_t right)
     if (!instance->m_audio_handler->m_audio_stream_generator_playback.is_valid())
         return;
 
+    // Rollback replay: this frame's audio already played on the first
+    // (mispredicted) run — re-emitting it would double up.
+    if (instance->IsNetplayReplaying())
+        return;
+
     float l = left / 32768.0f;
     float r = right / 32768.0f;
     instance->m_audio_handler->m_audio_stream_generator_playback->push_frame(Vector2(l, r));
@@ -40,6 +45,10 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
     }
 
     if (instance->m_audio_handler->m_audio_stream_generator_playback.is_null())
+        return frames;
+
+    // Rollback replay: drop re-run audio (already played on the first run).
+    if (instance->IsNetplayReplaying())
         return frames;
 
     auto available_frames = instance->m_audio_handler->m_audio_stream_generator_playback->get_frames_available();

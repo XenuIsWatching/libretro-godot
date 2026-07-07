@@ -15,6 +15,7 @@
 #include <fstream>
 #include <chrono>
 #include <atomic>
+#include <algorithm>
 
 #include "Libretro.hpp"
 #include "Debug.hpp"
@@ -446,7 +447,21 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
     // for the masked ports — live main-thread writes would desync peers.
     if (m_netplay_enabled.load(std::memory_order_acquire) &&
         (m_np_port_mask.load(std::memory_order_relaxed) & (1u << port)))
+    {
+        // Rollback: locally-owned masked ports feed the live-input slot that
+        // the emulation thread samples each frame (zero added delay). Remote
+        // masked ports stay blocked (prediction + confirmations own them).
+        if (m_np_rollback.load(std::memory_order_acquire) &&
+            (m_np_local_mask.load(std::memory_order_relaxed) & (1u << port)) && port < 4)
+        {
+            std::lock_guard<std::mutex> lock(m_np_mutex);
+            int32_t* v = m_np_live_local.data() + port * 5;
+            v[0] = button_mask;
+            v[1] = analog_lx; v[2] = analog_ly;
+            v[3] = analog_rx; v[4] = analog_ry;
+        }
         return;
+    }
     m_input_handler->SetJoypadButtonStates(port, button_mask);
     m_input_handler->SetAnalogLeft(port, analog_lx, analog_ly);
     m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
@@ -476,15 +491,47 @@ void Wrapper::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& fl
     std::array<int32_t, 20> values{};
     for (int i = 0; i < 20; ++i)
         values[i] = flat[i];
+    const bool rollback = m_np_rollback.load(std::memory_order_acquire);
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
-        if (frame < m_frame_counter.load(std::memory_order_relaxed))
-            return;                     // stale — that frame already ran
+        // Lockstep: inputs for already-run frames are stale. Rollback: they are
+        // CONFIRMATIONS for speculatively-run frames — exactly the point.
+        if (!rollback && frame < m_frame_counter.load(std::memory_order_relaxed))
+            return;
         if (m_np_inputs.size() > 600)
             return;                     // runaway guard (~10 s of frames)
         m_np_inputs[frame] = values;
     }
     m_np_cv.notify_all();
+}
+
+void Wrapper::SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahead)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        m_np_live_local.fill(0);
+        m_np_local_records.clear();
+    }
+    m_np_local_mask.store(local_mask, std::memory_order_relaxed);
+    m_np_max_ahead = std::clamp(max_ahead, 2, 24);
+    m_np_rollback.store(enabled, std::memory_order_release);
+    m_np_cv.notify_all();
+    Log("Netplay rollback " + std::string(enabled ? "ON" : "OFF") +
+        " local_mask=" + std::to_string(local_mask) +
+        " max_ahead=" + std::to_string(max_ahead));
+}
+
+godot::PackedInt32Array Wrapper::TakeNetplayLocalRecords()
+{
+    godot::PackedInt32Array out;
+    std::lock_guard<std::mutex> lock(m_np_mutex);
+    if (m_np_local_records.empty())
+        return out;
+    out.resize(static_cast<int64_t>(m_np_local_records.size()));
+    for (size_t i = 0; i < m_np_local_records.size(); ++i)
+        out[static_cast<int64_t>(i)] = m_np_local_records[i];
+    m_np_local_records.clear();
+    return out;
 }
 
 void Wrapper::RequestSaveState()
@@ -539,19 +586,278 @@ static uint32_t Crc32(const uint8_t* data, size_t size)
     return crc ^ 0xFFFFFFFFu;
 }
 
-void Wrapper::EmitNetplayCrc(int64_t frame)
+uint32_t Wrapper::ComputeRamCrc(bool& ok) const
 {
+    ok = false;
     if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
-        return;
+        return 0;
     void* ram = m_core->retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
     size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
     if (ram == nullptr || size == 0)
+        return 0;
+    ok = true;
+    return Crc32(static_cast<const uint8_t*>(ram), size);
+}
+
+void Wrapper::EmitNetplayCrc(int64_t frame)
+{
+    bool ok = false;
+    uint32_t crc = ComputeRamCrc(ok);
+    if (!ok)
         return;
-    uint32_t crc = Crc32(static_cast<const uint8_t*>(ram), size);
     godot::Array args;
     args.append(frame);
     args.append(static_cast<int64_t>(crc));
     EmitSignalOnMainThread("netplay_crc", args);
+}
+
+// ── Rollback engine (all emulation-thread) ───────────────────────────────────
+
+void Wrapper::ApplyNetplayInputs(const std::array<int32_t, 20>& inputs, uint32_t mask)
+{
+    for (uint32_t port = 0; port < 4; ++port)
+    {
+        if (!(mask & (1u << port)))
+            continue;
+        const int32_t* v = inputs.data() + port * 5;
+        m_input_handler->SetJoypadButtonStates(port, static_cast<uint16_t>(v[0]));
+        m_input_handler->SetAnalogLeft(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
+        m_input_handler->SetAnalogRight(port, static_cast<int16_t>(v[3]), static_cast<int16_t>(v[4]));
+    }
+}
+
+/// Serialize the machine state at the START of `frame` into the ring.
+void Wrapper::SaveRollbackState(int64_t frame)
+{
+    if (!m_np_states.empty() && m_np_states.back().first >= frame)
+        return;   // already have it (rollback re-entry at the anchor frame)
+    size_t size = m_core->retro_serialize_size();
+    if (size == 0)
+        return;
+    std::vector<uint8_t> buffer(size);
+    if (!m_core->retro_serialize(buffer.data(), size))
+        return;
+    m_np_states.emplace_back(frame, std::move(buffer));
+    while (m_np_states.size() > 40)
+        m_np_states.pop_front();
+}
+
+/// Emit captured RAM CRCs once their frame is confirmed-verified — a CRC of a
+/// speculative frame would false-positive against peers.
+void Wrapper::FlushNetplayCrcs()
+{
+    for (auto it = m_np_crc_pending.begin(); it != m_np_crc_pending.end();)
+    {
+        if (it->first - 1 > m_np_verified)
+            break;   // ordered map — nothing later qualifies either
+        godot::Array args;
+        args.append(it->first);
+        args.append(static_cast<int64_t>(it->second));
+        EmitSignalOnMainThread("netplay_crc", args);
+        it = m_np_crc_pending.erase(it);
+    }
+}
+
+/// Rewind to `to_frame` and silently replay up to the current frame with
+/// corrected inputs. Audio from replayed frames is dropped (it already played
+/// from the mispredicted run); video is skipped except for the final frame.
+void Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask)
+{
+    auto state_it = std::find_if(m_np_states.begin(), m_np_states.end(),
+        [&](const auto& s) { return s.first == to_frame; });
+    if (state_it == m_np_states.end())
+    {
+        LogWarning("Rollback: no saved state for frame " + std::to_string(to_frame));
+        return;
+    }
+    if (!m_core->retro_unserialize(state_it->second.data(), state_it->second.size()))
+    {
+        LogError("Rollback: unserialize failed at frame " + std::to_string(to_frame));
+        return;
+    }
+    const int64_t current = m_frame_counter.load(std::memory_order_relaxed);
+
+    // Drop everything the rewind invalidated: states after the anchor and CRCs
+    // captured on the mispredicted timeline.
+    m_np_states.erase(std::next(state_it), m_np_states.end());
+    m_np_crc_pending.erase(m_np_crc_pending.upper_bound(to_frame), m_np_crc_pending.end());
+
+    m_np_replaying = true;
+    for (int64_t x = to_frame; x < current; ++x)
+    {
+        std::array<int32_t, 20> inputs{};
+        {
+            std::lock_guard<std::mutex> lock(m_np_mutex);
+            auto confirmed = m_np_inputs.find(x);
+            auto& prev_used = m_np_used;
+            for (uint32_t port = 0; port < 4; ++port)
+            {
+                if (!(mask & (1u << port)))
+                    continue;
+                int32_t* dst = inputs.data() + port * 5;
+                if (local_mask & (1u << port))
+                {
+                    // Local input is ground truth — replay exactly what was pressed.
+                    auto used = prev_used.find(x);
+                    if (used != prev_used.end())
+                        std::copy_n(used->second.data() + port * 5, 5, dst);
+                }
+                else if (confirmed != m_np_inputs.end())
+                {
+                    std::copy_n(confirmed->second.data() + port * 5, 5, dst);
+                }
+                else
+                {
+                    // Beyond the watermark: re-predict by holding the previous
+                    // frame's (now corrected) value.
+                    auto prev = prev_used.find(x - 1);
+                    if (prev != prev_used.end())
+                        std::copy_n(prev->second.data() + port * 5, 5, dst);
+                }
+            }
+        }
+        m_np_used[x] = inputs;
+        SaveRollbackState(x);   // no-op for the anchor, re-saves the rest
+        m_np_replay_mute_video = (x != current - 1);
+        ApplyNetplayInputs(inputs, mask);
+        m_core->retro_run();
+        if (m_np_crc_interval > 0 && (x + 1) % m_np_crc_interval == 0)
+        {
+            bool ok = false;
+            uint32_t crc = ComputeRamCrc(ok);
+            if (ok)
+                m_np_crc_pending[x + 1] = crc;
+        }
+    }
+    m_np_replaying = false;
+    m_np_replay_mute_video = false;
+    // Every replayed frame ≤ watermark ran with confirmed inputs.
+    m_np_verified = std::min(m_np_watermark, current - 1);
+    m_np_rollback_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumulator)
+{
+    const uint32_t mask = m_np_port_mask.load(std::memory_order_relaxed);
+    const uint32_t local_mask = m_np_local_mask.load(std::memory_order_relaxed) & mask;
+    int64_t frame = m_frame_counter.load(std::memory_order_relaxed);
+
+    // 1. Advance the confirmed watermark and verify executed frames against
+    //    confirmations; the first contradiction sets the rollback anchor.
+    int64_t rollback_to = -1;
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        while (m_np_inputs.count(m_np_watermark + 1))
+            ++m_np_watermark;
+        const int64_t verify_upto = std::min(m_np_watermark, frame - 1);
+        for (int64_t x = m_np_verified + 1; x <= verify_upto; ++x)
+        {
+            auto confirmed = m_np_inputs.find(x);
+            auto used = m_np_used.find(x);
+            if (confirmed == m_np_inputs.end() || used == m_np_used.end())
+            {
+                m_np_verified = x;
+                continue;
+            }
+            bool match = true;
+            for (uint32_t port = 0; port < 4 && match; ++port)
+            {
+                if (!(mask & (1u << port)))
+                    continue;
+                match = std::equal(confirmed->second.data() + port * 5,
+                                   confirmed->second.data() + port * 5 + 5,
+                                   used->second.data() + port * 5);
+            }
+            if (!match)
+            {
+                rollback_to = x;
+                break;
+            }
+            m_np_verified = x;
+        }
+    }
+    if (rollback_to >= 0)
+        NetplayRollbackReplay(rollback_to, mask, local_mask);
+
+    // 2. Speculation throttle: never run more than max_ahead past the last
+    //    confirmed frame (waits briefly; the outer loop re-enters and keeps
+    //    draining commands / re-checking stop, so shutdown can't deadlock).
+    frame = m_frame_counter.load(std::memory_order_relaxed);
+    {
+        std::unique_lock<std::mutex> lock(m_np_mutex);
+        while (m_np_inputs.count(m_np_watermark + 1))
+            ++m_np_watermark;
+        if (frame > m_np_watermark + m_np_max_ahead)
+        {
+            m_np_cv.wait_for(lock, std::chrono::milliseconds(4), [&]
+            {
+                while (m_np_inputs.count(m_np_watermark + 1))
+                    ++m_np_watermark;
+                return m_stop_requested.load() || frame <= m_np_watermark + m_np_max_ahead;
+            });
+            if (m_stop_requested.load() || frame > m_np_watermark + m_np_max_ahead)
+                return;   // still stalled — outer loop spins us back in
+        }
+    }
+
+    // 3. Pace to the core's fps.
+    if (accumulator < frame_duration_ms)
+        return;
+    if (accumulator > frame_duration_ms * 4.0)
+        accumulator = frame_duration_ms * 4.0;
+    accumulator -= frame_duration_ms;
+
+    // 4. Build this frame's inputs: live local, confirmed remote if already
+    //    here, otherwise hold-last prediction. Record local values for the wire.
+    std::array<int32_t, 20> inputs{};
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        auto confirmed = m_np_inputs.find(frame);
+        for (uint32_t port = 0; port < 4; ++port)
+        {
+            if (!(mask & (1u << port)))
+                continue;
+            int32_t* dst = inputs.data() + port * 5;
+            if (local_mask & (1u << port))
+            {
+                std::copy_n(m_np_live_local.data() + port * 5, 5, dst);
+                m_np_local_records.push_back(static_cast<int32_t>(frame));
+                m_np_local_records.push_back(static_cast<int32_t>(port));
+                for (int i = 0; i < 5; ++i)
+                    m_np_local_records.push_back(dst[i]);
+            }
+            else if (confirmed != m_np_inputs.end())
+            {
+                std::copy_n(confirmed->second.data() + port * 5, 5, dst);
+            }
+            else
+            {
+                auto prev = m_np_used.find(frame - 1);
+                if (prev != m_np_used.end())
+                    std::copy_n(prev->second.data() + port * 5, 5, dst);
+            }
+        }
+        // Prune consumed confirmations well behind the verified point.
+        m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(m_np_verified - 40));
+    }
+    m_np_used[frame] = inputs;
+    m_np_used.erase(m_np_used.begin(), m_np_used.lower_bound(m_np_verified - 40));
+
+    // 5. Snapshot, run, count.
+    SaveRollbackState(frame);
+    ApplyNetplayInputs(inputs, mask);
+    m_audio_handler->CallAudioBufferStatusCallback();
+    m_core->retro_run();
+    const int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
+    {
+        bool ok = false;
+        uint32_t crc = ComputeRamCrc(ok);
+        if (ok)
+            m_np_crc_pending[frame_done] = crc;
+    }
+    FlushNetplayCrcs();
 }
 
 void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
@@ -900,6 +1206,17 @@ void Wrapper::EmulationThreadLoop()
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
 
+    // Fresh rollback bookkeeping for this content run (these members are
+    // emulation-thread-only, so reset them here rather than in SetNetplay*).
+    m_np_states.clear();
+    m_np_used.clear();
+    m_np_crc_pending.clear();
+    m_np_watermark = m_frame_counter.load(std::memory_order_relaxed) - 1;
+    m_np_verified = m_np_watermark;
+    m_np_replaying = false;
+    m_np_replay_mute_video = false;
+    m_np_rollback_count.store(0, std::memory_order_relaxed);
+
     if (m_libretro_node)
         m_libretro_node->NotifyOptionsReady();
 
@@ -932,6 +1249,13 @@ void Wrapper::EmulationThreadLoop()
 
                 accumulator -= frame_duration_ms;
             }
+            continue;
+        }
+
+        // ── Netplay rollback: run ahead on prediction, rewind on correction ──
+        if (m_np_rollback.load(std::memory_order_acquire))
+        {
+            NetplayRollbackIteration(frame_duration_ms, accumulator);
             continue;
         }
 

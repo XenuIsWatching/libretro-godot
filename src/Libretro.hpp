@@ -128,14 +128,28 @@ public:
     /// frame counter. Call before StartContent for a cold start.
     void SetNetplayMode(bool enabled, int port_mask, int64_t start_frame);
     /// Agreed inputs for one frame: flat PackedInt32Array of 4 ports × 5 values
-    /// {button_mask, alx, aly, arx, ary}.
+    /// {button_mask, alx, aly, arx, ary}. In rollback mode these are the
+    /// CONFIRMATIONS — a mismatch with what already ran triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs);
+
+    /// Enable GGPO-style rollback within netplay mode: locally-owned ports
+    /// (local_mask) apply live with zero delay, remote ports are predicted and
+    /// corrected via invisible rewind+replay. max_ahead caps speculation.
+    void SetNetplayRollback(bool enabled, int local_mask, int max_ahead);
+
+    /// Drain per-frame local-input records: flat groups of 7 ints
+    /// {frame, port, buttons, alx, aly, arx, ary} — what this peer actually
+    /// pressed each frame, to be shipped to the host for assembly.
+    godot::PackedInt32Array TakeNetplayLocalRecords();
     /// Async savestate → savestate_ready(data: PackedByteArray, frame: int).
     void RequestSaveState();
     /// Async state load + schedule reset → savestate_loaded(ok: bool).
     void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;
+
+    /// Rewind+replay corrections performed so far (rollback diagnostics).
+    int64_t GetNetplayRollbackCount() const;
 
     void ConnectOptionsReady(const godot::Callable& callable, uint32_t flags = 0u);
 

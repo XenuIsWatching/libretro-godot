@@ -41,9 +41,17 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
 
     if (ok)
     {
-        // Restart the netplay schedule from the state's frame.
+        // Restart the netplay schedule from the state's frame — including the
+        // rollback bookkeeping (this runs on the emulation thread, which owns
+        // the states/used/crc structures).
+        wrapper.m_np_states.clear();
+        wrapper.m_np_used.clear();
+        wrapper.m_np_crc_pending.clear();
+        wrapper.m_np_watermark = m_frame - 1;
+        wrapper.m_np_verified = m_frame - 1;
         std::lock_guard<std::mutex> lock(wrapper.m_np_mutex);
         wrapper.m_np_inputs.clear();
+        wrapper.m_np_local_records.clear();
         wrapper.m_frame_counter.store(m_frame, std::memory_order_relaxed);
     }
     else

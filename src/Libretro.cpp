@@ -90,6 +90,16 @@ void Libretro::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& i
     m_wrapper->PostNetplayInputs(frame, inputs);
 }
 
+void Libretro::SetNetplayRollback(bool enabled, int local_mask, int max_ahead)
+{
+    m_wrapper->SetNetplayRollback(enabled, static_cast<uint32_t>(local_mask), max_ahead);
+}
+
+godot::PackedInt32Array Libretro::TakeNetplayLocalRecords()
+{
+    return m_wrapper->TakeNetplayLocalRecords();
+}
+
 void Libretro::RequestSaveState()
 {
     m_wrapper->RequestSaveState();
@@ -103,6 +113,11 @@ void Libretro::RequestLoadState(const godot::PackedByteArray& data, int64_t fram
 int64_t Libretro::GetFrameCount() const
 {
     return m_wrapper->GetFrameCount();
+}
+
+int64_t Libretro::GetNetplayRollbackCount() const
+{
+    return m_wrapper->GetNetplayRollbackCount();
 }
 
 void Libretro::_exit_tree()
@@ -193,9 +208,12 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
     ClassDB::bind_method(D_METHOD("PostNetplayInputs", "frame", "inputs"), &Libretro::PostNetplayInputs);
+    ClassDB::bind_method(D_METHOD("SetNetplayRollback", "enabled", "local_mask", "max_ahead"), &Libretro::SetNetplayRollback);
+    ClassDB::bind_method(D_METHOD("TakeNetplayLocalRecords"), &Libretro::TakeNetplayLocalRecords);
     ClassDB::bind_method(D_METHOD("RequestSaveState"), &Libretro::RequestSaveState);
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
+    ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);
 
     ADD_SIGNAL(MethodInfo("savestate_ready",
         PropertyInfo(Variant::PACKED_BYTE_ARRAY, "data"),

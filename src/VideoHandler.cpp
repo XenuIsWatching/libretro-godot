@@ -33,6 +33,11 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         return;
     }
 
+    // Rollback replay: skip texture uploads for intermediate replayed frames
+    // (only the final frame of the replay refreshes the screen).
+    if (instance->IsNetplayReplayVideoMuted())
+        return;
+
     PackedByteArray pixel_data;
 
 #if defined(_WIN32) || defined(__ANDROID__)
