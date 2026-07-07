@@ -288,6 +288,78 @@ bool InputHandler::GetRumbleInterface(retro_rumble_interface* rumble_interface)
     return true;
 }
 
+// ── Sensor interface (accelerometer / tilt) ──────────────────────────────────
+
+bool InputHandler::GetSensorInterface(retro_sensor_interface* sensor_interface)
+{
+    if (!sensor_interface)
+        return true;
+
+    sensor_interface->set_sensor_state = SensorSetStateCallback;
+    sensor_interface->get_sensor_input = SensorGetInputCallback;
+    return true;
+}
+
+void InputHandler::SetSensorAccel(uint32_t port, float x, float y, float z)
+{
+    m_sensor_accel_x[port] = x;
+    m_sensor_accel_y[port] = y;
+    m_sensor_accel_z[port] = z;
+}
+
+/// Emu thread (called by the core). Accelerometer only for now — gyro and
+/// illuminance report unsupported so cores fall back gracefully.
+bool InputHandler::SensorSetStateCallback(unsigned port, retro_sensor_action action, unsigned rate)
+{
+    auto instance = Wrapper::GetCurrentThreadWrapper();
+    if (!instance || !instance->m_input_handler)
+        return false;
+
+    switch (action)
+    {
+    case RETRO_SENSOR_ACCELEROMETER_ENABLE:
+        instance->m_input_handler->m_sensor_enabled[port] = true;
+        Log("Sensor: accelerometer enabled on port " + std::to_string(port) +
+            " rate=" + std::to_string(rate));
+        return true;
+    case RETRO_SENSOR_ACCELEROMETER_DISABLE:
+        instance->m_input_handler->m_sensor_enabled[port] = false;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Emu thread (called by the core each frame while enabled).
+float InputHandler::SensorGetInputCallback(unsigned port, unsigned id)
+{
+    auto instance = Wrapper::GetCurrentThreadWrapper();
+    if (!instance || !instance->m_input_handler)
+        return 0.0f;
+
+    auto& handler = *instance->m_input_handler;
+    switch (id)
+    {
+    case RETRO_SENSOR_ACCELEROMETER_X:
+    {
+        auto it = handler.m_sensor_accel_x.find(port);
+        return it != handler.m_sensor_accel_x.end() ? it->second : 0.0f;
+    }
+    case RETRO_SENSOR_ACCELEROMETER_Y:
+    {
+        auto it = handler.m_sensor_accel_y.find(port);
+        return it != handler.m_sensor_accel_y.end() ? it->second : 0.0f;
+    }
+    case RETRO_SENSOR_ACCELEROMETER_Z:
+    {
+        auto it = handler.m_sensor_accel_z.find(port);
+        return it != handler.m_sensor_accel_z.end() ? it->second : 1.0f;   // at-rest ≈ (0,0,1)
+    }
+    default:
+        return 0.0f;
+    }
+}
+
 bool InputHandler::GetInputDeviceCapabilities(uint32_t* capabilities)
 {
     if (!capabilities)

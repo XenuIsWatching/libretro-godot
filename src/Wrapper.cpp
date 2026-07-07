@@ -468,6 +468,12 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
     m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
 }
 
+void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)
+{
+    if (m_input_handler)
+        m_input_handler->SetSensorAccel(port, x, y, z);
+}
+
 // ── Netplay (deterministic lockstep) ─────────────────────────────────────────
 
 void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_frame)

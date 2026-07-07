@@ -122,6 +122,10 @@ public:
     /// Per-port joypad input — called from GDScript by physical retro controller objects.
     void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
 
+    /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
+    /// Fed each frame from a held handheld's physical orientation.
+    void SetSensorAccel(int port, float x, float y, float z);
+
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     /// Gate the emulation loop: frame N runs only once PostNetplayInputs(N,…)
     /// arrived. port_mask selects participating ports; start_frame resets the

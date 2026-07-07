@@ -88,6 +88,10 @@ public:
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
 
+    /// Accelerometer feed (g units, at-rest flat ≈ (0,0,1)) for the libretro
+    /// sensor interface — a held handheld's physical tilt drives tilt carts.
+    void SetSensorAccel(uint32_t port, float x, float y, float z);
+
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     // In netplay mode the emulation thread runs frame N only once the inputs
     // for frame N have been posted (all masked ports at once), making every

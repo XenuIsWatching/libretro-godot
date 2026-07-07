@@ -73,6 +73,18 @@ public:
     bool SetControllerInfo(const retro_controller_info* controller_info);
     bool GetRumbleInterface(retro_rumble_interface* rumble_interface);
 
+    // ── Sensor interface (accelerometer / tilt) ──────────────────────────────
+    // The frontend feeds device orientation (a held VR handheld) as an
+    // accelerometer in g units, at-rest flat ≈ (0, 0, 1). Cores enable the
+    // sensor via set_sensor_state and poll it via get_sensor_input each frame.
+    bool GetSensorInterface(retro_sensor_interface* sensor_interface);
+    void SetSensorAccel(uint32_t port, float x, float y, float z);
+    bool IsSensorEnabled(uint32_t port) const
+    {
+        auto it = m_sensor_enabled.find(port);
+        return it != m_sensor_enabled.end() && it->second;
+    }
+
     const std::vector<std::vector<RetroController>>& GetControllers() const { return m_controllers; }
     /// Track which device type is active on each port (defaults to RETRO_DEVICE_JOYPAD).
     void SetPortDevice(uint32_t port, uint32_t device) { m_port_devices[port] = device; }
@@ -114,6 +126,14 @@ private:
     std::unordered_map<uint32_t, uint16_t> m_rumble_weak;
     std::unordered_map<uint32_t, uint16_t> m_rumble_strong;
 
+    // Accelerometer state per port (g units), written by the main thread
+    // (benign race, same as the analog maps) and read by the emu-thread
+    // sensor callback.
+    std::unordered_map<uint32_t, float> m_sensor_accel_x;
+    std::unordered_map<uint32_t, float> m_sensor_accel_y;
+    std::unordered_map<uint32_t, float> m_sensor_accel_z;
+    std::unordered_map<uint32_t, bool> m_sensor_enabled;
+
     std::vector<std::vector<RetroController>> m_controllers;
     std::unordered_map<uint32_t, uint32_t> m_port_devices;
     std::vector<RetroDevice> m_devices;
@@ -127,5 +147,7 @@ private:
     int16_t ProcessAnalogDevice(uint32_t port, uint32_t index, uint32_t id);
 
     static bool RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_effect effect, uint16_t strength);
+    static bool SensorSetStateCallback(unsigned port, retro_sensor_action action, unsigned rate);
+    static float SensorGetInputCallback(unsigned port, unsigned id);
 };
 }

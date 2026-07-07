@@ -241,7 +241,7 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK:                                  return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE:                                return instance->m_input_handler->GetRumbleInterface(static_cast<retro_rumble_interface*>(data));
     case RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES:                       return instance->m_input_handler->GetInputDeviceCapabilities(static_cast<uint32_t*>(data));
-    case RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE:                                return EnvironmentNotImplemented(cmd);
+    case RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE:                                return instance->m_input_handler->GetSensorInterface(static_cast<retro_sensor_interface*>(data));
     case RETRO_ENVIRONMENT_GET_CAMERA_INTERFACE:                                return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:                                   return instance->m_log_handler->GetLogInterface(static_cast<retro_log_callback*>(data));
     case RETRO_ENVIRONMENT_GET_PERF_INTERFACE:                                  return instance->m_environment_handler->GetPerfInterface(static_cast<retro_perf_callback*>(data));
