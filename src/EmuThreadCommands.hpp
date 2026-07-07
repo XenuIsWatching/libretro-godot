@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
 namespace SK
@@ -43,5 +44,28 @@ public:
 private:
     godot::PackedByteArray m_data;
     int64_t m_frame;
+};
+
+/// Hot-swap the SRAM backing file mid-run (a physical memory-card swap):
+/// flush the old file, point at the new path, load its content into SAVE_RAM.
+class EmuThreadCommandSetSram : public EmuThreadCommand
+{
+public:
+    explicit EmuThreadCommandSetSram(std::string path)
+        : m_path(std::move(path))
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    std::string m_path;
+};
+
+/// Dirty-check flush of SRAM to its backing file, on demand.
+class EmuThreadCommandFlushSram : public EmuThreadCommand
+{
+public:
+    void Execute(Wrapper& wrapper) override;
 };
 }

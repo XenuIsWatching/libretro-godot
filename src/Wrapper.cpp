@@ -16,6 +16,7 @@
 #include <chrono>
 #include <atomic>
 #include <algorithm>
+#include <cstring>
 
 #include "Libretro.hpp"
 #include "Debug.hpp"
@@ -555,6 +556,103 @@ void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandLoadState>(data, frame));
+}
+
+// ── Battery saves (SRAM) ─────────────────────────────────────────────────────
+
+void Wrapper::SetSramPath(const godot::String& path)
+{
+    std::string p = path.utf8().get_data();
+    if (m_running)
+    {
+        // Hot-swap on the emulation thread (memory-card insert/remove).
+        m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSetSram>(p));
+        return;
+    }
+    m_sram_path = p;
+}
+
+void Wrapper::SetSramData(const godot::PackedByteArray& data)
+{
+    m_sram_pending = data;
+}
+
+void Wrapper::RequestSramFlush()
+{
+    if (m_core && m_running)
+        m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandFlushSram>());
+}
+
+/// Emu thread: fill SAVE_RAM from the pending bytes (netplay) or the backing
+/// file, then snapshot the shadow copy used for dirty checks.
+void Wrapper::LoadSramFromSource()
+{
+    m_sram_shadow.clear();
+    if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    if (sram == nullptr || size == 0)
+        return;
+
+    if (m_sram_pending.size() > 0)
+    {
+        // Netplay-injected content: every peer boots with identical SRAM.
+        size_t n = std::min(size, static_cast<size_t>(m_sram_pending.size()));
+        std::memcpy(sram, m_sram_pending.ptr(), n);
+        Log("SRAM: applied " + std::to_string(n) + " injected bytes (netplay)");
+    }
+    else if (!m_sram_path.empty() && std::filesystem::is_regular_file(m_sram_path))
+    {
+        std::ifstream file(m_sram_path, std::ios::binary | std::ios::ate);
+        if (file)
+        {
+            size_t file_size = static_cast<size_t>(file.tellg());
+            file.seekg(0, std::ios::beg);
+            size_t n = std::min(size, file_size);
+            file.read(reinterpret_cast<char*>(sram), n);
+            Log("SRAM: loaded " + std::to_string(n) + " bytes from " + m_sram_path);
+        }
+    }
+
+    m_sram_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
+}
+
+/// Emu thread: write SAVE_RAM to the backing file iff it changed since the
+/// last flush. Never deletes or truncates an existing file to nothing.
+void Wrapper::FlushSramIfDirty()
+{
+    if (m_sram_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    if (sram == nullptr || size == 0)
+        return;
+    if (m_sram_shadow.size() == size &&
+        std::memcmp(m_sram_shadow.data(), sram, size) == 0)
+        return;   // unchanged
+
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(m_sram_path).parent_path(), ec);
+    std::ofstream file(m_sram_path, std::ios::binary | std::ios::trunc);
+    if (!file)
+    {
+        LogError("SRAM: cannot write " + m_sram_path);
+        return;
+    }
+    file.write(static_cast<const char*>(sram), size);
+    m_sram_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
+    Log("SRAM: flushed " + std::to_string(size) + " bytes to " + m_sram_path);
+}
+
+/// Emu thread: memory-card hot-swap — flush the old card, adopt the new one.
+void Wrapper::ApplySramSwap(const std::string& new_path)
+{
+    FlushSramIfDirty();
+    m_sram_path = new_path;
+    m_sram_pending = godot::PackedByteArray();
+    LoadSramFromSource();
+    Log("SRAM: swapped to " + (new_path.empty() ? std::string("<none>") : new_path));
 }
 
 void Wrapper::EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args)
@@ -1206,6 +1304,11 @@ void Wrapper::EmulationThreadLoop()
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
 
+    // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
+    // netplay-injected bytes) before the first frame runs.
+    LoadSramFromSource();
+    m_sram_flush_counter = m_frame_counter.load(std::memory_order_relaxed);
+
     // Fresh rollback bookkeeping for this content run (these members are
     // emulation-thread-only, so reset them here rather than in SetNetplay*).
     m_np_states.clear();
@@ -1231,6 +1334,16 @@ void Wrapper::EmulationThreadLoop()
             std::unique_ptr<EmuThreadCommand> emu_command;
             while (m_emu_thread_commands_queue.try_dequeue(emu_command))
                 emu_command->Execute(*this);
+        }
+
+        // Battery save: dirty-check flush roughly every 10 seconds of frames.
+        {
+            int64_t fc = m_frame_counter.load(std::memory_order_relaxed);
+            if (fc - m_sram_flush_counter >= 600)
+            {
+                m_sram_flush_counter = fc;
+                FlushSramIfDirty();
+            }
         }
 
         auto now = std::chrono::steady_clock::now();
@@ -1301,6 +1414,11 @@ void Wrapper::EmulationThreadLoop()
         if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
             EmitNetplayCrc(frame_done);
     }
+    // Final battery-save flush while the core memory is still valid. Injected
+    // netplay SRAM is one-shot — clear it so a later offline run loads its own.
+    FlushSramIfDirty();
+    m_sram_pending = godot::PackedByteArray();
+
     m_video_handler->NotifyContextDestroy();
     m_core->retro_unload_game();
     m_core->retro_deinit();

@@ -63,4 +63,14 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
     args.append(ok);
     wrapper.EmitSignalOnMainThread("savestate_loaded", args);
 }
+
+void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
+{
+    wrapper.ApplySramSwap(m_path);
+}
+
+void EmuThreadCommandFlushSram::Execute(Wrapper& wrapper)
+{
+    wrapper.FlushSramIfDirty();
+}
 }

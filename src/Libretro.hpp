@@ -145,6 +145,16 @@ public:
     void RequestSaveState();
     /// Async state load + schedule reset → savestate_loaded(ok: bool).
     void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
+    // ── Battery saves (SRAM) ─────────────────────────────────────────────────
+    /// Backing .srm file for this run. Call before StartContent; while running
+    /// it hot-swaps (flush old, load new) — a physical memory-card swap.
+    /// Empty path = no persistence (PSX with no card seated).
+    void SetSramPath(const godot::String& path);
+    /// Netplay: inject exact SRAM bytes applied at load instead of the file.
+    void SetSramData(const godot::PackedByteArray& data);
+    /// Force a dirty-check flush of SRAM to its backing file now.
+    void RequestSramFlush();
+
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;
 

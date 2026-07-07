@@ -125,6 +125,29 @@ public:
     /// the session ships to the host for assembly.
     godot::PackedInt32Array TakeNetplayLocalRecords();
 
+    // ── Battery saves (SRAM / RETRO_MEMORY_SAVE_RAM) ─────────────────────────
+    // The frontend owns persistence: SRAM is loaded from m_sram_path right
+    // after retro_load_game and flushed (dirty-checked) every ~10 s and at
+    // shutdown. An empty path disables persistence entirely (e.g. a PSX with
+    // no memory card seated).
+
+    /// Set the .srm file backing this run. Call before StartContent; calling
+    /// while running performs a hot-swap on the emulation thread (flush the
+    /// old file, load the new one into SAVE_RAM) — a real memory-card swap.
+    void SetSramPath(const godot::String& path);
+
+    /// Netplay: inject SRAM content directly (applied at load instead of the
+    /// file, so every peer boots with identical SRAM). Never flushed.
+    void SetSramData(const godot::PackedByteArray& data);
+
+    /// Force a dirty-check flush now (emu-thread command).
+    void RequestSramFlush();
+
+    // Emulation-thread internals (SRAM).
+    void LoadSramFromSource();
+    void FlushSramIfDirty();
+    void ApplySramSwap(const std::string& new_path);
+
     /// Serialize the core on the emulation thread; result arrives via the
     /// savestate_ready(data, frame) signal (empty data on failure).
     void RequestSaveState();
@@ -214,6 +237,14 @@ public:
     /// rollback — audio/video callbacks drop their output. Emu thread only.
     bool IsNetplayReplaying() const { return m_np_replaying; }
     bool IsNetplayReplayVideoMuted() const { return m_np_replaying && m_np_replay_mute_video; }
+
+    // SRAM persistence. m_sram_path/m_sram_pending are set from the main
+    // thread BEFORE StartContent (or swapped via EmuThreadCommandSetSram);
+    // the shadow copy is emulation-thread-only.
+    std::string m_sram_path;
+    godot::PackedByteArray m_sram_pending;
+    std::vector<uint8_t> m_sram_shadow;
+    int64_t m_sram_flush_counter = 0;
 
     std::string m_root_directory;
     std::string m_temp_directory;

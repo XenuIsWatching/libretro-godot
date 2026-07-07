@@ -110,6 +110,21 @@ void Libretro::RequestLoadState(const godot::PackedByteArray& data, int64_t fram
     m_wrapper->RequestLoadState(data, frame);
 }
 
+void Libretro::SetSramPath(const godot::String& path)
+{
+    m_wrapper->SetSramPath(path);
+}
+
+void Libretro::SetSramData(const godot::PackedByteArray& data)
+{
+    m_wrapper->SetSramData(data);
+}
+
+void Libretro::RequestSramFlush()
+{
+    m_wrapper->RequestSramFlush();
+}
+
 int64_t Libretro::GetFrameCount() const
 {
     return m_wrapper->GetFrameCount();
@@ -214,6 +229,9 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);
+    ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
+    ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
+    ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);
 
     ADD_SIGNAL(MethodInfo("savestate_ready",
         PropertyInfo(Variant::PACKED_BYTE_ARRAY, "data"),
