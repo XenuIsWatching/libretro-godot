@@ -474,6 +474,16 @@ void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)
         m_input_handler->SetSensorAccel(port, x, y, z);
 }
 
+void Wrapper::SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed)
+{
+    if (m_input_handler)
+    {
+        m_input_handler->SetPointerPosition(port, x, y);
+        m_input_handler->SetPointerPressed(port, pressed ? 1 : 0);
+        m_input_handler->SetPointerCount(port, pressed ? 1 : 0);
+    }
+}
+
 // ── Netplay (deterministic lockstep) ─────────────────────────────────────────
 
 void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_frame)

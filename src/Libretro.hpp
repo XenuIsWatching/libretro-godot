@@ -126,6 +126,10 @@ public:
     /// Fed each frame from a held handheld's physical orientation.
     void SetSensorAccel(int port, float x, float y, float z);
 
+    /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y in [-32767, 32767]
+    /// across the whole video output. Drives the DS/3DS touch screen.
+    void SetPointerState(int port, int x, int y, bool pressed);
+
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     /// Gate the emulation loop: frame N runs only once PostNetplayInputs(N,…)
     /// arrived. port_mask selects participating ports; start_frame resets the

@@ -85,6 +85,12 @@ void Libretro::SetSensorAccel(int port, float x, float y, float z)
     m_wrapper->SetSensorAccel(static_cast<uint32_t>(port), x, y, z);
 }
 
+void Libretro::SetPointerState(int port, int x, int y, bool pressed)
+{
+    m_wrapper->SetPointerState(static_cast<uint32_t>(port),
+        static_cast<int16_t>(x), static_cast<int16_t>(y), pressed);
+}
+
 void Libretro::SetNetplayMode(bool enabled, int port_mask, int64_t start_frame)
 {
     m_wrapper->SetNetplayMode(enabled, static_cast<uint32_t>(port_mask), start_frame);
@@ -227,6 +233,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetLightgunButton", "port", "button_id", "pressed"), &Libretro::SetLightgunButton);
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
     ClassDB::bind_method(D_METHOD("SetSensorAccel", "port", "x", "y", "z"), &Libretro::SetSensorAccel);
+    ClassDB::bind_method(D_METHOD("SetPointerState", "port", "x", "y", "pressed"), &Libretro::SetPointerState);
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
     ClassDB::bind_method(D_METHOD("PostNetplayInputs", "frame", "inputs"), &Libretro::PostNetplayInputs);
     ClassDB::bind_method(D_METHOD("SetNetplayRollback", "enabled", "local_mask", "max_ahead"), &Libretro::SetNetplayRollback);

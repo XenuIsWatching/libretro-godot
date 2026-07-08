@@ -92,6 +92,12 @@ public:
     /// sensor interface — a held handheld's physical tilt drives tilt carts.
     void SetSensorAccel(uint32_t port, float x, float y, float z);
 
+    /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y normalized to
+    /// [-0x7FFF, 0x7FFF] across the WHOLE video output (the composite
+    /// framebuffer for dual-screen cores — melonDS maps the bottom-screen
+    /// region of it to DS touch).
+    void SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed);
+
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     // In netplay mode the emulation thread runs frame N only once the inputs
     // for frame N have been posted (all masked ports at once), making every
