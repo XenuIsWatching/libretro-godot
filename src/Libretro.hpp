@@ -121,6 +121,9 @@ public:
 
     /// Per-port joypad input — called from GDScript by physical retro controller objects.
     void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
+    /// Relative mouse deltas (accumulated until the core's next read) + button
+    /// bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) for a RETRO_DEVICE_MOUSE port.
+    void SetMouseState(int port, int dx, int dy, int buttons);
 
     /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
     /// Fed each frame from a held handheld's physical orientation.

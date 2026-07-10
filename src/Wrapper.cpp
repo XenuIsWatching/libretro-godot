@@ -468,6 +468,24 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
     m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
 }
 
+void Wrapper::SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t buttons)
+{
+    if (!m_input_handler)
+        return;
+    // Mouse input is not part of the deterministic netplay input schedule
+    // (same policy as sensors/pointer) — block writes to masked ports so
+    // peers can't diverge on it.
+    if (m_netplay_enabled.load(std::memory_order_acquire) &&
+        (m_np_port_mask.load(std::memory_order_relaxed) & (1u << port)))
+        return;
+    auto clamp16 = [](int32_t v) -> int16_t
+    {
+        return static_cast<int16_t>(v < -0x7fff ? -0x7fff : (v > 0x7fff ? 0x7fff : v));
+    };
+    m_input_handler->SetMousePosition(port, clamp16(dx), clamp16(dy));
+    m_input_handler->SetMouseButtons(port, buttons);
+}
+
 void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)
 {
     if (m_input_handler)
@@ -506,8 +524,9 @@ void Wrapper::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& fl
 {
     if (flat.size() < 20)
         return;
-    std::array<int32_t, 20> values{};
-    for (int i = 0; i < 20; ++i)
+    NpFrame values{};
+    const int n = flat.size() < NP_FRAME_INTS ? static_cast<int>(flat.size()) : NP_FRAME_INTS;
+    for (int i = 0; i < n; ++i)
         values[i] = flat[i];
     const bool rollback = m_np_rollback.load(std::memory_order_acquire);
     {
@@ -834,16 +853,45 @@ void Wrapper::EmitNetplayCrc(int64_t frame)
 
 // ── Rollback engine (all emulation-thread) ───────────────────────────────────
 
-void Wrapper::ApplyNetplayInputs(const std::array<int32_t, 20>& inputs, uint32_t mask)
+void Wrapper::ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask)
 {
     for (uint32_t port = 0; port < 4; ++port)
     {
         if (!(mask & (1u << port)))
             continue;
         const int32_t* v = inputs.data() + port * 5;
+        // Route by the port's device type: a RETRO_DEVICE_MOUSE port carries
+        // {buttons, dx, dy, -, -} in its five slots (deltas accumulate until
+        // the core's next read, so replaying a frame re-supplies exactly that
+        // frame's delta — deterministic under both lockstep and rollback).
+        uint32_t device = m_input_handler->GetPortDevice(port) & RETRO_DEVICE_MASK;
+        if (device == RETRO_DEVICE_MOUSE)
+        {
+            m_input_handler->SetMousePosition(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
+            m_input_handler->SetMouseButtons(port, static_cast<uint32_t>(v[0]));
+            continue;
+        }
         m_input_handler->SetJoypadButtonStates(port, static_cast<uint16_t>(v[0]));
         m_input_handler->SetAnalogLeft(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
         m_input_handler->SetAnalogRight(port, static_cast<int16_t>(v[3]), static_cast<int16_t>(v[4]));
+    }
+}
+
+/// Apply the aux block of a netplay frame (sensor + pointer, port 0). Runs on
+/// the emulation thread strictly before the frame executes, so tilt and touch
+/// are part of the deterministic timeline on every peer.
+void Wrapper::ApplyNetplayAux(const NpFrame& inputs)
+{
+    const int32_t flags = inputs[20];
+    if (flags & 1)
+        m_input_handler->SetSensorAccel(0,
+            inputs[21] / 1000.0f, inputs[22] / 1000.0f, inputs[23] / 1000.0f);
+    if (flags & 2)
+    {
+        m_input_handler->SetPointerPosition(0,
+            static_cast<int16_t>(inputs[24]), static_cast<int16_t>(inputs[25]));
+        m_input_handler->SetPointerPressed(0, inputs[26] ? 1 : 0);
+        m_input_handler->SetPointerCount(0, inputs[26] ? 1 : 0);
     }
 }
 
@@ -906,7 +954,7 @@ void Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t lo
     m_np_replaying = true;
     for (int64_t x = to_frame; x < current; ++x)
     {
-        std::array<int32_t, 20> inputs{};
+        NpFrame inputs{};
         {
             std::lock_guard<std::mutex> lock(m_np_mutex);
             auto confirmed = m_np_inputs.find(x);
@@ -1030,7 +1078,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
 
     // 4. Build this frame's inputs: live local, confirmed remote if already
     //    here, otherwise hold-last prediction. Record local values for the wire.
-    std::array<int32_t, 20> inputs{};
+    NpFrame inputs{};
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
         auto confirmed = m_np_inputs.find(frame);
@@ -1502,7 +1550,7 @@ void Wrapper::EmulationThreadLoop()
         if (accumulator > frame_duration_ms * 4.0)
             accumulator = frame_duration_ms * 4.0;
 
-        std::array<int32_t, 20> frame_inputs{};
+        NpFrame frame_inputs{};
         {
             std::unique_lock<std::mutex> lock(m_np_mutex);
             int64_t frame = m_frame_counter.load(std::memory_order_relaxed);
@@ -1521,17 +1569,10 @@ void Wrapper::EmulationThreadLoop()
         ApplyScheduledDiscOps(m_frame_counter.load(std::memory_order_relaxed));
 
         // Apply the agreed inputs — in netplay mode the emulation thread is
-        // the sole InputHandler writer for the masked ports.
-        uint32_t mask = m_np_port_mask.load(std::memory_order_relaxed);
-        for (uint32_t port = 0; port < 4; ++port)
-        {
-            if (!(mask & (1u << port)))
-                continue;
-            const int32_t* v = frame_inputs.data() + port * 5;
-            m_input_handler->SetJoypadButtonStates(port, static_cast<uint16_t>(v[0]));
-            m_input_handler->SetAnalogLeft(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
-            m_input_handler->SetAnalogRight(port, static_cast<int16_t>(v[3]), static_cast<int16_t>(v[4]));
-        }
+        // the sole InputHandler writer for the masked ports. Device-aware
+        // (mouse ports get deltas), plus the aux block (sensor/touch).
+        ApplyNetplayInputs(frame_inputs, m_np_port_mask.load(std::memory_order_relaxed));
+        ApplyNetplayAux(frame_inputs);
 
         m_audio_handler->CallAudioBufferStatusCallback();
         m_core->retro_run();

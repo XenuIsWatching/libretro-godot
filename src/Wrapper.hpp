@@ -88,6 +88,12 @@ public:
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
 
+    /// Per-port mouse input (RETRO_DEVICE_MOUSE) for physical mouse objects.
+    /// dx/dy are relative deltas ACCUMULATED until the core's next read;
+    /// buttons is a bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) — LEFT bit 2,
+    /// RIGHT bit 3, MIDDLE bit 6.
+    void SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t buttons);
+
     /// Accelerometer feed (g units, at-rest flat ≈ (0,0,1)) for the libretro
     /// sensor interface — a held handheld's physical tilt drives tilt carts.
     void SetSensorAccel(uint32_t port, float x, float y, float z);
@@ -214,7 +220,16 @@ public:
     void NetplayRollbackIteration(double frame_duration_ms, double& accumulator);
     void NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask);
     void SaveRollbackState(int64_t frame);
-    void ApplyNetplayInputs(const std::array<int32_t, 20>& inputs, uint32_t mask);
+    // Netplay frame payload: 4 ports × 5 ints (joypad btn/alx/aly/arx/ary, or
+    // for RETRO_DEVICE_MOUSE ports: buttons/dx/dy/-/-), then the aux block:
+    // [20] flags (bit0 sensor valid, bit1 pointer valid), [21..23] accel in
+    // milli-g, [24..25] pointer x/y, [26] pointer pressed. Legacy 20-int
+    // frames are accepted (aux zeroed).
+    static constexpr int NP_FRAME_INTS = 27;
+    using NpFrame = std::array<int32_t, NP_FRAME_INTS>;
+
+    void ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask);
+    void ApplyNetplayAux(const NpFrame& inputs);
     void FlushNetplayCrcs();
 
     void _input(const godot::Ref<godot::InputEvent>& event);
@@ -254,7 +269,7 @@ public:
     std::atomic<uint32_t> m_np_port_mask = 0x1;
     std::mutex m_np_mutex;
     std::condition_variable m_np_cv;
-    std::map<int64_t, std::array<int32_t, 20>> m_np_inputs;
+    std::map<int64_t, NpFrame> m_np_inputs;
     int64_t m_np_crc_interval = 60;
     // Netplay-scheduled disc ops (eject / replace), applied on the emulation
     // thread right before running their frame. Guarded by m_np_mutex.
@@ -265,10 +280,10 @@ public:
     std::atomic<uint32_t> m_np_local_mask = 0;
     std::atomic<int64_t> m_np_rollback_count = 0;   // rewind+replay corrections
     int m_np_max_ahead = 8;
-    std::array<int32_t, 20> m_np_live_local{};              // live local inputs (main thread writes)
+    NpFrame m_np_live_local{};              // live local inputs (main thread writes)
     std::vector<int32_t> m_np_local_records;                // flat {frame,port,5 vals} drained by main thread
     // Emulation-thread-only rollback bookkeeping (no lock needed):
-    std::map<int64_t, std::array<int32_t, 20>> m_np_used;   // inputs each executed frame actually ran with
+    std::map<int64_t, NpFrame> m_np_used;   // inputs each executed frame actually ran with
     std::deque<std::pair<int64_t, std::vector<uint8_t>>> m_np_states; // state BEFORE running frame N
     std::map<int64_t, uint32_t> m_np_crc_pending;           // captured CRCs awaiting confirmation
     int64_t m_np_watermark = -1;                            // highest contiguous confirmed frame
