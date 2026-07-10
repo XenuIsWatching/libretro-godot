@@ -124,6 +124,10 @@ public:
     /// Relative mouse deltas (accumulated until the core's next read) + button
     /// bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) for a RETRO_DEVICE_MOUSE port.
     void SetMouseState(int port, int dx, int dy, int buttons);
+    /// Keyboard: RETROK_* keycode down/up + unicode character. Updates the
+    /// RETRO_DEVICE_KEYBOARD poll bitset and fires the core's keyboard event
+    /// callback (modifiers derived from held keys). Feed port 0.
+    void SetKeyState(int port, int keycode, bool down, int character);
 
     /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
     /// Fed each frame from a held handheld's physical orientation.

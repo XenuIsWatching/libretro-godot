@@ -486,6 +486,21 @@ void Wrapper::SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t butt
     m_input_handler->SetMouseButtons(port, buttons);
 }
 
+void Wrapper::SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t character)
+{
+    if (!m_input_handler)
+        return;
+    // During netplay, keyboard input rides the deterministic frame schedule
+    // (key-event slots) — live writes would desync peers. Keyboard state is
+    // global (port 0), so gate on port 0 being masked.
+    if (m_netplay_enabled.load(std::memory_order_acquire) &&
+        (m_np_port_mask.load(std::memory_order_relaxed) & 1u))
+        return;
+    m_input_handler->SetKeyState(port, keycode, down);
+    m_input_handler->CallKeyboardEventCallback(down, keycode, character,
+        m_input_handler->GetKeyModifiers(port));
+}
+
 void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)
 {
     if (m_input_handler)
@@ -893,6 +908,21 @@ void Wrapper::ApplyNetplayAux(const NpFrame& inputs)
         m_input_handler->SetPointerPressed(0, inputs[26] ? 1 : 0);
         m_input_handler->SetPointerCount(0, inputs[26] ? 1 : 0);
     }
+    // Key events: applied in slot order on the emulation thread, so the poll
+    // bitset AND the core's keyboard event callback see the identical sequence
+    // on every peer.
+    for (int slot = 0; slot < NP_KEY_SLOTS; ++slot)
+    {
+        int32_t packed = inputs[27 + slot * 2];
+        uint32_t keycode = static_cast<uint32_t>(packed) & 0xFFFF;
+        if (keycode == 0)
+            continue;
+        bool down = (static_cast<uint32_t>(packed) >> 16) & 1;
+        uint32_t character = static_cast<uint32_t>(inputs[27 + slot * 2 + 1]);
+        m_input_handler->SetKeyState(0, keycode, down);
+        m_input_handler->CallKeyboardEventCallback(down, keycode, character,
+            m_input_handler->GetKeyModifiers(0));
+    }
 }
 
 /// Serialize the machine state at the START of `frame` into the ring.
@@ -1237,30 +1267,14 @@ void Wrapper::_input(const godot::Ref<godot::InputEvent>& event)
     Ref<InputEventKey> keyEvent = event;
     if (keyEvent.is_valid())
     {
-        auto keys = m_input_handler->GetKeyboardKeys(0);
-
-        bool down             = keyEvent->is_pressed();
-        uint32_t keycode      = GodotToLibretroKeycode(keyEvent);
-        uint32_t character    = keyEvent->get_unicode();
-        uint16_t keyModifiers = 0;
-        auto mods             = keyEvent->get_modifiers_mask();
-        if (mods & KeyModifierMask::KEY_MASK_SHIFT)
-            keyModifiers |= RETROKMOD_SHIFT;
-        if (mods & KeyModifierMask::KEY_MASK_CTRL)
-            keyModifiers |= RETROKMOD_CTRL;
-        if (mods & KeyModifierMask::KEY_MASK_ALT)
-            keyModifiers |= RETROKMOD_ALT;
-        if (mods & KeyModifierMask::KEY_MASK_META)
-            keyModifiers |= RETROKMOD_META;
-
-        if (down)
-            keys |= (1 << keycode);
-        else
-            keys &= ~(1 << keycode);
-
-        m_input_handler->SetKeyboardKeys(0, keys);
-
-        m_input_handler->CallKeyboardEventCallback(down, keycode, character, keyModifiers);
+        bool down          = keyEvent->is_pressed();
+        uint32_t keycode   = GodotToLibretroKeycode(keyEvent);
+        uint32_t character = keyEvent->get_unicode();
+        // SetKeyState maintains the full RETROK bitset (the old uint32 mask
+        // overflowed for keycodes >= 32), derives modifiers from held keys,
+        // fires the core's keyboard event callback, and blocks itself during
+        // netplay (keyboard rides the deterministic schedule there).
+        SetKeyState(0, keycode, down, character);
     }
 }
 

@@ -88,6 +88,11 @@ public:
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
 
+    /// Keyboard input: update the RETRO_DEVICE_KEYBOARD poll bitset AND fire
+    /// the core's keyboard event callback (modifiers derived from held keys).
+    /// Keyboard state is global in practice — feed port 0.
+    void SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t character);
+
     /// Per-port mouse input (RETRO_DEVICE_MOUSE) for physical mouse objects.
     /// dx/dy are relative deltas ACCUMULATED until the core's next read;
     /// buttons is a bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) — LEFT bit 2,
@@ -223,9 +228,12 @@ public:
     // Netplay frame payload: 4 ports × 5 ints (joypad btn/alx/aly/arx/ary, or
     // for RETRO_DEVICE_MOUSE ports: buttons/dx/dy/-/-), then the aux block:
     // [20] flags (bit0 sensor valid, bit1 pointer valid), [21..23] accel in
-    // milli-g, [24..25] pointer x/y, [26] pointer pressed. Legacy 20-int
-    // frames are accepted (aux zeroed).
-    static constexpr int NP_FRAME_INTS = 27;
+    // milli-g, [24..25] pointer x/y, [26] pointer pressed, then up to 4 key
+    // events × 2 ints each: [keycode | down<<16, unicode character]
+    // (keycode 0 = empty slot). Legacy shorter frames are accepted (rest
+    // zeroed).
+    static constexpr int NP_KEY_SLOTS = 4;
+    static constexpr int NP_FRAME_INTS = 27 + NP_KEY_SLOTS * 2;
     using NpFrame = std::array<int32_t, NP_FRAME_INTS>;
 
     void ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask);

@@ -127,13 +127,29 @@ uint32_t InputHandler::GetMouseButtons(uint32_t port)
     return m_mouse_buttons[port];
 }
 
-void InputHandler::SetKeyboardKeys(uint32_t port, uint32_t keys)
+void InputHandler::SetKeyState(uint32_t port, uint32_t keycode, bool down)
 {
-    m_keyboard_keys[port] = keys;
+    if (keycode >= RETROK_LAST)
+        return;
+    m_key_state[port & 3].set(keycode, down);
 }
-uint32_t InputHandler::GetKeyboardKeys(uint32_t port)
+
+bool InputHandler::GetKeyState(uint32_t port, uint32_t keycode) const
 {
-    return m_keyboard_keys[port];
+    return keycode < RETROK_LAST && m_key_state[port & 3].test(keycode);
+}
+
+uint16_t InputHandler::GetKeyModifiers(uint32_t port) const
+{
+    const auto& ks = m_key_state[port & 3];
+    uint16_t mods = 0;
+    if (ks.test(RETROK_LSHIFT) || ks.test(RETROK_RSHIFT)) mods |= RETROKMOD_SHIFT;
+    if (ks.test(RETROK_LCTRL)  || ks.test(RETROK_RCTRL))  mods |= RETROKMOD_CTRL;
+    if (ks.test(RETROK_LALT)   || ks.test(RETROK_RALT))   mods |= RETROKMOD_ALT;
+    if (ks.test(RETROK_LSUPER) || ks.test(RETROK_RSUPER)) mods |= RETROKMOD_META;
+    if (ks.test(RETROK_CAPSLOCK)) mods |= RETROKMOD_CAPSLOCK;
+    if (ks.test(RETROK_NUMLOCK))  mods |= RETROKMOD_NUMLOCK;
+    return mods;
 }
 
 void InputHandler::SetLightgunPosition(uint32_t port, int16_t x, int16_t y)
@@ -429,7 +445,7 @@ int16_t InputHandler::ProcessMouseDevice(uint32_t port, uint32_t id)
 
 int16_t InputHandler::ProcessKeyboardDevice(uint32_t port, uint32_t id)
 {
-    return m_keyboard_keys[port] & (1 << id);
+    return GetKeyState(port, id) ? 1 : 0;
 }
 
 int16_t InputHandler::ProcessLightgunDevice(uint32_t port, uint32_t id)

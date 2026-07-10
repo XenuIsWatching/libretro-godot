@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <array>
+#include <bitset>
 
 #include <libretro.h>
 
@@ -40,8 +42,13 @@ public:
     void SetMouseButtons(uint32_t port, uint32_t buttons);
     uint32_t GetMouseButtons(uint32_t port);
 
-    void SetKeyboardKeys(uint32_t port, uint32_t keys);
-    uint32_t GetKeyboardKeys(uint32_t port);
+    // Keyboard poll state: one bit per RETROK_* keycode (the old uint32 mask
+    // only covered keycodes < 32 - letters start at 97). Keyboard state is
+    // effectively global; cores poll port 0.
+    void SetKeyState(uint32_t port, uint32_t keycode, bool down);
+    bool GetKeyState(uint32_t port, uint32_t keycode) const;
+    /// RETROKMOD_* mask derived from the currently-held modifier keycodes.
+    uint16_t GetKeyModifiers(uint32_t port) const;
 
     void SetLightgunPosition(uint32_t port, int16_t x, int16_t y);
     int16_t GetLightgunX(uint32_t port);
@@ -103,7 +110,7 @@ private:
     std::unordered_map<uint32_t, int16_t> m_mouse_y;
     std::unordered_map<uint32_t, uint32_t> m_mouse_buttons;
 
-    std::unordered_map<uint32_t, uint32_t> m_keyboard_keys;
+    std::array<std::bitset<RETROK_LAST>, 4> m_key_state{};
 
     std::unordered_map<uint32_t, int16_t> m_lightgun_x;
     std::unordered_map<uint32_t, int16_t> m_lightgun_y;
