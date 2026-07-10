@@ -136,6 +136,27 @@ void Libretro::RequestSramFlush()
     m_wrapper->RequestSramFlush();
 }
 
+void Libretro::RequestDiskInfo()
+{
+    m_wrapper->RequestDiskInfo();
+}
+
+void Libretro::SetDiskEjectState(bool ejected)
+{
+    m_wrapper->SetDiskEjectState(ejected);
+}
+
+void Libretro::ReplaceDiskImage(int64_t index, const godot::String& path)
+{
+    m_wrapper->ReplaceDiskImage(static_cast<uint32_t>(index < 0 ? 0 : index), path);
+}
+
+void Libretro::ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const godot::String& path)
+{
+    m_wrapper->ScheduleDiscOp(frame, static_cast<int32_t>(op),
+        static_cast<uint32_t>(index < 0 ? 0 : index), path);
+}
+
 int64_t Libretro::GetFrameCount() const
 {
     return m_wrapper->GetFrameCount();
@@ -245,11 +266,20 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
     ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);
+    ClassDB::bind_method(D_METHOD("RequestDiskInfo"), &Libretro::RequestDiskInfo);
+    ClassDB::bind_method(D_METHOD("SetDiskEjectState", "ejected"), &Libretro::SetDiskEjectState);
+    ClassDB::bind_method(D_METHOD("ReplaceDiskImage", "index", "path"), &Libretro::ReplaceDiskImage);
+    ClassDB::bind_method(D_METHOD("ScheduleDiscOp", "frame", "op", "index", "path"), &Libretro::ScheduleDiscOp);
 
     ADD_SIGNAL(MethodInfo("savestate_ready",
         PropertyInfo(Variant::PACKED_BYTE_ARRAY, "data"),
         PropertyInfo(Variant::INT, "frame")));
     ADD_SIGNAL(MethodInfo("savestate_loaded", PropertyInfo(Variant::BOOL, "ok")));
+    ADD_SIGNAL(MethodInfo("disk_control_ready",
+        PropertyInfo(Variant::BOOL, "has_control"),
+        PropertyInfo(Variant::INT, "count"),
+        PropertyInfo(Variant::INT, "current_index"),
+        PropertyInfo(Variant::BOOL, "ejected")));
     ADD_SIGNAL(MethodInfo("netplay_crc",
         PropertyInfo(Variant::INT, "frame"),
         PropertyInfo(Variant::INT, "crc")));

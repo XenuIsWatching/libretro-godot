@@ -68,4 +68,47 @@ class EmuThreadCommandFlushSram : public EmuThreadCommand
 public:
     void Execute(Wrapper& wrapper) override;
 };
+
+/// Read the core's disk-control state and emit
+/// disk_control_ready(has_control, count, current_index, ejected).
+class EmuThreadCommandDiskInfo : public EmuThreadCommand
+{
+public:
+    void Execute(Wrapper& wrapper) override;
+};
+
+/// Open/close the core's virtual disc tray (set_eject_state), then re-emit
+/// disk_control_ready with the updated state.
+class EmuThreadCommandSetDiskEjected : public EmuThreadCommand
+{
+public:
+    explicit EmuThreadCommandSetDiskEjected(bool ejected)
+        : m_ejected(ejected)
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    bool m_ejected;
+};
+
+/// Hand the core a brand-new disc file at image `index`
+/// (replace_image_index — RetroArch's "Load New Disc"), then re-emit
+/// disk_control_ready. The tray must be open; the caller closes it after.
+class EmuThreadCommandReplaceDisk : public EmuThreadCommand
+{
+public:
+    EmuThreadCommandReplaceDisk(uint32_t index, std::string path)
+        : m_index(index)
+        , m_path(std::move(path))
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    uint32_t m_index;
+    std::string m_path;
+};
 }

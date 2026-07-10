@@ -166,6 +166,36 @@ public:
     /// schedule to `frame`; result arrives via savestate_loaded(ok).
     void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
 
+    // Disk control (multi-disc games). All three enqueue emu-thread commands;
+    // state comes back via the disk_control_ready(has_control, count,
+    // current_index, ejected) signal. Safe no-ops when the core has no
+    // disk-control interface (or nothing is running).
+
+    /// Query the core's disk-control state.
+    void RequestDiskInfo();
+
+    /// Open (true) / close (false) the core's virtual disc tray.
+    void SetDiskEjectState(bool ejected);
+
+    /// Hand the core a new disc file at image `index` (tray must be open).
+    void ReplaceDiskImage(uint32_t index, const godot::String& path);
+
+    /// Netplay: schedule a disc op to apply deterministically right before
+    /// running `frame` (lockstep only). op 0 = eject (open tray),
+    /// op 1 = replace at `index` with `path` then close the tray.
+    void ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const godot::String& path);
+
+    // Emulation-thread internals (disk control).
+    void EmitDiskInfo();
+    void ApplyScheduledDiscOps(int64_t frame);
+
+    struct DiscOp
+    {
+        int32_t op = 0;
+        uint32_t index = 0;
+        std::string path;
+    };
+
     int64_t GetFrameCount() const { return m_frame_counter.load(std::memory_order_relaxed); }
 
     /// How many rewind+replay corrections have happened (diagnostics/HUD).
@@ -226,6 +256,9 @@ public:
     std::condition_variable m_np_cv;
     std::map<int64_t, std::array<int32_t, 20>> m_np_inputs;
     int64_t m_np_crc_interval = 60;
+    // Netplay-scheduled disc ops (eject / replace), applied on the emulation
+    // thread right before running their frame. Guarded by m_np_mutex.
+    std::map<int64_t, DiscOp> m_disc_schedule;
 
     // Rollback state. Everything below m_np_mutex-guarded unless noted.
     std::atomic<bool> m_np_rollback = false;

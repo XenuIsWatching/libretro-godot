@@ -162,6 +162,18 @@ public:
     void SetSramData(const godot::PackedByteArray& data);
     /// Force a dirty-check flush of SRAM to its backing file now.
     void RequestSramFlush();
+    // ── Disk control (multi-disc games) ──────────────────────────────────────
+    /// Query the core's disk-control state → disk_control_ready(has_control,
+    /// count, current_index, ejected). Emits has_control=false when the core
+    /// lacks the interface or nothing is running.
+    void RequestDiskInfo();
+    /// Open (true) / close (false) the core's virtual disc tray.
+    void SetDiskEjectState(bool ejected);
+    /// Hand the core a new disc file at image `index` (tray must be open).
+    void ReplaceDiskImage(int64_t index, const godot::String& path);
+    /// Netplay: apply a disc op right before running `frame` on every peer.
+    /// op 0 = eject; op 1 = replace at `index` with `path` + close tray.
+    void ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const godot::String& path);
 
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;

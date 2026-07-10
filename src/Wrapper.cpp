@@ -491,6 +491,7 @@ void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_fra
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
         m_np_inputs.clear();
+        m_disc_schedule.clear();
     }
     m_np_port_mask.store(port_mask == 0 ? 0x1u : port_mask, std::memory_order_relaxed);
     if (start_frame >= 0)
@@ -572,6 +573,103 @@ void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandLoadState>(data, frame));
+}
+
+// ── Disk control (multi-disc games) ──────────────────────────────────────────
+
+void Wrapper::RequestDiskInfo()
+{
+    if (!m_core || !m_running)
+    {
+        if (m_libretro_node)
+            m_libretro_node->call_deferred("emit_signal", "disk_control_ready",
+                false, static_cast<int64_t>(0), static_cast<int64_t>(0), false);
+        return;
+    }
+    m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandDiskInfo>());
+}
+
+void Wrapper::SetDiskEjectState(bool ejected)
+{
+    if (!m_core || !m_running)
+        return;
+    m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSetDiskEjected>(ejected));
+}
+
+void Wrapper::ReplaceDiskImage(uint32_t index, const godot::String& path)
+{
+    if (!m_core || !m_running)
+        return;
+    m_emu_thread_commands_queue.enqueue(
+        std::make_unique<EmuThreadCommandReplaceDisk>(index, std::string(path.utf8().get_data())));
+}
+
+void Wrapper::ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const godot::String& path)
+{
+    if (!m_core || !m_running)
+        return;
+    std::lock_guard<std::mutex> lock(m_np_mutex);
+    m_disc_schedule[frame] = DiscOp{ op, index, std::string(path.utf8().get_data()) };
+}
+
+/// Emulation thread: read the disk-control state and emit disk_control_ready.
+void Wrapper::EmitDiskInfo()
+{
+    bool has = false;
+    int64_t count = 0;
+    int64_t index = 0;
+    bool ejected = false;
+    if (m_environment_handler)
+    {
+        has = m_environment_handler->HasDiskControl();
+        if (has)
+        {
+            count = static_cast<int64_t>(m_environment_handler->GetDiskImageCount());
+            index = static_cast<int64_t>(m_environment_handler->GetDiskImageIndex());
+            ejected = m_environment_handler->GetDiskEjected();
+        }
+    }
+    godot::Array args;
+    args.append(has);
+    args.append(count);
+    args.append(index);
+    args.append(ejected);
+    EmitSignalOnMainThread("disk_control_ready", args);
+}
+
+/// Emulation thread: apply any netplay-scheduled disc op whose frame has
+/// arrived — strictly before running `frame`, so every lockstep peer swaps
+/// on the identical frame.
+void Wrapper::ApplyScheduledDiscOps(int64_t frame)
+{
+    DiscOp op;
+    bool pending = false;
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        auto it = m_disc_schedule.begin();
+        while (it != m_disc_schedule.end() && it->first <= frame)
+        {
+            op = it->second;
+            pending = true;
+            it = m_disc_schedule.erase(it);
+            // Apply at most one op per frame boundary; ops land on distinct
+            // frames in practice (eject and replace are separate schedules).
+            break;
+        }
+    }
+    if (!pending || !m_environment_handler)
+        return;
+    if (op.op == 0)
+    {
+        m_environment_handler->SetDiskEjected(true);
+    }
+    else
+    {
+        m_environment_handler->SetDiskEjected(true);   // idempotent if already open
+        m_environment_handler->ReplaceDiskImage(op.index, op.path);
+        m_environment_handler->SetDiskEjected(false);
+    }
+    EmitDiskInfo();
 }
 
 // ── Battery saves (SRAM) ─────────────────────────────────────────────────────
@@ -1408,6 +1506,10 @@ void Wrapper::EmulationThreadLoop()
             frame_inputs = m_np_inputs[frame];
             m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(frame - 30));
         }
+
+        // Netplay-scheduled disc ops land strictly before their frame runs,
+        // so every peer's core swaps discs on the identical frame.
+        ApplyScheduledDiscOps(m_frame_counter.load(std::memory_order_relaxed));
 
         // Apply the agreed inputs — in netplay mode the emulation thread is
         // the sole InputHandler writer for the masked ports.

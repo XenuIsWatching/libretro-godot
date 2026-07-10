@@ -52,6 +52,7 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
         std::lock_guard<std::mutex> lock(wrapper.m_np_mutex);
         wrapper.m_np_inputs.clear();
         wrapper.m_np_local_records.clear();
+        wrapper.m_disc_schedule.clear();
         wrapper.m_frame_counter.store(m_frame, std::memory_order_relaxed);
     }
     else
@@ -72,5 +73,31 @@ void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
 void EmuThreadCommandFlushSram::Execute(Wrapper& wrapper)
 {
     wrapper.FlushSramIfDirty();
+}
+
+void EmuThreadCommandDiskInfo::Execute(Wrapper& wrapper)
+{
+    wrapper.EmitDiskInfo();
+}
+
+void EmuThreadCommandSetDiskEjected::Execute(Wrapper& wrapper)
+{
+    if (wrapper.m_environment_handler)
+    {
+        if (!wrapper.m_environment_handler->SetDiskEjected(m_ejected))
+            LogWarning(m_ejected ? "SetDiskEjected(true) refused by core"
+                                 : "SetDiskEjected(false) refused by core");
+    }
+    wrapper.EmitDiskInfo();
+}
+
+void EmuThreadCommandReplaceDisk::Execute(Wrapper& wrapper)
+{
+    if (wrapper.m_environment_handler)
+    {
+        if (!wrapper.m_environment_handler->ReplaceDiskImage(m_index, m_path))
+            LogWarning(("ReplaceDiskImage refused by core: " + m_path).c_str());
+    }
+    wrapper.EmitDiskInfo();
 }
 }

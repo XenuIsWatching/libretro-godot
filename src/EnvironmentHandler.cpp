@@ -573,6 +573,73 @@ bool EnvironmentHandler::SetDiskControlExtInterface(const retro_disk_control_ext
     return true;
 }
 
+// ── Disk control (emulation thread only) ────────────────────────────────────
+// The ext struct's leading members mirror the v0 struct, so each accessor
+// prefers the ext function pointer and falls back to v0.
+
+bool EnvironmentHandler::HasDiskControl() const
+{
+    return m_disk_control_ext_callback.set_eject_state != nullptr
+        || m_disk_control_callback.set_eject_state != nullptr;
+}
+
+bool EnvironmentHandler::GetDiskEjected() const
+{
+    if (m_disk_control_ext_callback.get_eject_state)
+        return m_disk_control_ext_callback.get_eject_state();
+    if (m_disk_control_callback.get_eject_state)
+        return m_disk_control_callback.get_eject_state();
+    return false;
+}
+
+uint32_t EnvironmentHandler::GetDiskImageIndex() const
+{
+    if (m_disk_control_ext_callback.get_image_index)
+        return m_disk_control_ext_callback.get_image_index();
+    if (m_disk_control_callback.get_image_index)
+        return m_disk_control_callback.get_image_index();
+    return 0;
+}
+
+uint32_t EnvironmentHandler::GetDiskImageCount() const
+{
+    if (m_disk_control_ext_callback.get_num_images)
+        return m_disk_control_ext_callback.get_num_images();
+    if (m_disk_control_callback.get_num_images)
+        return m_disk_control_callback.get_num_images();
+    return 0;
+}
+
+bool EnvironmentHandler::SetDiskEjected(bool ejected)
+{
+    if (m_disk_control_ext_callback.set_eject_state)
+        return m_disk_control_ext_callback.set_eject_state(ejected);
+    if (m_disk_control_callback.set_eject_state)
+        return m_disk_control_callback.set_eject_state(ejected);
+    return false;
+}
+
+bool EnvironmentHandler::SetDiskImageIndex(uint32_t index)
+{
+    if (m_disk_control_ext_callback.set_image_index)
+        return m_disk_control_ext_callback.set_image_index(index);
+    if (m_disk_control_callback.set_image_index)
+        return m_disk_control_callback.set_image_index(index);
+    return false;
+}
+
+bool EnvironmentHandler::ReplaceDiskImage(uint32_t index, const std::string& path)
+{
+    // Disc cores are need_fullpath — a path-only game info suffices (this is
+    // what RetroArch's "Load New Disc" sends for such cores).
+    retro_game_info info = { path.c_str(), nullptr, 0, nullptr };
+    if (m_disk_control_ext_callback.replace_image_index)
+        return m_disk_control_ext_callback.replace_image_index(index, &info);
+    if (m_disk_control_callback.replace_image_index)
+        return m_disk_control_callback.replace_image_index(index, &info);
+    return false;
+}
+
 bool EnvironmentHandler::GetThrottleState(retro_throttle_state* state)
 {
     if (state)

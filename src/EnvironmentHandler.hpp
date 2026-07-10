@@ -19,7 +19,19 @@ public:
     static bool Callback(uint32_t cmd, void* data);
 
     void SetDirectories(const std::string& system_directory, const std::string& save_directory, const std::string& core_assets_directory);
-    
+
+    // Disk control (physical disc eject/swap). EMULATION THREAD ONLY — these
+    // call straight into the core's registered callbacks. Prefer the ext
+    // callback, fall back to v0; every call is null-guarded so cores without
+    // the interface are safe no-ops.
+    bool HasDiskControl() const;
+    bool GetDiskEjected() const;
+    uint32_t GetDiskImageIndex() const;
+    uint32_t GetDiskImageCount() const;
+    bool SetDiskEjected(bool ejected);
+    bool SetDiskImageIndex(uint32_t index);
+    bool ReplaceDiskImage(uint32_t index, const std::string& path);
+
 private:
     static const uint32_t s_supported_vfs_version = 3;
 
