@@ -608,6 +608,8 @@ void Wrapper::ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const go
 {
     if (!m_core || !m_running)
         return;
+    Log("Disc op " + std::to_string(op) + " scheduled for frame " + std::to_string(frame)
+        + " (index " + std::to_string(index) + ")");
     std::lock_guard<std::mutex> lock(m_np_mutex);
     m_disc_schedule[frame] = DiscOp{ op, index, std::string(path.utf8().get_data()) };
 }
@@ -629,6 +631,10 @@ void Wrapper::EmitDiskInfo()
             ejected = m_environment_handler->GetDiskEjected();
         }
     }
+    Log("Disk control: has=" + std::string(has ? "yes" : "no")
+        + " images=" + std::to_string(count)
+        + " index=" + std::to_string(index)
+        + " ejected=" + std::string(ejected ? "yes" : "no"));
     godot::Array args;
     args.append(has);
     args.append(count);
@@ -661,10 +667,13 @@ void Wrapper::ApplyScheduledDiscOps(int64_t frame)
         return;
     if (op.op == 0)
     {
+        Log("Netplay disc EJECT applied @frame " + std::to_string(frame));
         m_environment_handler->SetDiskEjected(true);
     }
     else
     {
+        LogOK("Netplay disc SWAP applied @frame " + std::to_string(frame)
+            + " -> " + op.path);
         m_environment_handler->SetDiskEjected(true);   // idempotent if already open
         m_environment_handler->ReplaceDiskImage(op.index, op.path);
         m_environment_handler->SetDiskEjected(false);

@@ -84,7 +84,10 @@ void EmuThreadCommandSetDiskEjected::Execute(Wrapper& wrapper)
 {
     if (wrapper.m_environment_handler)
     {
-        if (!wrapper.m_environment_handler->SetDiskEjected(m_ejected))
+        if (wrapper.m_environment_handler->SetDiskEjected(m_ejected))
+            Log(m_ejected ? "Disk tray opened (virtual eject)"
+                          : "Disk tray closed");
+        else
             LogWarning(m_ejected ? "SetDiskEjected(true) refused by core"
                                  : "SetDiskEjected(false) refused by core");
     }
@@ -95,8 +98,10 @@ void EmuThreadCommandReplaceDisk::Execute(Wrapper& wrapper)
 {
     if (wrapper.m_environment_handler)
     {
-        if (!wrapper.m_environment_handler->ReplaceDiskImage(m_index, m_path))
-            LogWarning(("ReplaceDiskImage refused by core: " + m_path).c_str());
+        if (wrapper.m_environment_handler->ReplaceDiskImage(m_index, m_path))
+            LogOK("Disk image " + std::to_string(m_index) + " replaced: " + m_path);
+        else
+            LogWarning("ReplaceDiskImage refused by core: " + m_path);
     }
     wrapper.EmitDiskInfo();
 }
