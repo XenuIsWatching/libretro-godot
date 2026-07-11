@@ -1267,6 +1267,11 @@ void Wrapper::_input(const godot::Ref<godot::InputEvent>& event)
     Ref<InputEventKey> keyEvent = event;
     if (keyEvent.is_valid())
     {
+        // A held RetroKeyboard object owns the OS-keyboard feed (it routes
+        // keys itself, including into the netplay schedule) — skip the raw
+        // path so events aren't double-fed.
+        if (m_os_keyboard_captured.load(std::memory_order_relaxed))
+            return;
         bool down          = keyEvent->is_pressed();
         uint32_t keycode   = GodotToLibretroKeycode(keyEvent);
         uint32_t character = keyEvent->get_unicode();

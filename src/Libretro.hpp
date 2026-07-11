@@ -128,6 +128,8 @@ public:
     /// RETRO_DEVICE_KEYBOARD poll bitset and fires the core's keyboard event
     /// callback (modifiers derived from held keys). Feed port 0.
     void SetKeyState(int port, int keycode, bool down, int character);
+    /// True while a physical RetroKeyboard object owns the OS-keyboard feed.
+    void SetOsKeyboardCapture(bool captured);
 
     /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
     /// Fed each frame from a held handheld's physical orientation.

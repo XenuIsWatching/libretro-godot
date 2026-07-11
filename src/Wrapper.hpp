@@ -93,6 +93,11 @@ public:
     /// Keyboard state is global in practice — feed port 0.
     void SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t character);
 
+    /// A physical RetroKeyboard object owns the OS-keyboard feed for this
+    /// instance: suppress the raw OS-keyboard block in _input so keys aren't
+    /// double-fed (the object routes them itself, incl. through netplay).
+    void SetOsKeyboardCapture(bool captured) { m_os_keyboard_captured = captured; }
+
     /// Per-port mouse input (RETRO_DEVICE_MOUSE) for physical mouse objects.
     /// dx/dy are relative deltas ACCUMULATED until the core's next read;
     /// buttons is a bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) — LEFT bit 2,
@@ -266,6 +271,7 @@ public:
     std::atomic<bool> m_running = false;
     std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
     bool m_input_enabled = false;   // only true for the actively-controlled instance
+    std::atomic<bool> m_os_keyboard_captured = false;   // RetroKeyboard object owns OS keys
 
     // Netplay state. The input schedule maps frame → 4 ports × 5 int32s and is
     // written by the main thread (PostNetplayInputs) and consumed by the
