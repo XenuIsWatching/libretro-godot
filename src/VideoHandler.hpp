@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <memory>
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 #include <SDL3/SDL_video.h>
 #elif defined(__ANDROID__)
 #include <EGL/egl.h>
@@ -65,7 +65,7 @@ private:
     godot::Image::Format m_image_format;
     godot::Ref<godot::Image> m_image = nullptr;
     godot::Ref<godot::ImageTexture> m_texture = nullptr;
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     SDL_Window* m_sdl_window = nullptr;
     SDL_GLContext m_sdl_gl_context = nullptr;
 #elif defined(__ANDROID__)

@@ -36,12 +36,13 @@ if is_android:
 
 if is_linux:
     env.Append(CXXFLAGS=["-std=c++20"])
+    env.Append(CPPPATH=["external/SDL3/include/"])
     env.Append(LIBS=["dl", "pthread"])
-    # Desktop Linux has no OpenGL/SDL HW-render path (VideoHandler falls back to
-    # software + Vulkan). Link the Vulkan loader by its versioned soname: distros
-    # ship libvulkan.so.1 but the unversioned symlink that -lvulkan needs only
-    # comes with the -dev/-devel package, which may not be installed.
-    env.Append(LINKFLAGS=["-l:libvulkan.so.1"])
+    # Link the Vulkan loader, SDL3 (OpenGL HW-render context), and the GL loader
+    # (direct glReadPixels) by their versioned sonames — distros ship lib*.so.N
+    # but the unversioned symlinks that -lvulkan / -lSDL3 / -lGL need come with the
+    # -dev/-devel packages, which may not be installed.
+    env.Append(LINKFLAGS=["-l:libvulkan.so.1", "-l:libSDL3.so.0", "-l:libGL.so.1"])
 
 # Vulkan headers (bundled submodule — used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])
