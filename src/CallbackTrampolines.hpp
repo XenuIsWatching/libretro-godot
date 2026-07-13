@@ -51,6 +51,8 @@ private:
     uint8_t* EmitTrampolineX64(uint8_t* cursor, void* wrapper_ptr, void* set_tls_func, void* handler);
 #elif defined(__aarch64__)
     uint8_t* EmitTrampolineA64(uint8_t* cursor, void* wrapper_ptr, void* set_tls_func, void* handler);
+#elif defined(__x86_64__)
+    uint8_t* EmitTrampolineSysV(uint8_t* cursor, void* wrapper_ptr, void* set_tls_func, void* handler);
 #endif
 };
 }

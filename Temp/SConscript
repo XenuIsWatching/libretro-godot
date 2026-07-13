@@ -16,6 +16,7 @@ env.Append(CPPPATH=[
 
 is_windows = env["platform"] == "windows"
 is_android = env["platform"] == "android"
+is_linux = env["platform"] == "linux"
 
 import os
 
@@ -32,6 +33,15 @@ if is_windows:
 if is_android:
     env.Append(CXXFLAGS=["-std=c++20"])
     env.Append(LIBS=["dl", "log", "EGL", "GLESv3", "vulkan"])
+
+if is_linux:
+    env.Append(CXXFLAGS=["-std=c++20"])
+    env.Append(LIBS=["dl", "pthread"])
+    # Desktop Linux has no OpenGL/SDL HW-render path (VideoHandler falls back to
+    # software + Vulkan). Link the Vulkan loader by its versioned soname: distros
+    # ship libvulkan.so.1 but the unversioned symlink that -lvulkan needs only
+    # comes with the -dev/-devel package, which may not be installed.
+    env.Append(LINKFLAGS=["-l:libvulkan.so.1"])
 
 # Vulkan headers (bundled submodule — used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])
