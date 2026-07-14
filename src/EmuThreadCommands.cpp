@@ -65,6 +65,16 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
     wrapper.EmitSignalOnMainThread("savestate_loaded", args);
 }
 
+void EmuThreadCommandSetPortDevice::Execute(Wrapper& wrapper)
+{
+    if (!wrapper.m_core || !wrapper.m_input_handler)
+        return;
+    Log("SetPortDevice (emu thread): port=" + std::to_string(m_port)
+        + " device=" + std::to_string(m_device));
+    wrapper.m_input_handler->SetPortDevice(m_port, m_device);
+    wrapper.m_core->retro_set_controller_port_device(m_port, m_device);
+}
+
 void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
 {
     wrapper.ApplySramSwap(m_path);

@@ -46,6 +46,25 @@ private:
     int64_t m_frame;
 };
 
+/// retro_set_controller_port_device on the emulation thread — a live plug/
+/// unplug while the core runs must not call into the core from the main
+/// thread mid-retro_run.
+class EmuThreadCommandSetPortDevice : public EmuThreadCommand
+{
+public:
+    EmuThreadCommandSetPortDevice(uint32_t port, uint32_t device)
+        : m_port(port)
+        , m_device(device)
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    uint32_t m_port;
+    uint32_t m_device;
+};
+
 /// Hot-swap the SRAM backing file mid-run (a physical memory-card swap):
 /// flush the old file, point at the new path, load its content into SAVE_RAM.
 class EmuThreadCommandSetSram : public EmuThreadCommand

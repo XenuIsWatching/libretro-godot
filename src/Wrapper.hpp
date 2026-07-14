@@ -273,6 +273,14 @@ public:
     bool m_input_enabled = false;   // only true for the actively-controlled instance
     std::atomic<bool> m_os_keyboard_captured = false;   // RetroKeyboard object owns OS keys
 
+    // Desired device per port, surviving across content runs. A controller (or
+    // mouse) plugged in while the system is OFF records its device type here;
+    // the emulation thread applies the map right after retro_load_game so the
+    // core polls the right device from frame one. Guarded by m_port_device_mutex
+    // (main thread writes, emulation thread reads once at startup).
+    std::mutex m_port_device_mutex;
+    std::unordered_map<uint32_t, uint32_t> m_pending_port_devices;
+
     // Netplay state. The input schedule maps frame → 4 ports × 5 int32s and is
     // written by the main thread (PostNetplayInputs) and consumed by the
     // emulation thread under m_np_mutex. In netplay mode the emulation thread

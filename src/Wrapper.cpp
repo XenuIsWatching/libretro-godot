@@ -404,16 +404,23 @@ godot::Array Wrapper::GetControllerInfo() const
 
 void Wrapper::SetControllerPortDevice(uint32_t port, uint32_t device)
 {
+    // Always remember the selection — a controller/mouse plugged in while the
+    // system is OFF has no core yet; the emulation thread applies this map
+    // right after retro_load_game so the core polls the right device.
+    {
+        std::lock_guard<std::mutex> lock(m_port_device_mutex);
+        m_pending_port_devices[port] = device;
+    }
     if (!m_core || !m_input_handler)
     {
-        LogError("SetControllerPortDevice: core or input handler is null");
+        Log("SetControllerPortDevice: no core running — port=" + std::to_string(port)
+            + " device=" + std::to_string(device) + " recorded for next start");
         return;
     }
-    Log("SetControllerPortDevice: port=" + std::to_string(port) + " device=" + std::to_string(device));
-    m_input_handler->SetPortDevice(port, device);
-    SetCurrentThreadWrapper(this);
-    m_core->retro_set_controller_port_device(port, device);
-    SetCurrentThreadWrapper(nullptr);
+    // Live change: route through the emulation thread so the core call lands
+    // strictly between retro_run() frames (never mid-frame from this thread).
+    m_emu_thread_commands_queue.enqueue(
+        std::make_unique<EmuThreadCommandSetPortDevice>(port, device));
 }
 
 void Wrapper::SetLightgunPosition(uint32_t port, int16_t x, int16_t y)
@@ -1462,6 +1469,26 @@ void Wrapper::EmulationThreadLoop()
         {
             LogError("Failed to load game");
             return;
+        }
+    }
+
+    // Apply device selections made before the core started (controller/mouse
+    // plugged in while the system was off). retro_set_controller_port_device is
+    // canonical right after retro_load_game; default joypad ports are skipped.
+    {
+        std::lock_guard<std::mutex> lock(m_port_device_mutex);
+        for (const auto& [port, device] : m_pending_port_devices)
+        {
+            // Skip core defaults: plain joypad is what cores assume, and NONE
+            // (recorded by an unplug while off) must not kill the port's
+            // fallback global-input path. Subclassed devices (multitap 257,
+            // mouse 2, lightgun…) pass through.
+            if (device == RETRO_DEVICE_JOYPAD || device == RETRO_DEVICE_NONE)
+                continue;
+            Log("Applying pre-start port device: port=" + std::to_string(port)
+                + " device=" + std::to_string(device));
+            m_input_handler->SetPortDevice(port, device);
+            m_core->retro_set_controller_port_device(port, device);
         }
     }
 
