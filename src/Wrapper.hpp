@@ -45,7 +45,7 @@ class Wrapper
 {
 public:
     Wrapper() = default;
-    ~Wrapper() = default;
+    ~Wrapper();
 
     Wrapper(const Wrapper&) = delete;
     Wrapper& operator=(const Wrapper&) = delete;
@@ -270,6 +270,11 @@ public:
     std::condition_variable m_condition_variable;
     std::atomic<bool> m_running = false;
     std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
+    // Deferred-stop bookkeeping: m_stopping = a stop was signalled and teardown
+    // is pending; m_thread_exited = the emulation thread has fully exited (set
+    // by an RAII guard covering every exit path, so a deferred join can't hang).
+    std::atomic<bool> m_stopping = false;
+    std::atomic<bool> m_thread_exited = false;
     bool m_input_enabled = false;   // only true for the actively-controlled instance
     std::atomic<bool> m_os_keyboard_captured = false;   // RetroKeyboard object owns OS keys
 
@@ -338,7 +343,15 @@ public:
     /// The Libretro node that owns this Wrapper (set by Libretro constructor).
     Libretro* m_libretro_node = nullptr;
 
-    void StopEmulationThread();
+    /// Signal the emulation thread to stop. blocking=true joins and tears down
+    /// synchronously (StartContent restart, destructor). blocking=false returns
+    /// immediately — _process() joins and finishes the teardown once the thread
+    /// has exited on its own, so stopping a core never hitches the main thread.
+    /// Also the only safe form callable FROM the emulation thread (core-initiated
+    /// RETRO_ENVIRONMENT_SHUTDOWN must not join itself).
+    void StopEmulationThread(bool blocking = true);
+    /// Post-join teardown: handler DeInit, core unload, member reset. Main thread.
+    void FinishTeardown();
     void EmulationThreadLoop();
     void CreateTexture(godot::Image::Format image_format, godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);
     void UpdateTexture(godot::PackedByteArray pixel_data, bool flip_y);

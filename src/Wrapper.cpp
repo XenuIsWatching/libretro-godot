@@ -357,12 +357,16 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     }
 
     m_stop_requested = false;
+    m_thread_exited = false;
     m_thread = std::thread(&Wrapper::EmulationThreadLoop, this);
 }
 
 void Wrapper::StopContent()
 {
-    StopEmulationThread();
+    // Non-blocking: the join + teardown (SRAM flush, retro_unload_game,
+    // retro_deinit, DLL unload) all happen off the main thread / deferred to
+    // _process, so powering a system off no longer hitches the frame.
+    StopEmulationThread(false);
 }
 
 void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
@@ -1292,6 +1296,19 @@ void Wrapper::_input(const godot::Ref<godot::InputEvent>& event)
 
 void Wrapper::_process(double delta)
 {
+    // Deferred stop: once the emulation thread has fully exited on its own,
+    // the join is instant — finish the teardown here without ever blocking.
+    if (m_stopping.load(std::memory_order_acquire))
+    {
+        if (m_thread_exited.load(std::memory_order_acquire))
+        {
+            if (m_thread.joinable())
+                m_thread.join();
+            FinishTeardown();
+        }
+        return;
+    }
+
     if (!m_running)
         return;
 
@@ -1375,7 +1392,13 @@ void Wrapper::_process(double delta)
     m_input_handler->SetAnalogRight(0, ToShort(analog_right.x) * 0x7fff, ToShort(analog_right.y) * 0x7fff);
 }
 
-void Wrapper::StopEmulationThread()
+Wrapper::~Wrapper()
+{
+    // Destroying a joinable std::thread is std::terminate — always block here.
+    StopEmulationThread(true);
+}
+
+void Wrapper::StopEmulationThread(bool blocking)
 {
     if (!m_core)
     {
@@ -1386,7 +1409,22 @@ void Wrapper::StopEmulationThread()
     m_running = false;
     m_condition_variable.notify_all(); // wake emulation thread if blocked on InitAudio CV wait
     m_np_cv.notify_all();              // wake emulation thread if blocked on the netplay input gate
-    m_thread.join();
+    m_stopping = true;
+
+    if (!blocking)
+        return;   // _process() joins + finishes the teardown once the thread exits
+
+    if (m_thread.joinable())
+        m_thread.join();
+    FinishTeardown();
+}
+
+void Wrapper::FinishTeardown()
+{
+    if (!m_core)
+        return;   // already torn down
+    m_stopping = false;
+    m_thread_exited = false;
 
     // Set the thread-local pointer on the main thread so that handler DeInit
     // calls (which call GetCurrentThreadWrapper()) can find the right instance.
@@ -1408,10 +1446,23 @@ void Wrapper::StopEmulationThread()
     m_log_handler = nullptr;
 
     m_node = nullptr;
+
+    // Discard commands the dying thread left queued — they must not execute
+    // against the next content run's handlers.
+    std::unique_ptr<ThreadCommand> stale;
+    while (m_main_thread_commands_queue.try_dequeue(stale)) {}
 }
 
 void Wrapper::EmulationThreadLoop()
 {
+    // Mark thread exit on EVERY path out of this function (including early
+    // load-failure returns) so a deferred stop's join can never hang.
+    struct ExitFlag
+    {
+        std::atomic<bool>& flag;
+        ~ExitFlag() { flag.store(true, std::memory_order_release); }
+    } exit_flag{m_thread_exited};
+
     t_current_wrapper = this;
     Log("Libretro Thread starting...");
 
@@ -1657,8 +1708,11 @@ void Wrapper::UpdateTexture(PackedByteArray pixel_data, bool flip_y)
 
 bool Wrapper::Shutdown()
 {
+    // RETRO_ENVIRONMENT_SHUTDOWN arrives ON the emulation thread (inside
+    // retro_run) — a blocking stop would join the thread from itself. Signal
+    // only; _process() finishes the teardown after this thread exits.
     Log("Shutting down from core...");
-    StopEmulationThread();
+    StopEmulationThread(false);
     return true;
 }
 
