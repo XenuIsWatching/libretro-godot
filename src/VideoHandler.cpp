@@ -2,7 +2,7 @@
 
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_opengl.h>
 #elif defined(__ANDROID__)
@@ -54,7 +54,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         {
             // OpenGL path: read pixels from the current framebuffer
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
             SDL_GL_SwapWindow(instance->m_video_handler->m_sdl_window);
 #elif defined(__ANDROID__)
             eglSwapBuffers(instance->m_video_handler->m_egl_display, instance->m_video_handler->m_egl_surface);
@@ -152,7 +152,7 @@ uintptr_t VideoHandler::HwRenderGetCurrentFramebuffer()
 
 retro_proc_address_t VideoHandler::HwRenderGetProcAddress(const char* sym)
 {
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     return reinterpret_cast<retro_proc_address_t>(SDL_GL_GetProcAddress(sym));
 #elif defined(__ANDROID__)
     return reinterpret_cast<retro_proc_address_t>(eglGetProcAddress(sym));
@@ -213,7 +213,7 @@ void VideoHandler::DeInit()
         m_vulkan_ctx.reset();
     }
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     if (m_sdl_gl_context)
     {
         SDL_GL_DestroyContext(m_sdl_gl_context);
@@ -289,7 +289,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
         return true;
     }
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     Log("Creating OpenGL context...");
 
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
