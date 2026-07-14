@@ -363,6 +363,12 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 
 void Wrapper::StopContent()
 {
+    // Silence output immediately (main-thread entry point, so touching the
+    // AudioStreamPlayer3D is safe here): a core whose teardown hangs (mupen
+    // gles3) can keep firing audio callbacks from its internal threads long
+    // after the stop — the player must not keep voicing them.
+    if (m_audio_handler)
+        m_audio_handler->SetPlaying(false);
     // Non-blocking: the join + teardown (SRAM flush, retro_unload_game,
     // retro_deinit, DLL unload) all happen off the main thread / deferred to
     // _process, so powering a system off no longer hitches the frame.
@@ -1300,6 +1306,14 @@ void Wrapper::_process(double delta)
     // the join is instant — finish the teardown here without ever blocking.
     if (m_stopping.load(std::memory_order_acquire))
     {
+        // While the stop is pending, keep DISCARDING queued main-thread
+        // commands: a core hung in teardown (mupen gles3) can keep streaming
+        // texture-update commands from its internal threads, and an undrained
+        // queue grows a full frame's pixels per callback until OOM.
+        std::unique_ptr<ThreadCommand> stale;
+        while (m_main_thread_commands_queue.try_dequeue(stale))
+            stale.reset();
+
         if (m_thread_exited.load(std::memory_order_acquire))
         {
             if (m_thread.joinable())
