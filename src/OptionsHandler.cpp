@@ -59,8 +59,15 @@ bool OptionsHandler::SetVariable(const retro_variable* variable)
     return SetVariableUpdate(true);
 }
 
+// Legacy (v0) options API, still used by cores that never adopted core options
+// v1/v2 (the beetle/mednafen family among them). Each value string is
+// "Description; value1|value2|value3" with the FIRST value as the default.
+// Synthesize full definitions so the options panel lists these cores too —
+// only filling m_variables leaves the UI showing "no options".
 bool OptionsHandler::SetVariables(const retro_variable* variables)
 {
+    m_categories.clear();
+    m_definitions.clear();
     m_variables.clear();
 
     if (!variables)
@@ -68,13 +75,29 @@ bool OptionsHandler::SetVariables(const retro_variable* variables)
 
     for (int i = 0; variables[i].key; ++i)
     {
-        auto values = String(variables[i].value).split(";")[1].split("|");
-        if (values.size() < 1)
+        if (!variables[i].value)
             continue;
 
-        auto value = values[0].trim_prefix(" ");
-        m_variables.emplace(variables[i].key, value.utf8().get_data());
+        auto parts = String(variables[i].value).split(";", true, 1);
+        if (parts.size() < 2)
+            continue;
+
+        std::string desc = parts[0].utf8().get_data();
+        auto value_list = parts[1].trim_prefix(" ").split("|");
+        std::vector<OptionValue> values;
+        for (int v = 0; v < value_list.size(); ++v)
+            if (!value_list[v].is_empty())
+                values.emplace_back(value_list[v].utf8().get_data(), "");
+        if (values.empty())
+            continue;
+
+        std::string default_value = values[0].value;
+        m_definitions.emplace(variables[i].key,
+            OptionDefinition{ desc, "", "", "", "", std::move(values), default_value });
+        m_variables.emplace(variables[i].key, default_value);
     }
+
+    DeserializeFromFile();
 
     return true;
 }
@@ -85,16 +108,35 @@ bool OptionsHandler::SetVariableUpdate(bool update)
     return true;
 }
 
+// Core options v1: like v2 but without categories. Build definitions too —
+// m_variables alone leaves the options panel empty for v1 cores.
 bool OptionsHandler::SetCoreOptions(const retro_core_option_definition* definitions)
 {
+    m_categories.clear();
+    m_definitions.clear();
     m_variables.clear();
 
     if (!definitions)
         return true;
 
     for (auto definition = definitions; definition->key; ++definition)
-        if (definition->key && definition->default_value)
+    {
+        std::vector<OptionValue> values;
+        for (auto value = definition->values; value->value; ++value)
+            values.emplace_back(value->value, value->label ? value->label : "");
+
+        m_definitions.emplace(definition->key,
+            OptionDefinition{ definition->desc          ? definition->desc : "",
+                              "",
+                              definition->info          ? definition->info : "",
+                              "",
+                              "",
+                              std::move(values),
+                              definition->default_value ? definition->default_value : "" });
+
+        if (definition->default_value)
             m_variables[definition->key] = definition->default_value;
+    }
 
     DeserializeFromFile();
 
@@ -109,6 +151,7 @@ bool OptionsHandler::SetCoreOptions(const retro_core_options_intl* options_intl)
 bool OptionsHandler::SetCoreOptionsV2(const retro_core_options_v2* options)
 {
     m_categories.clear();
+    m_definitions.clear();
     m_variables.clear();
 
     if (!options)
