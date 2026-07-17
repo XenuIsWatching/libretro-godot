@@ -27,8 +27,8 @@ bool OptionsHandler::GetVariable(retro_variable* variable)
     if (!m_variables.contains(key))
         return true;
 
-    std::string value = variable->value ? variable->value : "";
-
+    // NOTE: variable->value is an OUT parameter — cores pass it UNINITIALIZED
+    // (legacy melonds on Android hands us stack garbage). Never read it.
     variable->value = m_variables[key].c_str();
     return true;
 }
