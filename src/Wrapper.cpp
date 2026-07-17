@@ -304,8 +304,9 @@ static int16_t ToShort(float floatValue, int mul = 1)
 
 void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path)
 {
-    if (!node)
-        return;
+    // node may be null: a console powered on with no TV connected still runs; the
+    // core renders to its texture with no bound mesh until SetScreenMesh() attaches
+    // one (e.g. when a TV is plugged in). VideoHandler::Init tolerates a null mesh.
 
     StopEmulationThread();
 

@@ -166,13 +166,18 @@ void VideoHandler::Init(MeshInstance3D* mesh)
     if (m_new_material.is_valid())
         m_new_material.unref();
 
-    m_original_surface_material_override = mesh->get_surface_override_material(0);
-
     m_new_material.instantiate();
-    mesh->set_surface_override_material(0, m_new_material);
-
     m_new_material->set_albedo(Color(0, 0, 0, 1));
     m_new_material->set_feature(StandardMaterial3D::FEATURE_EMISSION, true);
+
+    // mesh may be null (console powered on with no TV): create the material now
+    // and bind it once a mesh is attached via SetScreenMesh(). The core's texture
+    // still lands on m_new_material, so the picture appears the moment a TV connects.
+    if (mesh)
+    {
+        m_original_surface_material_override = mesh->get_surface_override_material(0);
+        mesh->set_surface_override_material(0, m_new_material);
+    }
 }
 
 void VideoHandler::SetMesh(MeshInstance3D* old_mesh, MeshInstance3D* new_mesh)
