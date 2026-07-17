@@ -256,7 +256,10 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_SET_GEOMETRY:                                        return instance->m_video_handler->SetGeometry(static_cast<const retro_game_geometry*>(data));
     case RETRO_ENVIRONMENT_GET_USERNAME:                                        return instance->m_environment_handler->GetUsername(static_cast<const char**>(data));
     case RETRO_ENVIRONMENT_GET_LANGUAGE:                                        return instance->m_environment_handler->GetLanguage(static_cast<retro_language*>(data));
-    case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER:                    return EnvironmentNotImplemented(cmd);
+    // Optional per-frame optimization (core renders straight into our framebuffer);
+    // we don't provide one, so return false WITHOUT logging — the core falls back
+    // to its own buffer + video_refresh, and cores poll this every frame (spam).
+    case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER:                    return EnvironmentNotImplemented(cmd, false);
     case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
     {
         auto** out = static_cast<const retro_hw_render_interface**>(data);
