@@ -321,6 +321,8 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 
 #ifdef __ANDROID__
     std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro_android").replace_extension(".so");
+#elif defined(__linux__)
+    std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro").replace_extension(".so");
 #else
     std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro").replace_extension(".dll");
 #endif

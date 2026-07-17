@@ -17,24 +17,30 @@ namespace SK
 {
 static uint32_t RandomChar()
 {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, 255);
-    return dis(gen);
+    // Seed once per thread. The emulation runs on a raw std::thread, so keep this
+    // self-contained and cheap (no per-call random_device).
+    static thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<int> dis(0, 255);
+    return static_cast<uint32_t>(dis(gen));
 }
 
+// Build a random hex string WITHOUT std::stringstream. On Linux the first stream
+// op on the emulation thread lazily instantiates locale/codecvt facets (via
+// std::call_once), which threw here and aborted the whole thread (uncaught) — a
+// latent crash that only surfaced once cores actually load (the .so path fix).
+// Manual hex has no locale dependency.
 static std::string GenerateHex(const uint32_t len)
 {
-    std::stringstream ss;
-    for (auto i = 0; i < len; i++)
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(static_cast<size_t>(len) * 2);
+    for (uint32_t i = 0; i < len; i++)
     {
-        const auto rc = RandomChar();
-        std::stringstream hexstream;
-        hexstream << std::hex << rc;
-        auto hex = hexstream.str();
-        ss << (hex.length() < 2 ? '0' + hex : hex);
+        const uint32_t rc = RandomChar() & 0xFFu;
+        out.push_back(digits[(rc >> 4) & 0xF]);
+        out.push_back(digits[rc & 0xF]);
     }
-    return ss.str();
+    return out;
 }
 
 #define LoadFunction(funcPtr) \
@@ -67,9 +73,12 @@ bool Core::Load(CallbackTrampolines* trampolines)
 
     std::string extension = std::filesystem::path(m_path).extension().string();
     std::filesystem::path temp_path = std::filesystem::path(Wrapper::GetCurrentThreadWrapper()->GetTempDirectory()) / (name + GenerateHex(10) + extension);
-    if (!std::filesystem::copy_file(m_path, temp_path, std::filesystem::copy_options::overwrite_existing))
+    // error_code overload — the throwing overload would abort the emulation thread
+    // (no try/catch around the raw std::thread) on any copy failure.
+    std::error_code copy_ec;
+    if (!std::filesystem::copy_file(m_path, temp_path, std::filesystem::copy_options::overwrite_existing, copy_ec) || copy_ec)
     {
-        LogError("Failed to copy core file: " + m_path + " to " + temp_path.string());
+        LogError("Failed to copy core file: " + m_path + " to " + temp_path.string() + " - " + copy_ec.message());
         return false;
     }
 
