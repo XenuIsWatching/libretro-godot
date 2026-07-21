@@ -42,7 +42,23 @@ if is_linux:
     # (direct glReadPixels) by their versioned sonames — distros ship lib*.so.N
     # but the unversioned symlinks that -lvulkan / -lSDL3 / -lGL need come with the
     # -dev/-devel packages, which may not be installed.
-    env.Append(LINKFLAGS=["-l:libvulkan.so.1", "-l:libSDL3.so.0", "-l:libGL.so.1"])
+    #
+    # libvulkan/libGL are near-universal, but SDL3 is new enough that some distros
+    # (e.g. Ubuntu 24.04) package it nowhere at all, and upstream ships no prebuilt
+    # Linux binary. So a copy is vendored purely to satisfy the linker. It is added
+    # with -L only and NOT an rpath: ld records the SONAME (libSDL3.so.0) into
+    # DT_NEEDED, and at runtime the loader still picks up the host's own SDL3 from
+    # the normal search path. The vendored copy is only ever a link-time stand-in --
+    # it is never what the built .so actually calls into.
+    #
+    # These go in LIBS, not LINKFLAGS: SCons emits LINKFLAGS *before* the object
+    # files, and a toolchain defaulting to --as-needed (Ubuntu's does, Fedora's
+    # does not) then drops all three, since at that point nothing has referenced a
+    # symbol from them yet. The result still links, but silently produces a .so
+    # with 44 undefined SDL_/vk*/gl* symbols and no DT_NEEDED entries, which fails
+    # at dlopen. LIBS is emitted after the objects, so as-needed keeps them.
+    env.Append(LIBS=[":libvulkan.so.1", ":libSDL3.so.0", ":libGL.so.1"])
+    env.Append(LIBPATH=["external/SDL3/lib/linux-x64"])
 
 # Vulkan headers (bundled submodule — used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])

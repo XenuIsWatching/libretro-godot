@@ -1,6 +1,6 @@
 #pragma once
 
-#include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/node3d.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -92,9 +92,13 @@ protected:
 
 class Wrapper;
 
-class Libretro : public godot::Node
+// Node3D, not Node: the AudioStreamPlayer3D created per-instance in
+// Wrapper::StartContent is parented here, and a Node3D under a plain Node roots
+// its own transform hierarchy — the emitter would sit at the world origin and
+// never follow the cabinet/handheld when it is picked up and carried around.
+class Libretro : public godot::Node3D
 {
-    GDCLASS(Libretro, godot::Node);
+    GDCLASS(Libretro, godot::Node3D);
 
     friend class Wrapper;
     
