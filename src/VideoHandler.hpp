@@ -82,5 +82,11 @@ private:
     retro_pixel_format m_pixel_format = RETRO_PIXEL_FORMAT_UNKNOWN;
     retro_hw_context_reset_t m_context_destroy = nullptr;
     retro_hw_context_type m_hw_context_type = RETRO_HW_CONTEXT_NONE;
+
+    // Last geometry seen by SetGeometry, so a core that re-reports the SAME
+    // geometry (azahar does this on some inputs) doesn't spam an identical log.
+    unsigned m_last_geom_w = 0;
+    unsigned m_last_geom_h = 0;
+    float    m_last_geom_aspect = 0.0f;
 };
 }

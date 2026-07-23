@@ -500,9 +500,21 @@ bool VideoHandler::SetGeometry(const retro_game_geometry* geometry)
     if (!geometry)
         return true;
 
-    Log(std::to_string(geometry->base_width) + "x" + std::to_string(geometry->base_height) +
-        " @ " + std::to_string(geometry->max_width) + "x" + std::to_string(geometry->max_height) +
-        " (aspect ratio: " + std::to_string(geometry->aspect_ratio) + ")");
+    // A core may re-report unchanged geometry repeatedly (azahar does so when the
+    // R button toggles its layout), which produced an identical log each time.
+    // Only log when the geometry actually changes.
+    if (geometry->base_width != m_last_geom_w ||
+        geometry->base_height != m_last_geom_h ||
+        geometry->aspect_ratio != m_last_geom_aspect)
+    {
+        m_last_geom_w = geometry->base_width;
+        m_last_geom_h = geometry->base_height;
+        m_last_geom_aspect = geometry->aspect_ratio;
+
+        Log(std::to_string(geometry->base_width) + "x" + std::to_string(geometry->base_height) +
+            " @ " + std::to_string(geometry->max_width) + "x" + std::to_string(geometry->max_height) +
+            " (aspect ratio: " + std::to_string(geometry->aspect_ratio) + ")");
+    }
 
     return true;
 }
