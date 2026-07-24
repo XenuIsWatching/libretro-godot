@@ -169,6 +169,10 @@ void VideoHandler::Init(MeshInstance3D* mesh)
     m_new_material.instantiate();
     m_new_material->set_albedo(Color(0, 0, 0, 1));
     m_new_material->set_feature(StandardMaterial3D::FEATURE_EMISSION, true);
+    // The frame texture carries a mip chain (generated per-frame in
+    // CreateTexture/UpdateTexture); anisotropic keeps oblique viewing angles
+    // from over-blurring one axis.
+    m_new_material->set_texture_filter(StandardMaterial3D::TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC);
 
     // mesh may be null (console powered on with no TV): create the material now
     // and bind it once a mesh is attached via SetScreenMesh(). The core's texture
@@ -578,6 +582,10 @@ void VideoHandler::CreateTexture(int32_t width, int32_t height, Image::Format im
     m_image->set_data(width, height, false, image_format, pixel_data);
     if (flip_y)
         m_image->flip_y();
+    // Mipmaps kill the minification aliasing (shimmering jaggies) on screens
+    // viewed from a distance in VR. ImageTexture::update() requires the same
+    // mip layout as creation, so UpdateTexture must regenerate them too.
+    m_image->generate_mipmaps();
 
     m_texture = ImageTexture::create_from_image(m_image);
 
@@ -595,6 +603,7 @@ void VideoHandler::UpdateTexture(PackedByteArray pixel_data, bool flip_y)
     m_image->set_data(m_last_width, m_last_height, false, m_image_format, pixel_data);
     if (flip_y)
         m_image->flip_y();
+    m_image->generate_mipmaps();
 
     if (!m_image->is_empty() && m_texture.is_valid())
         m_texture->update(m_image);
