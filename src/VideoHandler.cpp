@@ -169,6 +169,14 @@ void VideoHandler::Init(MeshInstance3D* mesh)
     m_new_material.instantiate();
     m_new_material->set_albedo(Color(0, 0, 0, 1));
     m_new_material->set_feature(StandardMaterial3D::FEATURE_EMISSION, true);
+    // Point-sample the core's picture. StandardMaterial3D defaults to
+    // LINEAR_WITH_MIPMAPS, which on a 240x160 GBA frame blends every texel with its
+    // neighbours no matter how the screen is scaled — the emulator output arrived
+    // pre-softened before any headset resampling. Every shader in RetroVR that
+    // handles a core picture (screen_window, gameboy_lcd, vb_stereo) already
+    // declares filter_nearest; this is the one path that did not, and it is the one
+    // the plain handheld screens (GBA, PSP) and non-CRT TVs use.
+    m_new_material->set_texture_filter(StandardMaterial3D::TEXTURE_FILTER_NEAREST);
 
     // mesh may be null (console powered on with no TV): create the material now
     // and bind it once a mesh is attached via SetScreenMesh(). The core's texture
