@@ -4,6 +4,11 @@
 #include <cstring>
 #include <vector>
 
+// Must precede <windows.h> below — godot-cpp's heavy template/object headers
+// don't play well with windows.h's macro soup (min/max/interface/etc.) once
+// windows.h has already been included.
+#include <godot_cpp/classes/os.hpp>
+
 #ifdef _WIN32
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
@@ -153,9 +158,16 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         ici.ppEnabledExtensionNames = inst_exts.data();
 
         // Enable validation layers in debug builds to catch invalid Vulkan usage.
+        // Validation intercepts and checks every Vulkan call, which is real CPU
+        // overhead on this hot per-frame HW-render path — this used to run
+        // unconditionally in every build (including template_release) despite
+        // the comment above claiming otherwise.
         const char* validation_layer = "VK_LAYER_KHRONOS_validation";
-        ici.enabledLayerCount   = 1;
-        ici.ppEnabledLayerNames = &validation_layer;
+        if (OS::get_singleton()->is_debug_build())
+        {
+            ici.enabledLayerCount   = 1;
+            ici.ppEnabledLayerNames = &validation_layer;
+        }
 
         VkResult r = vkCreateInstance(&ici, nullptr, &m_instance);
         if (r != VK_SUCCESS)
@@ -167,7 +179,8 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 
     LogOK("VulkanContext: VkInstance created.");
 
-    // ---- Set up validation debug messenger ----
+    // ---- Set up validation debug messenger (debug builds only, see above) ----
+    if (OS::get_singleton()->is_debug_build())
     {
         auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
