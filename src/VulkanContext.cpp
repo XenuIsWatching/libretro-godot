@@ -711,9 +711,31 @@ bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
     VkMemoryRequirements mem_req{};
     vkGetBufferMemoryRequirements(m_device, m_staging_buf, &mem_req);
 
+    // This buffer exists purely for the CPU to READ BACK from (GPU → CPU),
+    // every frame — HOST_VISIBLE | HOST_COHERENT alone doesn't guarantee
+    // HOST_CACHED, and on most drivers that means write-combined (uncached)
+    // memory: fine for CPU→GPU uploads, but CPU reads from it are drastically
+    // slower than normal RAM (measured ~45ms to read back a 480x272 frame —
+    // this was the entire per-frame bottleneck). Prefer a cached memory type
+    // when one exists for this buffer; fall back to the old combo otherwise.
+    VkPhysicalDeviceMemoryProperties mem_props{};
+    vkGetPhysicalDeviceMemoryProperties(m_gpu, &mem_props);
+    const VkMemoryPropertyFlags cached_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    int32_t cached_type = -1;
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i)
+    {
+        if ((mem_req.memoryTypeBits & (1u << i)) &&
+            (mem_props.memoryTypes[i].propertyFlags & cached_flags) == cached_flags)
+        {
+            cached_type = (int32_t)i;
+            break;
+        }
+    }
+
     VkMemoryAllocateInfo mai{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     mai.allocationSize  = mem_req.size;
-    mai.memoryTypeIndex = FindMemoryType(mem_req.memoryTypeBits,
+    mai.memoryTypeIndex = (cached_type >= 0) ? (uint32_t)cached_type : FindMemoryType(mem_req.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     if (vkAllocateMemory(m_device, &mai, nullptr, &m_staging_mem) != VK_SUCCESS)
