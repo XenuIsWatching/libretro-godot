@@ -54,8 +54,14 @@ void VulkanContext::s_SetCommandBuffers(void* /*handle*/, uint32_t /*num_cmd*/, 
 void VulkanContext::s_WaitSyncIndex(void* handle)
 {
     auto* ctx = static_cast<VulkanContext*>(handle);
-    if (ctx->m_device != VK_NULL_HANDLE)
-        vkDeviceWaitIdle(ctx->m_device);
+    // The core calls this before it starts rendering into the image, to
+    // make sure nothing is still reading from it. The only GPU work WE ever
+    // submit against that image is the ReadbackToPixels copy, already
+    // tracked by m_fence — waiting on just that (instead of a full
+    // vkDeviceWaitIdle, which stalls every queue on the entire device) gives
+    // the same guarantee without serializing the whole GPU every frame.
+    if (ctx->m_device != VK_NULL_HANDLE && ctx->m_fence != VK_NULL_HANDLE)
+        vkWaitForFences(ctx->m_device, 1, &ctx->m_fence, VK_TRUE, UINT64_MAX);
 }
 
 void VulkanContext::s_LockQueue(void* handle)
@@ -384,7 +390,11 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     }
 
     // ---- Fence ----
+    // Pre-signaled: s_WaitSyncIndex waits on this fence, and the core calls
+    // it before the FIRST frame too, when nothing has been submitted yet —
+    // an unsignaled fence would hang that first wait forever.
     VkFenceCreateInfo fci{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     if (vkCreateFence(m_device, &fci, nullptr, &m_fence) != VK_SUCCESS)
     {
         LogError("VulkanContext: vkCreateFence failed.");
