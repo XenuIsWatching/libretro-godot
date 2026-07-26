@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <sstream>
 #include <random>
+#include <cstring>
 
 #include "Debug.hpp"
 #include "EnvironmentHandler.hpp"
@@ -61,14 +62,20 @@ bool Core::Load(CallbackTrampolines* trampolines)
     }
 
     std::string name = std::filesystem::path(m_path).filename().replace_extension("").string();
-#ifdef __ANDROID__
-    const std::string suffix = "_libretro_android";
-#else
-    const std::string suffix = "_libretro";
-#endif
-    size_t pos = name.rfind(suffix);
-    if (pos != std::string::npos)
-        name.erase(pos, suffix.length());
+    // Longest first: stripping "_libretro" off an Android name would leave "_android"
+    // behind. Both are tried on every platform because the "_android" infix is a
+    // convention, not a rule — azahar ships as "azahar_libretro.so" on Android — and
+    // the bare name keys core_options/<name>.opt, which must match across platforms.
+    static const char* const suffixes[] = { "_libretro_android", "_libretro" };
+    for (const char* suffix : suffixes)
+    {
+        size_t pos = name.rfind(suffix);
+        if (pos != std::string::npos)
+        {
+            name.erase(pos, std::strlen(suffix));
+            break;
+        }
+    }
     m_name = name;
 
     std::string extension = std::filesystem::path(m_path).extension().string();
