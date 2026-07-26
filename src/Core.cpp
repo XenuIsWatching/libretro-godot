@@ -114,6 +114,16 @@ bool Core::Load(CallbackTrampolines* trampolines)
     LoadFunction(retro_get_memory_data);
     LoadFunction(retro_get_memory_size);
 
+    // Cache need_fullpath before retro_init — it decides whether Wrapper hands the
+    // core a byte buffer or just a path. Disc cores set it and open the image
+    // themselves (VFS), so filling a multi-GB buffer for them is pure waste.
+    {
+        retro_system_info system_info = {};
+        retro_get_system_info(&system_info);
+        m_need_fullpath = system_info.need_fullpath;
+        Log("Core need_fullpath: " + std::string(m_need_fullpath ? "true" : "false"));
+    }
+
     retro_set_environment(trampolines->GetEnvironmentCallback());
     retro_set_video_refresh(trampolines->GetVideoRefreshCallback());
     retro_set_audio_sample(trampolines->GetAudioSampleCallback());
@@ -147,6 +157,11 @@ const std::string& Core::GetName() const
 bool Core::GetSupportsNoGame() const
 {
     return m_supports_no_game;
+}
+
+bool Core::GetNeedFullpath() const
+{
+    return m_need_fullpath;
 }
 
 bool Core::LoadHandle()

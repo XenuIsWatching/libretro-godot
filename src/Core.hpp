@@ -23,6 +23,7 @@ public:
 
     const std::string& GetName() const;
     bool GetSupportsNoGame() const;
+    bool GetNeedFullpath() const;
 
     decltype(&::retro_set_environment) retro_set_environment                       = nullptr;
     decltype(&::retro_set_video_refresh) retro_set_video_refresh                   = nullptr;
@@ -58,6 +59,7 @@ private:
     std::string m_path;
     void* m_handle = nullptr;
     bool m_supports_no_game = false;
+    bool m_need_fullpath = false;
 
     bool LoadHandle();
 

@@ -1510,28 +1510,53 @@ void Wrapper::EmulationThreadLoop()
             return;
         }
 
-        std::ifstream file(m_game_path, std::ios::binary | std::ios::ate);
-        if (!file)
-        {
-            LogError("Failed to open game file: " + m_game_path);
-            return;
-        }
-
-        size_t game_size = static_cast<size_t>(file.tellg());
-        file.seekg(0, std::ios::beg);
-        
-        m_game_buffer.resize(game_size);
-        if (!file.read(reinterpret_cast<char*>(m_game_buffer.data()), game_size))
-        {
-            LogError("Failed to read game file: " + m_game_path);
-            return;
-        }
-
         retro_game_info game_info = {};
         game_info.path = m_game_path.c_str();
-        game_info.data = reinterpret_cast<const void*>(m_game_buffer.data());
-        game_info.size = game_size;
         game_info.meta = nullptr;
+
+        if (m_core->GetNeedFullpath())
+        {
+            // Disc cores (PS1/PS2/Saturn/Dreamcast/GC/PSP, MAME, ...) open the
+            // image themselves from the path so they can seek, read tracks lazily
+            // and hot-swap discs — they never touch game_info.data. Reading a 4 GB
+            // ISO into a buffer nobody reads is an instant OOM kill on Quest.
+            Log("Core needs fullpath — passing path only: " + m_game_path);
+        }
+        else
+        {
+            std::ifstream file(m_game_path, std::ios::binary | std::ios::ate);
+            if (!file)
+            {
+                LogError("Failed to open game file: " + m_game_path);
+                return;
+            }
+
+            size_t game_size = static_cast<size_t>(file.tellg());
+            file.seekg(0, std::ios::beg);
+
+            // A core that wants the bytes in memory is a cartridge core; those top
+            // out well under this. Anything larger is a mismatch (or a corrupt
+            // download) and would blow the app's memory budget — fail loudly
+            // instead of attempting the allocation.
+            constexpr size_t MAX_GAME_BUFFER_BYTES = 512ull * 1024ull * 1024ull;
+            if (game_size > MAX_GAME_BUFFER_BYTES)
+            {
+                LogError("Game is " + std::to_string(game_size / (1024 * 1024)) +
+                         " MB but this core requires the whole file in memory (limit " +
+                         std::to_string(MAX_GAME_BUFFER_BYTES / (1024 * 1024)) + " MB): " + m_game_path);
+                return;
+            }
+
+            m_game_buffer.resize(game_size);
+            if (!file.read(reinterpret_cast<char*>(m_game_buffer.data()), game_size))
+            {
+                LogError("Failed to read game file: " + m_game_path);
+                return;
+            }
+
+            game_info.data = reinterpret_cast<const void*>(m_game_buffer.data());
+            game_info.size = game_size;
+        }
 
         if (!m_core->retro_load_game(&game_info))
         {
