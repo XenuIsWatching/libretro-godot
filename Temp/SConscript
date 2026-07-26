@@ -4,6 +4,14 @@ Import('env', 'output_dir')
 
 env = env.Clone()
 
+# godot-cpp defaults debug_symbols to dev_build, so a plain target=template_debug
+# links with none at all and a crash in this library resolves to nothing. Turn it
+# on for every non-release target; an explicit debug_symbols=no still wins. Has to
+# happen before godot-cpp's SConstruct, which is where the option is read.
+from SCons.Script import ARGUMENTS
+if ARGUMENTS.get("target", "template_debug") != "template_release":
+    ARGUMENTS.setdefault("debug_symbols", "yes")
+
 env = SConscript("../godot-cpp/SConstruct")
 
 env.Append(CPPPATH=[
