@@ -4,7 +4,7 @@
 #include "Libretro.hpp"
 #include "Debug.hpp"
 
-namespace SK
+namespace Xenu
 {
 void InputHandler::PollCallback()
 {

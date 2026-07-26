@@ -7,7 +7,7 @@
 #include "Debug.hpp"
 #include "DynLib.hpp"
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 class CallbackTrampolines;

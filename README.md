@@ -2,7 +2,7 @@
 
 A GDExtension (C++) that runs libretro emulator cores inside Godot 4.5+. Bridges Godot's scene system with the libretro API, enabling retro game emulation within Godot projects.
 
-Originally forked from [Skurdt/libretro-godot](https://github.com/Skurdt/libretro-godot).
+Originally forked from [Skurdt/SK.Libretro.Godot](https://github.com/Skurdt/SK.Libretro.Godot).
 
 ## Prerequisites
 

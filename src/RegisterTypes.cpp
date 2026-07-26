@@ -12,10 +12,10 @@ void initialize(ModuleInitializationLevel p_level)
     if (p_level != ModuleInitializationLevel::MODULE_INITIALIZATION_LEVEL_SCENE)
         return;
 
-    ClassDB::register_class<SK::LibretroOptionCategory>();
-    ClassDB::register_class<SK::LibretroOptionValue>();
-    ClassDB::register_class<SK::LibretroOptionDefinition>();
-    ClassDB::register_runtime_class<SK::Libretro>();
+    ClassDB::register_class<Xenu::LibretroOptionCategory>();
+    ClassDB::register_class<Xenu::LibretroOptionValue>();
+    ClassDB::register_class<Xenu::LibretroOptionDefinition>();
+    ClassDB::register_runtime_class<Xenu::Libretro>();
 }
 
 void uninitialize(ModuleInitializationLevel p_level)

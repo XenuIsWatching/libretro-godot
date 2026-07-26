@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace SK
+namespace Xenu
 {
 
 class VulkanContext
@@ -76,4 +76,4 @@ private:
     retro_hw_render_interface_vulkan m_interface{};
 };
 
-} // namespace SK
+} // namespace Xenu

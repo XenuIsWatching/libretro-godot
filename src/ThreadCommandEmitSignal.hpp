@@ -5,7 +5,7 @@
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/string_name.hpp>
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 

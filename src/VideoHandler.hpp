@@ -16,7 +16,7 @@
 #include <libretro.h>
 #include "VulkanContext.hpp"
 
-namespace SK
+namespace Xenu
 {
 class VideoHandler
 {

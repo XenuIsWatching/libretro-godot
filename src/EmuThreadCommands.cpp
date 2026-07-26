@@ -3,7 +3,7 @@
 #include "Wrapper.hpp"
 #include "Debug.hpp"
 
-namespace SK
+namespace Xenu
 {
 void EmuThreadCommandSaveState::Execute(Wrapper& wrapper)
 {

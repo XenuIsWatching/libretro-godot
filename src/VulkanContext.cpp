@@ -23,7 +23,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 
 // ---------------------------------------------------------------------------
@@ -147,9 +147,9 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         else
         {
             app_info.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-            app_info.pApplicationName   = "SKLibretro";
+            app_info.pApplicationName   = "XenuLibretro";
             app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-            app_info.pEngineName        = "SKLibretro";
+            app_info.pEngineName        = "XenuLibretro";
             app_info.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
             app_info.apiVersion         = max_api_version;
             app_info_ptr = &app_info;
@@ -278,7 +278,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         // bar that shrink it at high DPI).  Size must exceed the core's EFB
         // dimensions (640×528 at 1×, 1280×1056 at 2×, etc.).
         m_hidden_hwnd = CreateWindowExW(
-            0, L"STATIC", L"SKLibretro_VkSurface", WS_POPUP,
+            0, L"STATIC", L"XenuLibretro_VkSurface", WS_POPUP,
             0, 0, 1920, 1080, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 
         if (m_hidden_hwnd)
@@ -785,4 +785,4 @@ uint32_t VulkanContext::FindMemoryType(uint32_t type_filter, VkMemoryPropertyFla
     return 0;
 }
 
-} // namespace SK
+} // namespace Xenu

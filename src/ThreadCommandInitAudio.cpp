@@ -6,7 +6,7 @@
 
 #include "Wrapper.hpp"
 
-namespace SK
+namespace Xenu
 {
 ThreadCommandInitAudio::ThreadCommandInitAudio(Wrapper* wrapper, float bufferCapacitySec, double sampleRate)
 : m_wrapper(wrapper)

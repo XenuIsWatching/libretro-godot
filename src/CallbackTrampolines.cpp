@@ -17,7 +17,7 @@
 
 #include <cstring>
 
-namespace SK
+namespace Xenu
 {
 
 // Handler addresses for all 7 trampolined callbacks.
@@ -401,4 +401,4 @@ retro_log_printf_t CallbackTrampolines::GetLogCallback() const
     return reinterpret_cast<retro_log_printf_t>(m_entry_points[IDX_LOG]);
 }
 
-} // namespace SK
+} // namespace Xenu

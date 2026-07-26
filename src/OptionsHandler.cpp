@@ -7,7 +7,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 bool OptionsHandler::GetCoreOptionsVersion(uint32_t* version)
 {

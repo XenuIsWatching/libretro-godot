@@ -7,7 +7,7 @@
 
 #include <memory>
 
-namespace SK
+namespace Xenu
 {
 class LibretroOptionCategory : public godot::RefCounted
 {

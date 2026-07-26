@@ -4,7 +4,7 @@
 #include <string>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 

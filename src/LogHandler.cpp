@@ -10,7 +10,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 bool LogHandler::GetLogInterface(retro_log_callback* callback)
 {

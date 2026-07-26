@@ -36,7 +36,7 @@
 #include "MessageHandler.hpp"
 #include "LogHandler.hpp"
 
-namespace SK
+namespace Xenu
 {
 // Forward declaration to avoid circular include (Libretro.hpp includes Wrapper.hpp indirectly)
 class Libretro;

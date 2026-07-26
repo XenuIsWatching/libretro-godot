@@ -4,7 +4,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 void Debug::Log_(const std::string& message, const char* caller)
 {

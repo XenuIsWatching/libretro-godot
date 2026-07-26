@@ -9,7 +9,7 @@
 
 #include <libretro.h>
 
-namespace SK
+namespace Xenu
 {
 class AudioHandler
 {

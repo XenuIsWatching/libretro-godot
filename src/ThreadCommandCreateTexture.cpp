@@ -6,7 +6,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 ThreadCommandCreateTexture::ThreadCommandCreateTexture(Wrapper* wrapper, Image::Format image_format, PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y)
 : m_wrapper(wrapper)

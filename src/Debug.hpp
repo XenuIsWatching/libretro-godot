@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace SK
+namespace Xenu
 {
 #define Log(msg) Debug::Log_(msg, __FUNCTION__)
 #define LogOK(msg) Debug::LogOK_(msg, __FUNCTION__)

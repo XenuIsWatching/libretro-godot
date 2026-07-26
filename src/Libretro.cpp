@@ -4,7 +4,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 Libretro::Libretro()
 {

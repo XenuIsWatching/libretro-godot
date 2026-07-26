@@ -13,7 +13,7 @@
 #include "AudioHandler.hpp"
 #include "InputHandler.hpp"
 
-namespace SK
+namespace Xenu
 {
 static uint32_t RandomChar()
 {

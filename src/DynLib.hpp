@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace SK
+namespace Xenu
 {
 inline void* DynLib_Open(const char* path)
 {

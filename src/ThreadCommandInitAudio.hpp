@@ -2,7 +2,7 @@
 
 #include "ThreadCommand.hpp"
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 

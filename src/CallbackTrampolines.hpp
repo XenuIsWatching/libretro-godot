@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 

@@ -3,7 +3,7 @@
 #include "Wrapper.hpp"
 #include "Libretro.hpp"
 
-namespace SK
+namespace Xenu
 {
 void ThreadCommandEmitSignal::Execute()
 {

@@ -19,7 +19,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t height, size_t pitch)
 {

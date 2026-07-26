@@ -4,7 +4,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 ThreadCommandUpdateTexture::ThreadCommandUpdateTexture(Wrapper* wrapper, PackedByteArray pixelData, bool flipY)
 : m_wrapper(wrapper)

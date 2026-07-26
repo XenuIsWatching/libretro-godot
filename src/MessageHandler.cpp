@@ -2,7 +2,7 @@
 
 #include "Debug.hpp"
 
-namespace SK
+namespace Xenu
 {
 bool MessageHandler::GetMessageInterfaceVersion(uint32_t* version)
 {

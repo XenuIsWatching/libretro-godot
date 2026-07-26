@@ -6,7 +6,7 @@
 
 #include <libretro.h>
 
-namespace SK
+namespace Xenu
 {
 struct OptionCategory
 {

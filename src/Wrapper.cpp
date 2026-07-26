@@ -27,7 +27,7 @@
 
 using namespace godot;
 
-namespace SK
+namespace Xenu
 {
 thread_local Wrapper* t_current_wrapper = nullptr;
 

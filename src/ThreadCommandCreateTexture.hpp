@@ -4,7 +4,7 @@
 
 #include <godot_cpp/classes/image.hpp>
 
-namespace SK
+namespace Xenu
 {
 class Wrapper;
 
