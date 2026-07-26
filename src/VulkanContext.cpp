@@ -14,6 +14,13 @@
 #include <vulkan/vulkan_win32.h>
 #endif
 
+// Flip this to 1 and rebuild to opt back into Vulkan validation. Off by
+// default: the editor process is always debug-tagged, so OS::is_debug_build()
+// below can't tell "editor Play" apart from "real debug testing" — leaving
+// validation gated on that runtime check alone means it's always on in the
+// editor, adding real per-call CPU overhead on this hot HW-render path.
+#define VULKAN_VALIDATION_ENABLED 0
+
 using namespace godot;
 
 namespace SK
@@ -163,11 +170,13 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         // unconditionally in every build (including template_release) despite
         // the comment above claiming otherwise.
         const char* validation_layer = "VK_LAYER_KHRONOS_validation";
+#if VULKAN_VALIDATION_ENABLED
         if (OS::get_singleton()->is_debug_build())
         {
             ici.enabledLayerCount   = 1;
             ici.ppEnabledLayerNames = &validation_layer;
         }
+#endif
 
         VkResult r = vkCreateInstance(&ici, nullptr, &m_instance);
         if (r != VK_SUCCESS)
@@ -180,6 +189,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     LogOK("VulkanContext: VkInstance created.");
 
     // ---- Set up validation debug messenger (debug builds only, see above) ----
+#if VULKAN_VALIDATION_ENABLED
     if (OS::get_singleton()->is_debug_build())
     {
         auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
@@ -207,6 +217,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             LogOK("VulkanContext: Validation layers enabled.");
         }
     }
+#endif
 
     // ---- Select physical device ----
     uint32_t gpu_count = 0;
