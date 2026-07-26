@@ -64,6 +64,11 @@ public:
 
     void StartContent(godot::MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path);
     void StopContent();
+    /// Blocking stop for node teardown — joins and finishes teardown before
+    /// returning, so handler DeInit still sees a live scene.
+    void ShutdownForExit();
+    /// m_node re-resolved through ObjectDB, or null if it has been freed.
+    godot::MeshInstance3D* LiveNode() const;
     void SetScreenMesh(godot::MeshInstance3D* node);
 
     const std::unordered_map<std::string, OptionCategory>& GetOptionCategories() const { return m_options_handler->GetCategories(); }
@@ -249,6 +254,9 @@ public:
     void _process(double delta);
 
     godot::MeshInstance3D* m_node;
+    /// Instance id of m_node. A raw node pointer outlives the node it points at
+    /// during scene teardown; this is what makes the liveness check possible.
+    uint64_t m_node_id = 0;
 
     const std::string& GetRootDirectory() const { return m_root_directory; }
     const std::string& GetTempDirectory() const { return m_temp_directory; }

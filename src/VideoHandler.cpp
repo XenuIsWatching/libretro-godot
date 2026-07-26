@@ -207,8 +207,11 @@ void VideoHandler::SetMesh(MeshInstance3D* old_mesh, MeshInstance3D* new_mesh)
 void VideoHandler::DeInit()
 {
     auto* w = Wrapper::GetCurrentThreadWrapper();
-    if (w && w->m_node)
-        w->m_node->set_surface_override_material(0, m_original_surface_material_override);
+    // LiveNode(), not m_node: teardown can run after the scene that owns the
+    // mesh has been freed, and the raw pointer does not go null when it does.
+    MeshInstance3D* node = w ? w->LiveNode() : nullptr;
+    if (node)
+        node->set_surface_override_material(0, m_original_surface_material_override);
 
     if (m_new_material.is_valid())
         m_new_material.unref();
@@ -590,8 +593,9 @@ void VideoHandler::CreateTexture(int32_t width, int32_t height, Image::Format im
     m_texture = ImageTexture::create_from_image(m_image);
 
     auto* w = Wrapper::GetCurrentThreadWrapper();
-    if (w && w->m_node)
-        w->m_node->set_surface_override_material(0, m_new_material);
+    MeshInstance3D* node = w ? w->LiveNode() : nullptr;
+    if (node)
+        node->set_surface_override_material(0, m_new_material);
     m_new_material->set_texture(StandardMaterial3D::TEXTURE_EMISSION, m_texture);
 }
 

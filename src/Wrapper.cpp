@@ -302,6 +302,34 @@ static int16_t ToShort(float floatValue, int mul = 1)
     return static_cast<int16_t>(Math::clamp(Math::round(floatValue), static_cast<float>(INT16_MIN), static_cast<float>(INT16_MAX)) * mul);
 }
 
+// Locate a core inside <root>/cores. Android cores are conventionally named
+// "<name>_libretro_android.so", but not universally — azahar's CMake never set
+// an Android OUTPUT_NAME, so the buildbot ships it as "azahar_libretro.so".
+// Try every convention the platform can use and take the first that exists;
+// with none present, return the canonical name so the error names that file.
+static std::filesystem::path ResolveCorePath(const std::string& root_directory, const std::string& core_name)
+{
+    const std::filesystem::path cores_dir = std::filesystem::path(root_directory).append("cores");
+
+    static const char* const suffixes[] = {
+#ifdef __ANDROID__
+        "_libretro_android.so", "_libretro.so",
+#elif defined(__linux__)
+        "_libretro.so",
+#else
+        "_libretro.dll",
+#endif
+    };
+
+    for (const char* suffix : suffixes)
+    {
+        std::filesystem::path candidate = cores_dir / (core_name + suffix);
+        if (std::filesystem::is_regular_file(candidate))
+            return candidate;
+    }
+    return cores_dir / (core_name + suffixes[0]);
+}
+
 void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path)
 {
     // node may be null: a console powered on with no TV connected still runs; the
@@ -311,6 +339,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     StopEmulationThread();
 
     m_node = node;
+    m_node_id = node ? node->get_instance_id() : 0;
 
     auto audio_stream_player = memnew(AudioStreamPlayer3D);
     audio_stream_player->set_name("AudioStreamPlayer3D");
@@ -320,13 +349,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     audio_stream_player->set_max_db(0.0f);
     m_libretro_node->add_child(audio_stream_player);
 
-#ifdef __ANDROID__
-    std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro_android").replace_extension(".so");
-#elif defined(__linux__)
-    std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro").replace_extension(".so");
-#else
-    std::filesystem::path core_path = std::filesystem::path(root_directory).append("cores").append(core_name + "_libretro").replace_extension(".dll");
-#endif
+    std::filesystem::path core_path = ResolveCorePath(root_directory, core_name);
 
     m_core = std::make_unique<Core>(core_path.string());
     m_trampolines = std::make_unique<CallbackTrampolines>(this);
@@ -378,12 +401,27 @@ void Wrapper::StopContent()
     StopEmulationThread(false);
 }
 
+void Wrapper::ShutdownForExit()
+{
+    if (m_audio_handler)
+        m_audio_handler->SetPlaying(false);
+    StopEmulationThread(true);
+}
+
+MeshInstance3D* Wrapper::LiveNode() const
+{
+    if (m_node_id == 0)
+        return nullptr;
+    return Object::cast_to<MeshInstance3D>(ObjectDB::get_instance(m_node_id));
+}
+
 void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
 {
     if (!m_video_handler)
         return;
-    m_video_handler->SetMesh(m_node, new_mesh);
+    m_video_handler->SetMesh(LiveNode(), new_mesh);
     m_node = new_mesh;
+    m_node_id = new_mesh ? new_mesh->get_instance_id() : 0;
     if (m_audio_handler)
         m_audio_handler->SetPlaying(new_mesh != nullptr);
 }
@@ -1463,6 +1501,7 @@ void Wrapper::FinishTeardown()
     m_log_handler = nullptr;
 
     m_node = nullptr;
+    m_node_id = 0;
 
     // Discard commands the dying thread left queued — they must not execute
     // against the next content run's handlers.

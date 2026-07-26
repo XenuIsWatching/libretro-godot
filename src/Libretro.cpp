@@ -187,7 +187,13 @@ int64_t Libretro::GetNetplayRollbackCount() const
 
 void Libretro::_exit_tree()
 {
-    m_wrapper->StopContent();
+    // Blocking, unlike StopContent(): leaving the tree means this node can be
+    // freed at any point after this returns, and the scene being torn down owns
+    // the screen mesh VideoHandler::DeInit restores its material on. Deferring
+    // the join to _process() (which will never run again) leaves that teardown
+    // to ~Wrapper, by which time the mesh may already be gone. The frame hitch
+    // this costs does not matter on the way out.
+    m_wrapper->ShutdownForExit();
 }
 
 void Libretro::_input(const Ref<InputEvent>& event)
