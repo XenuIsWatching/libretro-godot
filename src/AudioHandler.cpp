@@ -66,6 +66,10 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
 
     instance->m_audio_handler->m_audio_buffer_occupancy = occupancy_percent;
 
+    // Batch size drives the pacing headroom — see IsBufferSaturated.
+    if (frames > instance->m_audio_handler->m_audio_max_batch_frames)
+        instance->m_audio_handler->m_audio_max_batch_frames = static_cast<uint32_t>(frames);
+
     for (size_t i = 0; i < frames; ++i)
     {
         float l = data[i * 2]     / 32768.0f;
@@ -80,11 +84,19 @@ bool AudioHandler::IsBufferSaturated() const
 {
     // A core that has never produced a sample (silent homebrew) would otherwise
     // read as permanently saturated and stall the emulation thread outright.
-    if (m_audio_buffer_total_frames == 0 || m_audio_stream_generator_playback.is_null())
+    if (m_audio_buffer_total_frames == 0 || m_audio_max_batch_frames == 0
+     || m_audio_stream_generator_playback.is_null())
         return false;
 
-    const int32_t available = m_audio_stream_generator_playback->get_frames_available();
-    return available < static_cast<int32_t>(m_audio_buffer_total_frames / 4);
+    // Room for the next batch and half again. Capped so a core whose batch
+    // rivals the whole buffer throttles instead of deadlocking on a threshold
+    // it can never satisfy — there the samples have to drop.
+    uint32_t headroom = m_audio_max_batch_frames + m_audio_max_batch_frames / 2;
+    const uint32_t ceiling = (m_audio_buffer_total_frames * 3) / 4;
+    if (headroom > ceiling)
+        headroom = ceiling;
+
+    return m_audio_stream_generator_playback->get_frames_available() < static_cast<int32_t>(headroom);
 }
 
 void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)

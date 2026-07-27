@@ -1658,6 +1658,11 @@ void Wrapper::EmulationThreadLoop()
     // early and taking the last stretch on the clock beats oversleeping frames.
     constexpr double SLEEP_MARGIN_MS = 1.5;
 
+    // How long audio-driven pacing may hold frames back before giving up and
+    // letting samples drop instead. Bounds the worst case if the mixer stops.
+    constexpr double MAX_AUDIO_STALL_MS = 250.0;
+    double audio_stall_ms = 0.0;
+
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
     LoadSramFromSource();
@@ -1720,7 +1725,13 @@ void Wrapper::EmulationThreadLoop()
             // declared 60fps, runs at double speed — audible first as the audio
             // buffer overflowing. Letting the mixer set the pace throttles the
             // core to real time whatever its internal frame rate.
-            if (m_audio_handler->IsBufferSaturated())
+            const bool audio_saturated = m_audio_handler->IsBufferSaturated();
+            audio_stall_ms = audio_saturated ? audio_stall_ms + elapsed : 0.0;
+
+            // Never let a sink that stopped draining halt the game: past the
+            // limit, run anyway and drop samples as before. Losing audio focus
+            // to the system overlay would otherwise freeze emulation outright.
+            if (audio_saturated && audio_stall_ms < MAX_AUDIO_STALL_MS)
                 accumulator = 0.0;
 
             while (accumulator >= frame_duration_ms)

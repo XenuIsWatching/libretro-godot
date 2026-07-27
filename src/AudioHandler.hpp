@@ -27,9 +27,11 @@ public:
 
     void CallAudioBufferStatusCallback();
 
-    /// True when the core is ahead of the mixer: the generator buffer has less
-    /// than a quarter of its space left. Only meaningful once the core has
-    /// actually produced audio — a silent core must never throttle on this.
+    /// True when the buffer lacks room for the next batch, so running another
+    /// frame would overflow it and drop samples mid-waveform. Sized from the
+    /// largest batch seen rather than a fixed fraction: one retro_run of a 30fps
+    /// 3DS title lands ~33ms of audio at once, which a quarter of a 125ms buffer
+    /// does not cover. A core that has produced no audio never reports saturated.
     bool IsBufferSaturated() const;
 
 private:
@@ -40,6 +42,7 @@ private:
     double m_audio_sample_rate = 0.0;
     uint32_t m_audio_buffer_total_frames = 0;
     uint32_t m_audio_buffer_occupancy = 0;
+    uint32_t m_audio_max_batch_frames = 0;
     retro_audio_buffer_status_callback_t m_audio_buffer_status_callback = nullptr;
     uint32_t m_minimum_audio_latency = 0;
 };
