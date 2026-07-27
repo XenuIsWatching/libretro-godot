@@ -55,6 +55,11 @@ constexpr uint64_t kAHBUsageGpuFramebuffer = 1ULL << 9;
 } // namespace
 #endif
 
+// A frame's GPU work is microseconds; anything approaching this means a
+// signal was lost. Bounded so that costs a dropped frame instead of a
+// permanently frozen app.
+static constexpr uint64_t kFenceTimeoutNs = 2'000'000'000ull;
+
 // ---------------------------------------------------------------------------
 // Static callback trampolines
 // ---------------------------------------------------------------------------
@@ -89,8 +94,12 @@ void VulkanContext::s_WaitSyncIndex(void* handle)
     // tracked by m_fence — waiting on just that (instead of a full
     // vkDeviceWaitIdle, which stalls every queue on the entire device) gives
     // the same guarantee without serializing the whole GPU every frame.
-    if (ctx->m_device != VK_NULL_HANDLE && ctx->m_fence != VK_NULL_HANDLE)
-        vkWaitForFences(ctx->m_device, 1, &ctx->m_fence, VK_TRUE, UINT64_MAX);
+    if (ctx->m_device == VK_NULL_HANDLE || ctx->m_fence == VK_NULL_HANDLE)
+        return;
+
+    std::lock_guard<std::mutex> lock(ctx->m_fence_mutex);
+    if (ctx->m_readback_pending)
+        ctx->WaitReadbackFenceLocked();
 }
 
 void VulkanContext::s_LockQueue(void* handle)
@@ -497,6 +506,12 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         return false;
     }
 
+    if (vkCreateFence(m_device, &fci, nullptr, &m_sem_fence) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: vkCreateFence (semaphore wait) failed.");
+        return false;
+    }
+
     // ---- Fill retro_hw_render_interface_vulkan ----
     m_interface.interface_type       = RETRO_HW_RENDER_INTERFACE_VULKAN;
     m_interface.interface_version    = RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION;
@@ -540,6 +555,12 @@ void VulkanContext::Destroy()
     {
         vkDestroyFence(m_device, m_fence, nullptr);
         m_fence = VK_NULL_HANDLE;
+    }
+
+    if (m_sem_fence != VK_NULL_HANDLE)
+    {
+        vkDestroyFence(m_device, m_sem_fence, nullptr);
+        m_sem_fence = VK_NULL_HANDLE;
     }
 
     if (m_cmd_pool != VK_NULL_HANDLE)
@@ -642,12 +663,16 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
         si.pWaitSemaphores    = sems;
         si.pWaitDstStageMask  = wait_stages.data();
 
-        m_queue_mutex.lock();
-        vkResetFences(m_device, 1, &m_fence);
-        vkQueueSubmit(m_queue, 1, &si, m_fence);
-        m_queue_mutex.unlock();
+        // Its own fence: m_fence tracks the readback, and the main thread can
+        // be waiting on that one right now.
+        vkResetFences(m_device, 1, &m_sem_fence);
+        {
+            std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
+            vkQueueSubmit(m_queue, 1, &si, m_sem_fence);
+        }
 
-        vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, UINT64_MAX);
+        if (vkWaitForFences(m_device, 1, &m_sem_fence, VK_TRUE, kFenceTimeoutNs) == VK_TIMEOUT)
+            LogWarning("VulkanContext: semaphore-wait fence timed out.");
     }
 }
 
@@ -658,9 +683,12 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
 
 void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByteArray& out)
 {
+    std::unique_lock<std::mutex> fence_lock(m_fence_mutex);
+
     if (m_current_vk_image == VK_NULL_HANDLE)
     {
         LogError("VulkanContext::ReadbackToPixels: no current image set");
+        SignalPendingSemaphoreLocked();
         return;
     }
 
@@ -669,7 +697,10 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     {
         DestroyStagingBuffer();
         if (!CreateStagingBuffer(needed))
+        {
+            SignalPendingSemaphoreLocked();
             return;
+        }
     }
 
     // ---- Record command buffer ----
@@ -769,12 +800,14 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         m_signal_semaphore      = VK_NULL_HANDLE;
     }
 
-    m_queue_mutex.lock();
     vkResetFences(m_device, 1, &m_fence);
-    vkQueueSubmit(m_queue, 1, &si, m_fence);
-    m_queue_mutex.unlock();
+    {
+        std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
+        vkQueueSubmit(m_queue, 1, &si, m_fence);
+    }
+    m_readback_pending = true;
 
-    vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, UINT64_MAX);
+    WaitReadbackFenceLocked();
 
     // ---- Map and copy to output ----
     void* mapped = nullptr;
@@ -809,6 +842,32 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+void VulkanContext::WaitReadbackFenceLocked()
+{
+    VkResult r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, kFenceTimeoutNs);
+    if (r == VK_TIMEOUT)
+        LogWarning("VulkanContext: readback fence timed out; dropping frame.");
+
+    m_readback_pending = false;
+}
+
+// A core that called set_signal_semaphore is waiting on that semaphore. If we
+// bail out of the readback without submitting, nothing else ever signals it
+// and the core's queue stalls for good — so signal it with an empty submit.
+void VulkanContext::SignalPendingSemaphoreLocked()
+{
+    if (m_signal_semaphore == VK_NULL_HANDLE)
+        return;
+
+    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores    = &m_signal_semaphore;
+    m_signal_semaphore      = VK_NULL_HANDLE;
+
+    std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
+    vkQueueSubmit(m_queue, 1, &si, VK_NULL_HANDLE);
+}
 
 bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
 {

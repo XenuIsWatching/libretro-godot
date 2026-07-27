@@ -41,6 +41,10 @@ private:
     void DestroyStagingBuffer();
     uint32_t FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties);
 
+    // Both require m_fence_mutex held.
+    void WaitReadbackFenceLocked();
+    void SignalPendingSemaphoreLocked();
+
     bool m_initialized = false;
 
     VkInstance       m_instance     = VK_NULL_HANDLE;
@@ -51,6 +55,14 @@ private:
     VkCommandPool    m_cmd_pool     = VK_NULL_HANDLE;
     VkCommandBuffer  m_cmd_buf      = VK_NULL_HANDLE;
     VkFence          m_fence        = VK_NULL_HANDLE;
+    VkFence          m_sem_fence    = VK_NULL_HANDLE;
+
+    // Guards every m_fence reset/submit/wait as one unit. Resetting a fence
+    // while another thread sits in vkWaitForFences on it is undefined, and
+    // Adreno drops the wakeup — the waiter then never returns.
+    // Lock order is m_fence_mutex -> m_queue_mutex, never the reverse.
+    std::mutex m_fence_mutex;
+    bool       m_readback_pending = false;
 
     VkBuffer       m_staging_buf  = VK_NULL_HANDLE;
     VkDeviceMemory m_staging_mem  = VK_NULL_HANDLE;
