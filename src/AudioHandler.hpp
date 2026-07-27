@@ -6,6 +6,7 @@
 #include <godot_cpp/classes/audio_stream_player3d.hpp>
 
 #include <cstdint>
+#include <string>
 
 #include <libretro.h>
 
@@ -25,6 +26,11 @@ public:
     bool SetMinimumAudioLatency(const uint32_t* minimum_audio_latency);
 
     void CallAudioBufferStatusCallback();
+
+    /// True when the core is ahead of the mixer: the generator buffer has less
+    /// than a quarter of its space left. Only meaningful once the core has
+    /// actually produced audio — a silent core must never throttle on this.
+    bool IsBufferSaturated() const;
 
 private:
     godot::Ref<godot::AudioStreamGenerator> m_audio_stream_generator = nullptr;

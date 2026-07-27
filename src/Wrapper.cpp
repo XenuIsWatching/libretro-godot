@@ -1653,6 +1653,11 @@ void Wrapper::EmulationThreadLoop()
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
 
+    // Slack left before the next frame is due. sleep_for rounds up to the OS
+    // timer granularity (coarse on Windows without timeBeginPeriod), so waking
+    // early and taking the last stretch on the clock beats oversleeping frames.
+    constexpr double SLEEP_MARGIN_MS = 1.5;
+
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
     LoadSramFromSource();
@@ -1702,6 +1707,22 @@ void Wrapper::EmulationThreadLoop()
 
         if (!m_netplay_enabled.load(std::memory_order_acquire))
         {
+            // Cap catch-up debt after stalls, as the netplay path below does.
+            // Unclamped, a stall's whole duration is replayed back-to-back: the
+            // picture fast-forwards and a burst of frames' worth of samples
+            // overflows the audio buffer, which drops them mid-waveform.
+            if (accumulator > frame_duration_ms * 4.0)
+                accumulator = frame_duration_ms * 4.0;
+
+            // Sync to audio. A core does not necessarily advance one display
+            // refresh per retro_run: azahar returns when the *game* presents, so
+            // a 30fps title advances two 60Hz frames per call and, driven at the
+            // declared 60fps, runs at double speed — audible first as the audio
+            // buffer overflowing. Letting the mixer set the pace throttles the
+            // core to real time whatever its internal frame rate.
+            if (m_audio_handler->IsBufferSaturated())
+                accumulator = 0.0;
+
             while (accumulator >= frame_duration_ms)
             {
                 m_audio_handler->CallAudioBufferStatusCallback();
@@ -1711,6 +1732,17 @@ void Wrapper::EmulationThreadLoop()
 
                 accumulator -= frame_duration_ms;
             }
+
+
+            // Wait out the rest of the frame instead of spinning the clock. The
+            // busy-wait cost a whole core, which on Quest is one the main thread
+            // needs — the spin helped cause the stalls it then raced to catch up
+            // on. Leave a margin for coarse sleep granularity; whatever the sleep
+            // overshoots lands in the accumulator, so the frame rate stays honest.
+            const double remaining = frame_duration_ms - accumulator;
+            if (remaining > SLEEP_MARGIN_MS)
+                std::this_thread::sleep_for(
+                    std::chrono::duration<double, std::milli>(remaining - SLEEP_MARGIN_MS));
             continue;
         }
 

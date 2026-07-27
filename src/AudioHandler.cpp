@@ -76,6 +76,17 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
     return frames;
 }
 
+bool AudioHandler::IsBufferSaturated() const
+{
+    // A core that has never produced a sample (silent homebrew) would otherwise
+    // read as permanently saturated and stall the emulation thread outright.
+    if (m_audio_buffer_total_frames == 0 || m_audio_stream_generator_playback.is_null())
+        return false;
+
+    const int32_t available = m_audio_stream_generator_playback->get_frames_available();
+    return available < static_cast<int32_t>(m_audio_buffer_total_frames / 4);
+}
+
 void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 {
     m_audio_buffer_capacity_sec = buffer_capacity_sec;
