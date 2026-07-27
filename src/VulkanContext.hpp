@@ -68,6 +68,12 @@ private:
     VkDeviceMemory m_staging_mem  = VK_NULL_HANDLE;
     VkDeviceSize   m_staging_size = 0;
 
+    // Guards the current image state below, which SetImage writes from the
+    // core thread while ReadbackToPixels reads it on the main thread. Leaf
+    // lock — never acquire another mutex while holding it, or it deadlocks
+    // against SetImage's queue submit.
+    std::mutex m_state_mutex;
+
     // Current image state (populated by SetImage)
     VkImage                 m_current_vk_image         = VK_NULL_HANDLE;
     VkFormat                m_current_format           = VK_FORMAT_UNDEFINED;

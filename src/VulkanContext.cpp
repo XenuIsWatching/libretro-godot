@@ -641,18 +641,14 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
 {
     if (!image)
     {
+        std::lock_guard<std::mutex> state_lock(m_state_mutex);
         m_current_vk_image = VK_NULL_HANDLE;
         return;
     }
 
-    // Copy only the fields we need — do NOT deep-copy pNext chains.
-    m_current_vk_image          = image->create_info.image;
-    m_current_format            = image->create_info.format;
-    m_current_layout            = image->image_layout;
-    m_current_subresource_range = image->create_info.subresourceRange;
-    m_src_queue_family          = src_family;
-
-    // Wait on any semaphores the core provided (submit a no-op with them as wait sems).
+    // Drain the semaphores the core provided (a no-op submit that waits on
+    // them) before publishing, so the image the main thread picks up has
+    // finished rendering.
     if (n_sems > 0 && sems)
     {
         std::vector<VkPipelineStageFlags> wait_stages(n_sems,
@@ -674,6 +670,18 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
         if (vkWaitForFences(m_device, 1, &m_sem_fence, VK_TRUE, kFenceTimeoutNs) == VK_TIMEOUT)
             LogWarning("VulkanContext: semaphore-wait fence timed out.");
     }
+
+    // Published as one unit: a readback that paired the new image with the
+    // previous subresource range would copy the wrong mip/layer, and one that
+    // paired it with a stale layout would barrier from a layout the image is
+    // not in.
+    // Copy only the fields we need — do NOT deep-copy pNext chains.
+    std::lock_guard<std::mutex> state_lock(m_state_mutex);
+    m_current_vk_image          = image->create_info.image;
+    m_current_format            = image->create_info.format;
+    m_current_layout            = image->image_layout;
+    m_current_subresource_range = image->create_info.subresourceRange;
+    m_src_queue_family          = src_family;
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +693,23 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 {
     std::unique_lock<std::mutex> fence_lock(m_fence_mutex);
 
-    if (m_current_vk_image == VK_NULL_HANDLE)
+    // Snapshot the core's image state and work from the copy. Reading the
+    // members directly would let SetImage swap them mid-function, and holding
+    // m_state_mutex across the queue submit below would invert the lock order
+    // against SetImage.
+    VkImage                 image  = VK_NULL_HANDLE;
+    VkFormat                format = VK_FORMAT_UNDEFINED;
+    VkImageLayout           layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageSubresourceRange range{};
+    {
+        std::lock_guard<std::mutex> state_lock(m_state_mutex);
+        image  = m_current_vk_image;
+        format = m_current_format;
+        layout = m_current_layout;
+        range  = m_current_subresource_range;
+    }
+
+    if (image == VK_NULL_HANDLE)
     {
         LogError("VulkanContext::ReadbackToPixels: no current image set");
         SignalPendingSemaphoreLocked();
@@ -712,7 +736,7 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 
     // Transition: current layout → TRANSFER_SRC_OPTIMAL
     const bool need_layout_transition =
-        (m_current_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        (layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
     if (need_layout_transition)
     {
@@ -720,12 +744,12 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         barrier.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                       VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.oldLayout           = m_current_layout;
+        barrier.oldLayout           = layout;
         barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image               = m_current_vk_image;
-        barrier.subresourceRange    = m_current_subresource_range;
+        barrier.image               = image;
+        barrier.subresourceRange    = range;
 
         vkCmdPipelineBarrier(m_cmd_buf,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
@@ -741,12 +765,12 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     copy.bufferImageHeight = 0; // tightly packed
     copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     copy.imageSubresource.mipLevel       = 0;
-    copy.imageSubresource.baseArrayLayer = m_current_subresource_range.baseArrayLayer;
+    copy.imageSubresource.baseArrayLayer = range.baseArrayLayer;
     copy.imageSubresource.layerCount     = 1;
     copy.imageOffset = { 0, 0, 0 };
     copy.imageExtent = { width, height, 1 };
 
-    vkCmdCopyImageToBuffer(m_cmd_buf, m_current_vk_image,
+    vkCmdCopyImageToBuffer(m_cmd_buf, image,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_staging_buf, 1, &copy);
 
     // Transition image back to its original layout
@@ -757,11 +781,11 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         barrier.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                       VK_ACCESS_SHADER_READ_BIT;
         barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout           = m_current_layout;
+        barrier.newLayout           = layout;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image               = m_current_vk_image;
-        barrier.subresourceRange    = m_current_subresource_range;
+        barrier.image               = image;
+        barrier.subresourceRange    = range;
 
         vkCmdPipelineBarrier(m_cmd_buf,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -818,9 +842,9 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     const uint8_t* src = static_cast<const uint8_t*>(mapped);
 
     // Normalize BGRA formats to RGBA (Godot Image::FORMAT_RGBA8 expects R first)
-    if (m_current_format == VK_FORMAT_B8G8R8A8_UNORM ||
-        m_current_format == VK_FORMAT_B8G8R8A8_SRGB  ||
-        m_current_format == VK_FORMAT_B8G8R8A8_SNORM)
+    if (format == VK_FORMAT_B8G8R8A8_UNORM ||
+        format == VK_FORMAT_B8G8R8A8_SRGB  ||
+        format == VK_FORMAT_B8G8R8A8_SNORM)
     {
         const uint32_t pixel_count = width * height;
         for (uint32_t i = 0; i < pixel_count; ++i)
