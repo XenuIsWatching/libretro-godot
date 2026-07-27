@@ -69,6 +69,10 @@ private:
 #ifdef _WIN32
     void* m_hidden_hwnd = nullptr;
 #endif
+#ifdef __ANDROID__
+    void* m_mediandk       = nullptr;  // libmediandk.so handle
+    void* m_android_reader = nullptr;  // AImageReader* backing m_surface
+#endif
 
     std::mutex m_queue_mutex;
 

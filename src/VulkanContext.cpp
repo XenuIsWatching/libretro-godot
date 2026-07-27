@@ -14,6 +14,11 @@
 #include <vulkan/vulkan_win32.h>
 #endif
 
+#ifdef __ANDROID__
+#include <vulkan/vulkan_android.h>
+#include "DynLib.hpp"
+#endif
+
 // Flip this to 1 and rebuild to opt back into Vulkan validation. Off by
 // default: the editor process is always debug-tagged, so OS::is_debug_build()
 // below can't tell "editor Play" apart from "real debug testing" — leaving
@@ -25,6 +30,30 @@ using namespace godot;
 
 namespace Xenu
 {
+
+#ifdef __ANDROID__
+// AImageReader hands out an ANativeWindow with no JNI or Java Surface
+// plumbing. The NDK only declares it at API 24+, so it's resolved out of
+// libmediandk.so at runtime instead — that keeps the build's API level from
+// deciding whether Vulkan cores can get a surface.
+namespace
+{
+struct AImageReaderOpaque;
+
+using PFN_AImageReader_new =
+    int32_t (*)(int32_t width, int32_t height, int32_t format, int32_t max_images,
+                AImageReaderOpaque** reader);
+using PFN_AImageReader_newWithUsage =
+    int32_t (*)(int32_t width, int32_t height, int32_t format, uint64_t usage,
+                int32_t max_images, AImageReaderOpaque** reader);
+using PFN_AImageReader_getWindow = int32_t (*)(AImageReaderOpaque* reader, ANativeWindow** window);
+using PFN_AImageReader_delete    = void (*)(AImageReaderOpaque* reader);
+
+constexpr int32_t  kAImageFormatRGBA8888   = 0x1;
+constexpr uint64_t kAHBUsageGpuSampled     = 1ULL << 8;
+constexpr uint64_t kAHBUsageGpuFramebuffer = 1ULL << 9;
+} // namespace
+#endif
 
 // ---------------------------------------------------------------------------
 // Static callback trampolines
@@ -164,6 +193,9 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 #ifdef _WIN32
         inst_exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #endif
+#ifdef __ANDROID__
+        inst_exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+#endif
         inst_exts.push_back("VK_KHR_get_physical_device_properties2");
         inst_exts.push_back("VK_KHR_get_surface_capabilities2");
         inst_exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -295,6 +327,70 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
                     LogWarning("VulkanContext: vkCreateWin32SurfaceKHR failed: " + std::to_string(r));
                 else
                     LogOK("VulkanContext: VkSurfaceKHR created.");
+            }
+        }
+    }
+#elif defined(__ANDROID__)
+    {
+        // Nothing is ever presented to this surface: PPSSPP fakes its whole
+        // swapchain and delivers frames through set_image. But it still runs
+        // its full desktop bring-up on whatever handle we pass to
+        // create_device — its hooked vkCreate*SurfaceKHR just hands ours back,
+        // so ReinitSurface() "succeeds" on a null one and ChooseQueue() then
+        // aborts the process querying formats for it. An offscreen
+        // ImageReader window is all the surface has to be.
+        m_mediandk = DynLib_Open("libmediandk.so");
+        if (!m_mediandk)
+        {
+            LogWarning("VulkanContext: libmediandk.so unavailable; no VkSurfaceKHR.");
+        }
+        else
+        {
+            auto readerNew = reinterpret_cast<PFN_AImageReader_new>(
+                DynLib_Sym(m_mediandk, "AImageReader_new"));
+            auto readerNewWithUsage = reinterpret_cast<PFN_AImageReader_newWithUsage>(
+                DynLib_Sym(m_mediandk, "AImageReader_newWithUsage"));
+            auto readerGetWindow = reinterpret_cast<PFN_AImageReader_getWindow>(
+                DynLib_Sym(m_mediandk, "AImageReader_getWindow"));
+
+            // Dimensions are irrelevant — the core overrides the reported
+            // surface extent with its own internal resolution.
+            AImageReaderOpaque* reader = nullptr;
+            if (readerNewWithUsage)
+                readerNewWithUsage(640, 480, kAImageFormatRGBA8888,
+                                   kAHBUsageGpuSampled | kAHBUsageGpuFramebuffer,
+                                   2, &reader);
+            else if (readerNew)
+                readerNew(640, 480, kAImageFormatRGBA8888, 2, &reader);
+
+            m_android_reader = reader;
+
+            ANativeWindow* window = nullptr;
+            if (reader && readerGetWindow)
+                readerGetWindow(reader, &window);
+
+            if (!window)
+            {
+                LogWarning("VulkanContext: AImageReader gave no ANativeWindow; no VkSurfaceKHR.");
+            }
+            else
+            {
+                auto createSurface = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(
+                    vkGetInstanceProcAddr(m_instance, "vkCreateAndroidSurfaceKHR"));
+                if (!createSurface)
+                {
+                    LogWarning("VulkanContext: vkCreateAndroidSurfaceKHR unavailable.");
+                }
+                else
+                {
+                    VkAndroidSurfaceCreateInfoKHR sci{ VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
+                    sci.window = window;
+                    VkResult r = createSurface(m_instance, &sci, nullptr, &m_surface);
+                    if (r != VK_SUCCESS)
+                        LogWarning("VulkanContext: vkCreateAndroidSurfaceKHR failed: " + std::to_string(r));
+                    else
+                        LogOK("VulkanContext: VkSurfaceKHR created.");
+                }
             }
         }
     }
@@ -474,6 +570,25 @@ void VulkanContext::Destroy()
     {
         DestroyWindow(static_cast<HWND>(m_hidden_hwnd));
         m_hidden_hwnd = nullptr;
+    }
+#endif
+
+#ifdef __ANDROID__
+    // Strictly after vkDestroySurfaceKHR above — the surface holds a reference
+    // on the reader's ANativeWindow.
+    if (m_android_reader && m_mediandk)
+    {
+        auto readerDelete = reinterpret_cast<PFN_AImageReader_delete>(
+            DynLib_Sym(m_mediandk, "AImageReader_delete"));
+        if (readerDelete)
+            readerDelete(static_cast<AImageReaderOpaque*>(m_android_reader));
+    }
+    m_android_reader = nullptr;
+
+    if (m_mediandk)
+    {
+        DynLib_Close(m_mediandk);
+        m_mediandk = nullptr;
     }
 #endif
 
