@@ -40,6 +40,28 @@ if is_windows:
 
 if is_android:
     env.Append(CXXFLAGS=["-std=c++20"])
+    # libretro-common keys all its NEON paths off __ARM_NEON__, the ARMv7-era
+    # spelling. Clang for aarch64 defines __ARM_NEON (no trailing underscores),
+    # so every one of them silently compiles out and the Quest runs scalar C.
+    #
+    # BOTH defines are needed and they do different jobs:
+    #   HAVE_NEON     - compiles the NEON code in sinc_resampler.c
+    #   __ARM_NEON__  - makes features_cpu.c set RETRO_SIMD_NEON, which is what
+    #                   the resampler's runtime dispatch actually tests. With
+    #                   only HAVE_NEON the code is present but never selected:
+    #                   the mask reports ASIMD, the dispatch asks for NEON, and
+    #                   the branch body is empty. Measured on Quest 3, 32040 ->
+    #                   44100 Hz: scalar 33.5 us/batch, HAVE_NEON alone 33.1
+    #                   (i.e. unchanged), both defines 20.7 -- a 1.62x win.
+    #
+    # Also switches pixconv.c and s16_to_float.c to their NEON paths; both were
+    # verified to compile for arm64. features_cpu.c's ARMv7-only sub-path is
+    # guarded by __arm__, which aarch64 does not define, so it stays out.
+    #
+    # Do NOT define HAVE_ARM_NEON_ASM_OPTIMIZATIONS: that selects
+    # sinc_resampler_neon.S, which is ARMv7 assembly (.arm, push {r4, lr},
+    # vmov.f32 q0) and cannot assemble for arm64 at all.
+    env.Append(CPPDEFINES=["HAVE_NEON", "__ARM_NEON__"])
     env.Append(LIBS=["dl", "log", "EGL", "GLESv3", "vulkan"])
 
 if is_linux:
@@ -77,6 +99,16 @@ sources.remove(File("external/libretro-common/compat/compat_ifaddrs.c"))
 sources.extend(Glob("external/libretro-common/encodings/*.c"))
 
 sources.append("external/libretro-common/audio/conversion/s16_to_float.c")
+# Cores declare their own sample rate; the Meta XR Audio context runs at Godot's
+# mix rate, so AudioHandler resamples on the emulation thread.
+sources.append("external/libretro-common/audio/resampler/audio_resampler.c")
+# audio_resampler.c hands the driver a config_userdata vtable
+sources.append("external/libretro-common/file/config_file_userdata.c")
+sources.append("external/libretro-common/file/config_file.c")
+sources.append("external/libretro-common/lists/string_list.c")
+sources.append("external/libretro-common/audio/resampler/drivers/sinc_resampler.c")
+sources.append("external/libretro-common/audio/resampler/drivers/nearest_resampler.c")
+sources.append("external/libretro-common/memmap/memalign.c")
 sources.append("external/libretro-common/features/features_cpu.c")
 sources.append("external/libretro-common/gfx/scaler/pixconv.c")
 sources.append("external/libretro-common/string/stdstring.c")

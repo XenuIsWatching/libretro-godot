@@ -1,6 +1,7 @@
 #pragma once
 
 #include <godot_cpp/classes/node3d.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -114,6 +115,9 @@ public:
 
     /// Returns per-port controller info as Array[Dictionary{port, controllers: Array[{name,id}], current_id}].
     godot::Array GetControllerInfo();
+    /// Meta XR Audio voice ids this core's sound is spatialised through, or
+    /// empty when it is running on the fallback AudioStreamPlayer3D.
+    godot::PackedInt32Array GetAudioVoiceIds();
 
     /// Tell the running core which device type is active on a given port.
     void SetControllerPortDevice(int port, int device);

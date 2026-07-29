@@ -1,6 +1,7 @@
 #include "Libretro.hpp"
 
 #include "Wrapper.hpp"
+#include "AudioHandler.hpp"
 
 using namespace godot;
 
@@ -42,6 +43,13 @@ void Libretro::SetCoreOption(const godot::String& key, const godot::String& valu
 void Libretro::SetInputEnabled(bool enabled)
 {
     m_wrapper->m_input_enabled = enabled;
+}
+
+godot::PackedInt32Array Libretro::GetAudioVoiceIds()
+{
+    if (!m_wrapper || !m_wrapper->m_audio_handler)
+        return godot::PackedInt32Array();
+    return m_wrapper->m_audio_handler->GetVoiceIds();
 }
 
 godot::Array Libretro::GetControllerInfo()
@@ -272,6 +280,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
+    ClassDB::bind_method(D_METHOD("GetAudioVoiceIds"), &Libretro::GetAudioVoiceIds);
     ClassDB::bind_method(D_METHOD("SetControllerPortDevice", "port", "device"), &Libretro::SetControllerPortDevice);
     ClassDB::bind_method(D_METHOD("SetLightgunPosition", "port", "x", "y"), &Libretro::SetLightgunPosition);
     ClassDB::bind_method(D_METHOD("SetLightgunIsOffscreen", "port", "offscreen"), &Libretro::SetLightgunIsOffscreen);
