@@ -52,13 +52,16 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         }
         else
         {
-            // OpenGL path: read pixels from the current framebuffer
+            // OpenGL path: read pixels from the current framebuffer.
+            //
+            // Deliberately NOT followed by a buffer swap. get_current_framebuffer()
+            // hands the core FBO 0 — the back buffer of a hidden, never-presented
+            // window that exists only to own the GL context. Swapping it rotated
+            // front/back under the core, so it drew each frame into the buffer
+            // holding the frame before last. Cores that repaint every pixel hid
+            // this; ScummVM updates only dirty rectangles, so the two buffers
+            // diverged and the picture alternated between two half-stale images.
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
-#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
-            SDL_GL_SwapWindow(instance->m_video_handler->m_sdl_window);
-#elif defined(__ANDROID__)
-            eglSwapBuffers(instance->m_video_handler->m_egl_display, instance->m_video_handler->m_egl_surface);
-#endif
         }
 
         if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
