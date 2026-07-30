@@ -51,7 +51,12 @@ void Wrapper::SetCurrentThreadWrapper(Wrapper* wrapper)
         s_fallback_wrapper.store(wrapper, std::memory_order_release);
 }
 
-static retro_key GodotToLibretroKeycode(const Ref<InputEventKey>& keyEvent)
+// Godot reports both Shift/Ctrl/Alt/Super keys under one keycode, so the whole
+// event is needed: get_location() picks the left or right RETROK_* variant. Kept
+// in C++ and exposed to GDScript (Libretro::GodotKeyToRetroKey) so there is only
+// one copy of this table — retro_keyboard.gd decides *when* to send a key, this
+// only translates it.
+retro_key Wrapper::GodotKeyToRetroKey(const Ref<InputEventKey>& keyEvent)
 {
     switch (keyEvent->get_keycode())
     {
@@ -1236,109 +1241,6 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
     m_options_handler->SetVariable(key, value);
     SetCurrentThreadWrapper(nullptr);
     Log("SetCoreOption: done");
-}
-
-void Wrapper::_input(const godot::Ref<godot::InputEvent>& event)
-{
-    if (!m_running)
-        return;
-
-    Ref<InputEventMouseMotion> mouseMotion = event;
-    if (mouseMotion.is_valid())
-    {
-        auto mouseMotionValue = mouseMotion->get_relative();
-        m_input_handler->SetMousePosition(0, ToShort(mouseMotionValue.x), ToShort(mouseMotionValue.y));
-    }
-
-    Ref<InputEventMouseButton> mouseButton = event;
-    if (mouseButton.is_valid())
-    {
-        int button_index = mouseButton->get_button_index();
-        bool pressed     = mouseButton->is_pressed();
-
-        auto buttons = m_input_handler->GetMouseButtons(0);
-
-        switch (button_index)
-        {
-            case MouseButton::MOUSE_BUTTON_LEFT:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_LEFT);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_LEFT);
-                break;
-            case MouseButton::MOUSE_BUTTON_RIGHT:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_RIGHT);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_RIGHT);
-                break;
-            case MouseButton::MOUSE_BUTTON_MIDDLE:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_MIDDLE);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_MIDDLE);
-                break;
-            case MouseButton::MOUSE_BUTTON_WHEEL_UP:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_WHEELUP);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_WHEELUP);
-                break;
-            case MouseButton::MOUSE_BUTTON_WHEEL_DOWN:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_WHEELDOWN);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_WHEELDOWN);
-                break;
-            case MouseButton::MOUSE_BUTTON_WHEEL_LEFT:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELUP);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELUP);
-                break;
-            case MouseButton::MOUSE_BUTTON_WHEEL_RIGHT:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELDOWN);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELDOWN);
-                break;
-            case MouseButton::MOUSE_BUTTON_XBUTTON1:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_BUTTON_4);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_BUTTON_4);
-                break;
-            case MouseButton::MOUSE_BUTTON_XBUTTON2:
-                if (pressed)
-                    buttons |= (1 << RETRO_DEVICE_ID_MOUSE_BUTTON_5);
-                else
-                    buttons &= ~(1 << RETRO_DEVICE_ID_MOUSE_BUTTON_5);
-                break;
-            default:
-                print_line_rich("[color=red][libretro-godot][/color] Unhandled mouse button: " + String::num_int64(button_index));
-                break;
-        }
-
-        m_input_handler->SetMouseButtons(0, buttons);
-    }
-
-    Ref<InputEventKey> keyEvent = event;
-    if (keyEvent.is_valid())
-    {
-        // A held RetroKeyboard object owns the OS-keyboard feed (it routes
-        // keys itself, including into the netplay schedule) — skip the raw
-        // path so events aren't double-fed.
-        if (m_os_keyboard_captured.load(std::memory_order_relaxed))
-            return;
-        bool down          = keyEvent->is_pressed();
-        uint32_t keycode   = GodotToLibretroKeycode(keyEvent);
-        uint32_t character = keyEvent->get_unicode();
-        // SetKeyState maintains the full RETROK bitset (the old uint32 mask
-        // overflowed for keycodes >= 32), derives modifiers from held keys,
-        // fires the core's keyboard event callback, and blocks itself during
-        // netplay (keyboard rides the deterministic schedule there).
-        SetKeyState(0, keycode, down, character);
-    }
 }
 
 void Wrapper::_process(double delta)

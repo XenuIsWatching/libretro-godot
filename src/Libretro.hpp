@@ -4,6 +4,7 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
+#include <godot_cpp/classes/input_event_key.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 
 #include <memory>
@@ -137,7 +138,9 @@ public:
     /// callback (modifiers derived from held keys). Feed port 0.
     void SetKeyState(int port, int keycode, bool down, int character);
     /// True while a physical RetroKeyboard object owns the OS-keyboard feed.
-    void SetOsKeyboardCapture(bool captured);
+    /// Godot key event -> RETROK_* code. The application decides when to send a
+    /// key (retro_keyboard.gd); this is only the lookup table.
+    int GodotKeyToRetroKey(const godot::Ref<godot::InputEventKey>& event) const;
 
     /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
     /// Fed each frame from a held handheld's physical orientation.
@@ -201,7 +204,6 @@ public:
     void ConnectOptionsReady(const godot::Callable& callable, uint32_t flags = 0u);
 
     void _exit_tree() override;
-    void _input(const godot::Ref<godot::InputEvent>& event) override;
     void _process(double delta) override;
 
     /// Called from the emulation thread (via Wrapper::m_libretro_node) when options are ready.

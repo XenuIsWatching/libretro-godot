@@ -8,6 +8,7 @@
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
+#include <godot_cpp/classes/input_event_key.hpp>
 
 #include <thread>
 #include <mutex>
@@ -98,10 +99,11 @@ public:
     /// Keyboard state is global in practice — feed port 0.
     void SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t character);
 
-    /// A physical RetroKeyboard object owns the OS-keyboard feed for this
-    /// instance: suppress the raw OS-keyboard block in _input so keys aren't
-    /// double-fed (the object routes them itself, incl. through netplay).
-    void SetOsKeyboardCapture(bool captured) { m_os_keyboard_captured = captured; }
+    /// Translate a Godot key event to its RETROK_* code. Static and side-effect
+    /// free: the application decides when a key should reach a core (see
+    /// retro_keyboard.gd), this only does the lookup. Takes the whole event
+    /// because get_location() selects the left/right modifier variant.
+    static retro_key GodotKeyToRetroKey(const godot::Ref<godot::InputEventKey>& keyEvent);
 
     /// Per-port mouse input (RETRO_DEVICE_MOUSE) for physical mouse objects.
     /// dx/dy are relative deltas ACCUMULATED until the core's next read;
@@ -250,7 +252,6 @@ public:
     void ApplyNetplayAux(const NpFrame& inputs);
     void FlushNetplayCrcs();
 
-    void _input(const godot::Ref<godot::InputEvent>& event);
     void _process(double delta);
 
     godot::MeshInstance3D* m_node;
@@ -284,7 +285,6 @@ public:
     std::atomic<bool> m_stopping = false;
     std::atomic<bool> m_thread_exited = false;
     bool m_input_enabled = false;   // only true for the actively-controlled instance
-    std::atomic<bool> m_os_keyboard_captured = false;   // RetroKeyboard object owns OS keys
 
     // Desired device per port, surviving across content runs. A controller (or
     // mouse) plugged in while the system is OFF records its device type here;

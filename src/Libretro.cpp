@@ -101,9 +101,11 @@ void Libretro::SetKeyState(int port, int keycode, bool down, int character)
         static_cast<uint32_t>(keycode), down, static_cast<uint32_t>(character));
 }
 
-void Libretro::SetOsKeyboardCapture(bool captured)
+int Libretro::GodotKeyToRetroKey(const Ref<InputEventKey>& event) const
 {
-    m_wrapper->SetOsKeyboardCapture(captured);
+    if (event.is_null())
+        return 0;
+    return static_cast<int>(Wrapper::GodotKeyToRetroKey(event));
 }
 
 void Libretro::SetSensorAccel(int port, float x, float y, float z)
@@ -204,11 +206,6 @@ void Libretro::_exit_tree()
     m_wrapper->ShutdownForExit();
 }
 
-void Libretro::_input(const Ref<InputEvent>& event)
-{
-    m_wrapper->_input(event);
-}
-
 void Libretro::_process(double delta)
 {
     m_wrapper->_process(delta);
@@ -288,7 +285,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
     ClassDB::bind_method(D_METHOD("SetMouseState", "port", "dx", "dy", "buttons"), &Libretro::SetMouseState);
     ClassDB::bind_method(D_METHOD("SetKeyState", "port", "keycode", "down", "character"), &Libretro::SetKeyState);
-    ClassDB::bind_method(D_METHOD("SetOsKeyboardCapture", "captured"), &Libretro::SetOsKeyboardCapture);
+    ClassDB::bind_method(D_METHOD("GodotKeyToRetroKey", "event"), &Libretro::GodotKeyToRetroKey);
     ClassDB::bind_method(D_METHOD("SetSensorAccel", "port", "x", "y", "z"), &Libretro::SetSensorAccel);
     ClassDB::bind_method(D_METHOD("SetPointerState", "port", "x", "y", "pressed"), &Libretro::SetPointerState);
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
