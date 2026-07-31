@@ -840,7 +840,7 @@ void Wrapper::LoadSramFromSource()
 
 /// Emu thread: write SAVE_RAM to the backing file iff it changed since the
 /// last flush. Never deletes or truncates an existing file to nothing.
-void Wrapper::FlushSramIfDirty()
+void Wrapper::FlushSramIfDirty(bool final_flush)
 {
     if (m_sram_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
         return;
@@ -861,14 +861,23 @@ void Wrapper::FlushSramIfDirty()
         return;
     }
     file.write(static_cast<const char*>(sram), size);
+    file.close();
     m_sram_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
     Log("SRAM: flushed " + std::to_string(size) + " bytes to " + m_sram_path);
+
+    // Closed above so the file is complete on disk before anyone is told about
+    // it — a listener that uploads must never read a half-written save.
+    if (m_libretro_node)
+        m_libretro_node->NotifySramFlushed(
+            godot::String(m_sram_path.c_str()), static_cast<int64_t>(size), final_flush);
 }
 
 /// Emu thread: memory-card hot-swap — flush the old card, adopt the new one.
 void Wrapper::ApplySramSwap(const std::string& new_path)
 {
-    FlushSramIfDirty();
+    // Final for the outgoing file: nothing will write to it again this run, so
+    // a listener should treat it as committed rather than debounce it.
+    FlushSramIfDirty(true);
     m_sram_path = new_path;
     m_sram_pending = godot::PackedByteArray();
     LoadSramFromSource();
@@ -1707,7 +1716,7 @@ void Wrapper::EmulationThreadLoop()
     }
     // Final battery-save flush while the core memory is still valid. Injected
     // netplay SRAM is one-shot — clear it so a later offline run loads its own.
-    FlushSramIfDirty();
+    FlushSramIfDirty(true);
     m_sram_pending = godot::PackedByteArray();
 
     m_video_handler->NotifyContextDestroy();

@@ -209,6 +209,11 @@ public:
     /// Called from the emulation thread (via Wrapper::m_libretro_node) when options are ready.
     void NotifyOptionsReady();
 
+    /// Called from the emulation thread after SAVE_RAM was actually written to
+    /// disk — i.e. only when the dirty check found a change. `final` marks the
+    /// flush at core shutdown, the last one for this run.
+    void NotifySramFlushed(const godot::String& path, int64_t size, bool final_flush);
+
 private:
     std::unique_ptr<Wrapper> m_wrapper;
 

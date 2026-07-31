@@ -178,7 +178,9 @@ public:
 
     // Emulation-thread internals (SRAM).
     void LoadSramFromSource();
-    void FlushSramIfDirty();
+    /// `final_flush` marks the flush at core shutdown; it only labels the
+    /// signal, the write itself is identical.
+    void FlushSramIfDirty(bool final_flush = false);
     void ApplySramSwap(const std::string& new_path);
 
     /// Serialize the core on the emulation thread; result arrives via the

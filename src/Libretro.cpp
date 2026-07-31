@@ -219,6 +219,11 @@ void Libretro::NotifyOptionsReady()
     call_deferred("emit_signal", "options_ready", categories, definitions, current_values);
 }
 
+void Libretro::NotifySramFlushed(const String& path, int64_t size, bool final_flush)
+{
+    call_deferred("emit_signal", "sram_flushed", path, size, final_flush);
+}
+
 Dictionary Libretro::GetOptionCategories()
 {
     Dictionary result;
@@ -316,6 +321,13 @@ void Libretro::_bind_methods()
     ADD_SIGNAL(MethodInfo("netplay_crc",
         PropertyInfo(Variant::INT, "frame"),
         PropertyInfo(Variant::INT, "crc")));
+    /// SAVE_RAM reached disk. Only fires when the dirty check found a change,
+    /// so it is the real "the game saved" event, not a timer tick. `final` is
+    /// the flush at core shutdown.
+    ADD_SIGNAL(MethodInfo("sram_flushed",
+        PropertyInfo(Variant::STRING, "path"),
+        PropertyInfo(Variant::INT,    "size"),
+        PropertyInfo(Variant::BOOL,   "final")));
 
     ADD_SIGNAL(MethodInfo("options_ready", PropertyInfo(Variant::DICTIONARY, "categories"), PropertyInfo(Variant::DICTIONARY, "definitions"), PropertyInfo(Variant::DICTIONARY, "current_values")));
     ADD_SIGNAL(MethodInfo("rumble_state_changed",
