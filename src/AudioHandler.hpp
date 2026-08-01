@@ -8,6 +8,7 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -33,12 +34,14 @@ public:
 
     void CallAudioBufferStatusCallback();
 
-    /// True when the buffer lacks room for the next batch, so running another
-    /// frame would overflow it and drop samples mid-waveform. Sized from the
-    /// largest batch seen rather than a fixed fraction: one retro_run of a 30fps
-    /// 3DS title lands ~33ms of audio at once, which a quarter of a 125ms buffer
-    /// does not cover. A core that has produced no audio never reports saturated.
-    bool IsBufferSaturated() const;
+    /// Audio frames the core has produced since Init, counted at the core's own
+    /// declared sample rate (i.e. before resampling to the mixer's rate).
+    ///
+    /// This is the frontend's only measure of *emulated* time. retro_run covers
+    /// a variable number of display refreshes in some cores, but every core emits
+    /// samples in proportion to game time, so the sample count is what the
+    /// emulation thread paces against.
+    uint64_t FramesProduced() const { return m_frames_produced.load(std::memory_order_relaxed); }
 
     /// The Meta XR Audio voice ids this core is being spatialised through, or
     /// empty when running on the fallback AudioStreamPlayer3D. GDScript
@@ -74,9 +77,10 @@ private:
     double   m_audio_sample_rate = 0.0;
     uint32_t m_audio_buffer_total_frames = 0;
     uint32_t m_audio_buffer_occupancy = 0;
-    /// Largest batch seen, in OUTPUT frames (post-resample), because that is the
-    /// unit the queue is measured in.
-    uint32_t m_audio_max_batch_frames = 0;
+    /// Written by the audio callbacks (emulation thread, inside retro_run) and
+    /// read by the pacing loop on that same thread; atomic only so exposing it
+    /// elsewhere later cannot become a data race.
+    std::atomic<uint64_t> m_frames_produced{0};
     retro_audio_buffer_status_callback_t m_audio_buffer_status_callback = nullptr;
     uint32_t m_minimum_audio_latency = 0;
 

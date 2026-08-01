@@ -30,6 +30,8 @@ void AudioHandler::SampleCallback(int16_t left, int16_t right)
     if (instance->IsNetplayReplaying())
         return;
 
+    instance->m_audio_handler->m_frames_produced.fetch_add(1, std::memory_order_relaxed);
+
     // Single-sample path: too short to resample meaningfully, and cores that
     // use it are rare. Push straight through at the core's rate.
     const float frame[2] = { left / 32768.0f, right / 32768.0f };
@@ -53,6 +55,9 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
     // Rollback replay: drop re-run audio (already played on the first run).
     if (instance->IsNetplayReplaying())
         return frames;
+
+    // Emulated-time clock — counted at the core's rate, so before resampling.
+    self->m_frames_produced.fetch_add(frames, std::memory_order_relaxed);
 
     const uint32_t total = self->EffectiveTotalFrames();
     if (total > 0)
@@ -98,11 +103,6 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
 {
     if (frames == 0)
         return;
-
-    // Batch size drives the pacing headroom — see IsBufferSaturated. Tracked in
-    // OUTPUT frames so it is comparable with the queue depth.
-    if (frames > m_audio_max_batch_frames)
-        m_audio_max_batch_frames = static_cast<uint32_t>(frames);
 
     if (m_use_sdk)
     {
@@ -151,33 +151,11 @@ uint32_t AudioHandler::EffectiveTotalFrames() const
     return m_audio_buffer_total_frames;
 }
 
-bool AudioHandler::IsBufferSaturated() const
-{
-    // A core that has never produced a sample (silent homebrew) would otherwise
-    // read as permanently saturated and stall the emulation thread outright.
-    const uint32_t total = EffectiveTotalFrames();
-    if (total == 0 || m_audio_max_batch_frames == 0)
-        return false;
-    if (!m_use_sdk && m_audio_stream_generator_playback.is_null())
-        return false;
-
-    // Room for the next batch and half again. Capped so a core whose batch
-    // rivals the whole buffer throttles instead of deadlocking on a threshold
-    // it can never satisfy — there the samples have to drop.
-    uint32_t headroom = m_audio_max_batch_frames + m_audio_max_batch_frames / 2;
-    const uint32_t ceiling = (total * 3) / 4;
-    if (headroom > ceiling)
-        headroom = ceiling;
-
-    const uint32_t queued = QueuedFrames();
-    const uint32_t available = (total > queued) ? total - queued : 0;
-    return available < headroom;
-}
-
 void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 {
     m_audio_buffer_capacity_sec = buffer_capacity_sec;
     m_audio_sample_rate = sample_rate;
+    m_frames_produced.store(0, std::memory_order_relaxed);
 
     AudioServer* audio = AudioServer::get_singleton();
     m_mix_rate = audio ? audio->get_mix_rate() : 48000.0;

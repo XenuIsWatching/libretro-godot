@@ -1569,10 +1569,25 @@ void Wrapper::EmulationThreadLoop()
     // early and taking the last stretch on the clock beats oversleeping frames.
     constexpr double SLEEP_MARGIN_MS = 1.5;
 
-    // How long audio-driven pacing may hold frames back before giving up and
-    // letting samples drop instead. Bounds the worst case if the mixer stops.
-    constexpr double MAX_AUDIO_STALL_MS = 250.0;
-    double audio_stall_ms = 0.0;
+    // Emulated-time clock. The declared fps says how often to call retro_run, not
+    // how much game time a call covers, and for some cores those differ: azahar
+    // returns when the *game* presents (citra_libretro.cpp spins RunLoop until
+    // HasSubmittedFrame), so a 30fps title advances two 60Hz refreshes per call
+    // while still declaring 60 — driven at the declaration it emulates at double
+    // speed. Audio is the one quantity a core emits strictly in proportion to
+    // emulated time, so bill each frame the game time its samples account for and
+    // let real time pay for it. The declared fps is then only a hint.
+    //
+    // Billing is floored at the declared frame duration so a core that falls
+    // silent, or never produces audio at all, still paces at its declared rate
+    // rather than running unbilled.
+    const double sample_rate_hz = systemAvInfo.timing.sample_rate;
+    uint64_t audio_frames_seen = m_audio_handler->FramesProduced();
+    double credit_ms = 0.0;
+
+    // Unspent credit is capped so a stall is not repaid as fast-forward, the same
+    // bound the netplay accumulator uses.
+    const double MAX_CREDIT_MS = frame_duration_ms * 4.0;
 
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
@@ -1620,51 +1635,41 @@ void Wrapper::EmulationThreadLoop()
         double elapsed = std::chrono::duration<double, std::milli>(now - last_time).count();
         last_time = now;
         accumulator += elapsed;
+        credit_ms += elapsed;
+        if (credit_ms > MAX_CREDIT_MS)
+            credit_ms = MAX_CREDIT_MS;
 
         if (!m_netplay_enabled.load(std::memory_order_acquire))
         {
-            // Cap catch-up debt after stalls, as the netplay path below does.
-            // Unclamped, a stall's whole duration is replayed back-to-back: the
-            // picture fast-forwards and a burst of frames' worth of samples
-            // overflows the audio buffer, which drops them mid-waveform.
-            if (accumulator > frame_duration_ms * 4.0)
-                accumulator = frame_duration_ms * 4.0;
-
-            // Sync to audio. A core does not necessarily advance one display
-            // refresh per retro_run: azahar returns when the *game* presents, so
-            // a 30fps title advances two 60Hz frames per call and, driven at the
-            // declared 60fps, runs at double speed — audible first as the audio
-            // buffer overflowing. Letting the mixer set the pace throttles the
-            // core to real time whatever its internal frame rate.
-            const bool audio_saturated = m_audio_handler->IsBufferSaturated();
-            audio_stall_ms = audio_saturated ? audio_stall_ms + elapsed : 0.0;
-
-            // Never let a sink that stopped draining halt the game: past the
-            // limit, run anyway and drop samples as before. Losing audio focus
-            // to the system overlay would otherwise freeze emulation outright.
-            if (audio_saturated && audio_stall_ms < MAX_AUDIO_STALL_MS)
-                accumulator = 0.0;
-
-            while (accumulator >= frame_duration_ms)
+            // Real time buys credit; emulated time spends it. Steady state is
+            // one emulated second per wall second whatever the core's internal
+            // frame rate, and no threshold has to be tuned to get there.
+            while (credit_ms > 0.0)
             {
                 m_audio_handler->CallAudioBufferStatusCallback();
 
                 m_core->retro_run();
                 m_frame_counter.fetch_add(1, std::memory_order_relaxed);
 
-                accumulator -= frame_duration_ms;
+                const uint64_t produced = m_audio_handler->FramesProduced();
+                double cost_ms = 0.0;
+                if (sample_rate_hz > 0.0 && produced > audio_frames_seen)
+                    cost_ms = 1000.0 * static_cast<double>(produced - audio_frames_seen)
+                            / sample_rate_hz;
+                audio_frames_seen = produced;
+
+                credit_ms -= (cost_ms > frame_duration_ms) ? cost_ms : frame_duration_ms;
             }
 
-
-            // Wait out the rest of the frame instead of spinning the clock. The
-            // busy-wait cost a whole core, which on Quest is one the main thread
-            // needs — the spin helped cause the stalls it then raced to catch up
-            // on. Leave a margin for coarse sleep granularity; whatever the sleep
-            // overshoots lands in the accumulator, so the frame rate stays honest.
-            const double remaining = frame_duration_ms - accumulator;
-            if (remaining > SLEEP_MARGIN_MS)
+            // Wait out the overdraft instead of spinning the clock. The busy-wait
+            // cost a whole core, which on Quest is one the main thread needs — the
+            // spin helped cause the stalls it then raced to catch up on. Leave a
+            // margin for coarse sleep granularity; whatever the sleep overshoots
+            // is bought back as credit, so the rate stays honest.
+            const double overdraft = -credit_ms;
+            if (overdraft > SLEEP_MARGIN_MS)
                 std::this_thread::sleep_for(
-                    std::chrono::duration<double, std::milli>(remaining - SLEEP_MARGIN_MS));
+                    std::chrono::duration<double, std::milli>(overdraft - SLEEP_MARGIN_MS));
             continue;
         }
 
