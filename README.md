@@ -175,3 +175,15 @@ All dependencies are included in `external/` or as submodules:
 - **libretro-common** — VFS, audio conversion, pixel format conversion, and the sinc
   audio resampler (core rate → device mix rate)
 - **moodycamel::ReaderWriterQueue** — Lock-free SPSC queue for cross-thread communication
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Ryan McClelland (XenuIsWatching),
+and (c) 2025 Skurdt for the SK.Libretro.Godot code this was forked from, whose notice
+is retained as the licence requires.
+
+Bundled dependencies keep their own licences: SDL3 (zlib, `external/SDL3/LICENSE.txt`),
+godot-cpp (MIT), vulkan-headers (Apache-2.0 OR MIT, see its `LICENSES/`), and
+libretro-common, which carries no top-level licence file — each source file states its
+own terms in its header (MIT, "The following license statement only applies to this
+file"), so consult the specific files listed in `Temp/SConscript`.
