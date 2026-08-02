@@ -2,6 +2,7 @@
 
 #include "Wrapper.hpp"
 #include "AudioHandler.hpp"
+#include "CoreOptionsPeek.hpp"
 
 using namespace godot;
 
@@ -213,9 +214,9 @@ void Libretro::_process(double delta)
 
 void Libretro::NotifyOptionsReady()
 {
-    auto categories     = GetOptionCategories();
-    auto definitions    = GetOptionDefinitions();
-    auto current_values = GetOptionValues();
+    auto categories     = ConvertOptionCategories(m_wrapper->GetOptionCategories());
+    auto definitions    = ConvertOptionDefinitions(m_wrapper->GetOptionDefinitions());
+    auto current_values = ConvertOptionValues(m_wrapper->GetOptionValues());
     call_deferred("emit_signal", "options_ready", categories, definitions, current_values);
 }
 
@@ -224,10 +225,28 @@ void Libretro::NotifySramFlushed(const String& path, int64_t size, bool final_fl
     call_deferred("emit_signal", "sram_flushed", path, size, final_flush);
 }
 
-Dictionary Libretro::GetOptionCategories()
+Dictionary Libretro::PeekCoreOptions(const String& root_directory, const String& core_name)
 {
     Dictionary result;
-    const auto& categories = m_wrapper->GetOptionCategories();
+
+    const std::string core_path = Wrapper::ResolveCorePath(
+        std::string(root_directory.utf8().get_data()),
+        std::string(core_name.utf8().get_data()));
+
+    // Qualified: the member function name would otherwise hide the free one.
+    OptionsHandler options;
+    if (!Xenu::PeekCoreOptions(core_path, options))
+        return result;
+
+    result["categories"]  = ConvertOptionCategories(options.GetCategories());
+    result["definitions"] = ConvertOptionDefinitions(options.GetDefinitions());
+    result["values"]      = ConvertOptionValues(options.GetValues());
+    return result;
+}
+
+Dictionary Libretro::ConvertOptionCategories(const std::unordered_map<std::string, OptionCategory>& categories)
+{
+    Dictionary result;
     for (const auto& [key, value] : categories)
     {
         Ref<LibretroOptionCategory> category = memnew(LibretroOptionCategory);
@@ -238,10 +257,9 @@ Dictionary Libretro::GetOptionCategories()
     return result;
 }
 
-Dictionary Libretro::GetOptionDefinitions()
+Dictionary Libretro::ConvertOptionDefinitions(const std::unordered_map<std::string, OptionDefinition>& definitions)
 {
     Dictionary result;
-    const auto& definitions = m_wrapper->GetOptionDefinitions();
     for (const auto& [key, value] : definitions)
     {
         Ref<LibretroOptionDefinition> definition = memnew(LibretroOptionDefinition);
@@ -264,10 +282,9 @@ Dictionary Libretro::GetOptionDefinitions()
     return result;
 }
 
-Dictionary Libretro::GetOptionValues()
+Dictionary Libretro::ConvertOptionValues(const std::unordered_map<std::string, std::string>& values)
 {
     Dictionary result;
-    const auto& values = m_wrapper->GetOptionValues();
     for (const auto& [key, value] : values)
         result[String(key.c_str())] = String(value.c_str());
     return result;
@@ -280,6 +297,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("SetScreenMesh", "node"), &Libretro::SetScreenMesh);
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);
+    ClassDB::bind_method(D_METHOD("PeekCoreOptions", "root_directory", "core_name"), &Libretro::PeekCoreOptions);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
     ClassDB::bind_method(D_METHOD("GetAudioVoiceIds"), &Libretro::GetAudioVoiceIds);

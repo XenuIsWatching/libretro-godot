@@ -63,6 +63,11 @@ public:
     /// run on the main thread and need access to the owning Wrapper.
     static void SetCurrentThreadWrapper(Wrapper* wrapper);
 
+    /// Locate a core inside <root>/cores, trying every filename convention the
+    /// platform can use. Shared with the pre-start option peek so both resolve
+    /// the same file for a given core name.
+    static std::string ResolveCorePath(const std::string& root_directory, const std::string& core_name);
+
     void StartContent(godot::MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path);
     void StopContent();
     /// Blocking stop for node teardown — joins and finishes teardown before

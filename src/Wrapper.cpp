@@ -312,7 +312,7 @@ static int16_t ToShort(float floatValue, int mul = 1)
 // an Android OUTPUT_NAME, so the buildbot ships it as "azahar_libretro.so".
 // Try every convention the platform can use and take the first that exists;
 // with none present, return the canonical name so the error names that file.
-static std::filesystem::path ResolveCorePath(const std::string& root_directory, const std::string& core_name)
+std::string Wrapper::ResolveCorePath(const std::string& root_directory, const std::string& core_name)
 {
     const std::filesystem::path cores_dir = std::filesystem::path(root_directory).append("cores");
 
@@ -330,9 +330,9 @@ static std::filesystem::path ResolveCorePath(const std::string& root_directory, 
     {
         std::filesystem::path candidate = cores_dir / (core_name + suffix);
         if (std::filesystem::is_regular_file(candidate))
-            return candidate;
+            return candidate.string();
     }
-    return cores_dir / (core_name + suffixes[0]);
+    return (cores_dir / (core_name + suffixes[0])).string();
 }
 
 void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path)

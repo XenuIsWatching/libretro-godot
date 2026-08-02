@@ -8,6 +8,10 @@
 #include <godot_cpp/variant/dictionary.hpp>
 
 #include <memory>
+#include <string>
+#include <unordered_map>
+
+#include "OptionsHandler.hpp"
 
 namespace Xenu
 {
@@ -214,12 +218,20 @@ public:
     /// flush at core shutdown, the last one for this run.
     void NotifySramFlushed(const godot::String& path, int64_t size, bool final_flush);
 
+    /// Read a core's option set without starting it, for menus that let the
+    /// player set options before launch. Returns a dictionary shaped like the
+    /// options_ready signal — "categories", "definitions", "values" — with each
+    /// option sitting at its core-declared default. Empty if the core could not
+    /// be read. Blocking, but only as long as a dlopen plus the core's static
+    /// initialisers; no emulation is started.
+    godot::Dictionary PeekCoreOptions(const godot::String& root_directory, const godot::String& core_name);
+
 private:
     std::unique_ptr<Wrapper> m_wrapper;
 
-    godot::Dictionary GetOptionCategories();
-    godot::Dictionary GetOptionDefinitions();
-    godot::Dictionary GetOptionValues();
+    static godot::Dictionary ConvertOptionCategories(const std::unordered_map<std::string, OptionCategory>& categories);
+    static godot::Dictionary ConvertOptionDefinitions(const std::unordered_map<std::string, OptionDefinition>& definitions);
+    static godot::Dictionary ConvertOptionValues(const std::unordered_map<std::string, std::string>& values);
 
     static void _bind_methods();
 };
