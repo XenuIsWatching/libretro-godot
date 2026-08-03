@@ -436,6 +436,21 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
 
     LogOK("OpenGL ES context created successfully.");
 
+    {
+        const char* gl_version  = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        const char* gl_renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const char* gl_glsl     = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+        Log(std::string("GL_VERSION: ")  + (gl_version  ? gl_version  : "(null)"));
+        Log(std::string("GL_RENDERER: ") + (gl_renderer ? gl_renderer : "(null)"));
+        Log(std::string("GL_SHADING_LANGUAGE_VERSION: ") + (gl_glsl ? gl_glsl : "(null)"));
+
+        EGLint surf_w = 0, surf_h = 0;
+        eglQuerySurface(m_egl_display, m_egl_surface, EGL_WIDTH, &surf_w);
+        eglQuerySurface(m_egl_display, m_egl_surface, EGL_HEIGHT, &surf_h);
+        Log("Pbuffer surface: " + std::to_string(surf_w) + "x" + std::to_string(surf_h)
+            + " (requested " + std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
+
     m_context_reset();
 
     return true;

@@ -1540,7 +1540,13 @@ void Wrapper::EmulationThreadLoop()
 
     Log("FPS: " + std::to_string(systemAvInfo.timing.fps) + " Sample Rate: " + std::to_string(systemAvInfo.timing.sample_rate));
 
-    if (!m_video_handler->InitHwRenderContext(systemAvInfo.geometry.base_width, systemAvInfo.geometry.base_height))
+    // Size the hardware render target by the core's MAXIMUM geometry: it is the
+    // surface the core draws into, and a core is free to grow its frame up to
+    // max_* at any time without re-reporting av_info.
+    const int32_t hw_width = static_cast<int32_t>(std::max(systemAvInfo.geometry.base_width, systemAvInfo.geometry.max_width));
+    const int32_t hw_height = static_cast<int32_t>(std::max(systemAvInfo.geometry.base_height, systemAvInfo.geometry.max_height));
+
+    if (!m_video_handler->InitHwRenderContext(hw_width, hw_height))
     {
         LogError("Failed to initialize video");
         return;
