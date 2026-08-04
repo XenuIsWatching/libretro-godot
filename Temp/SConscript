@@ -32,7 +32,8 @@ if is_windows:
     env.Append(CPPPATH=["external/SDL3/include/"])
     env.Append(CXXFLAGS=["/std:c++latest"])
     env.Append(LIBPATH=[r"external/SDL3/lib/x64"])
-    env.Append(LIBS=["user32", "gdi32", "opengl32", "SDL3", "vulkan-1"])
+    env.Append(LIBS=["user32", "gdi32", "opengl32", "SDL3", "vulkan-1",
+                     "d3d11", "d3d12", "dxgi"])
     env.Append(LINKFLAGS=['/IGNORE:4099'])
     # Locate vulkan-1.lib: prefer VULKAN_SDK env var, fall back to known install path
     vulkan_sdk = os.environ.get("VULKAN_SDK", r"C:\VulkanSDK\1.4.341.1")

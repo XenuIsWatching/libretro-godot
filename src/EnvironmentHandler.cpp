@@ -263,8 +263,7 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
     {
         auto** out = static_cast<const retro_hw_render_interface**>(data);
-        *out = reinterpret_cast<const retro_hw_render_interface*>(
-            instance->m_video_handler->GetVulkanInterface());
+        *out = instance->m_video_handler->GetHwRenderInterface();
         return (*out != nullptr);
     }
     case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:                            return instance->m_environment_handler->SetSupportAchievements(static_cast<bool*>(data));

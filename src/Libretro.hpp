@@ -118,6 +118,11 @@ public:
     void SetCoreOption(const godot::String& key, const godot::String& value);
     void SetInputEnabled(bool enabled);
 
+    /// Which hardware API GET_PREFERRED_HW_RENDER advertises, as a
+    /// retro_hw_context_type (6 = Vulkan, 7 = D3D11, 9 = D3D12). Applies to
+    /// every core started afterwards, so set it before StartContent.
+    static void SetPreferredHwRender(int context_type);
+
     /// Returns per-port controller info as Array[Dictionary{port, controllers: Array[{name,id}], current_id}].
     godot::Array GetControllerInfo();
     /// Meta XR Audio voice ids this core's sound is spatialised through, or

@@ -46,6 +46,11 @@ void Libretro::SetInputEnabled(bool enabled)
     m_wrapper->m_input_enabled = enabled;
 }
 
+void Libretro::SetPreferredHwRender(int context_type)
+{
+    VideoHandler::SetPreferredHwRender(static_cast<retro_hw_context_type>(context_type));
+}
+
 godot::PackedInt32Array Libretro::GetAudioVoiceIds()
 {
     if (!m_wrapper || !m_wrapper->m_audio_handler)
@@ -299,6 +304,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);
     ClassDB::bind_method(D_METHOD("PeekCoreOptions", "root_directory", "core_name"), &Libretro::PeekCoreOptions);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
+    ClassDB::bind_static_method("Libretro", D_METHOD("SetPreferredHwRender", "context_type"), &Libretro::SetPreferredHwRender);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
     ClassDB::bind_method(D_METHOD("GetAudioVoiceIds"), &Libretro::GetAudioVoiceIds);
     ClassDB::bind_method(D_METHOD("SetControllerPortDevice", "port", "device"), &Libretro::SetControllerPortDevice);

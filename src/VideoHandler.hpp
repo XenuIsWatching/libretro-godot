@@ -18,9 +18,17 @@
 
 namespace Xenu
 {
+// Held by pointer only, so <d3d11.h>/<d3d12.h> — and the windows.h macros they
+// drag in, one of which renames GetSystemDirectory — stay out of this header.
+class D3D11Context;
+class D3D12Context;
+
 class VideoHandler
 {
 public:
+    VideoHandler();
+    ~VideoHandler();
+
     static void RefreshCallback(const void* data, uint32_t width, uint32_t height, size_t pitch);
     static uintptr_t HwRenderGetCurrentFramebuffer();
     static retro_proc_address_t HwRenderGetProcAddress(const char* sym);
@@ -57,6 +65,23 @@ public:
         return m_vulkan_ctx ? m_vulkan_ctx->GetInterface() : nullptr;
     }
 
+    /// Whether a hardware-rendered frame arrives bottom-up and has to be
+    /// flipped for Godot. True only for GL, whose framebuffers are bottom-left
+    /// origin; Vulkan and both D3D APIs are already top-down.
+    bool HwFrameNeedsFlip() const;
+
+    /// The render interface for whichever hardware context this core got, as
+    /// the opaque type RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE hands back.
+    /// Every retro_hw_render_interface_* begins with type + version, so the
+    /// core validates it before touching anything API-specific.
+    const retro_hw_render_interface* GetHwRenderInterface() const;
+
+    /// What GET_PREFERRED_HW_RENDER answers. Cores that support several APIs
+    /// pick this one first, so it decides whether a core takes its Vulkan,
+    /// D3D11 or D3D12 path.
+    static void SetPreferredHwRender(retro_hw_context_type type);
+    static retro_hw_context_type GetPreferredHwRenderType();
+
 private:
     godot::Ref<godot::StandardMaterial3D> m_original_surface_material_override = nullptr;
     godot::Ref<godot::StandardMaterial3D> m_new_material = nullptr;
@@ -75,6 +100,10 @@ private:
 #endif
 
     std::unique_ptr<VulkanContext> m_vulkan_ctx;
+#ifdef _WIN32
+    std::unique_ptr<D3D11Context> m_d3d11_ctx;
+    std::unique_ptr<D3D12Context> m_d3d12_ctx;
+#endif
     retro_hw_render_context_negotiation_interface_vulkan* m_negotiation_iface = nullptr;
 
     uint32_t m_rotation = 0;

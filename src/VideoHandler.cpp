@@ -12,15 +12,25 @@
 
 #include "Wrapper.hpp"
 #include "Debug.hpp"
+#ifdef _WIN32
+#include "D3D11Context.hpp"
+#include "D3D12Context.hpp"
+#endif
 
 #include <gfx/scaler/pixconv.h>
 
+#include <atomic>
 #include <chrono>
 
 using namespace godot;
 
 namespace Xenu
 {
+// Out of line: the unique_ptr members hold types this header only forward
+// declares, so the destructor has to be emitted where they are complete.
+VideoHandler::VideoHandler() = default;
+VideoHandler::~VideoHandler() = default;
+
 void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t height, size_t pitch)
 {
     if (!data || width == 0 || height == 0)
@@ -50,6 +60,16 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             // Vulkan path: readback from Vulkan image via staging buffer
             instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data);
         }
+#ifdef _WIN32
+        else if (instance->m_video_handler->m_d3d11_ctx)
+        {
+            instance->m_video_handler->m_d3d11_ctx->ReadbackToPixels(width, height, pixel_data);
+        }
+        else if (instance->m_video_handler->m_d3d12_ctx)
+        {
+            instance->m_video_handler->m_d3d12_ctx->ReadbackToPixels(width, height, pixel_data);
+        }
+#endif
         else
         {
             // OpenGL path: read pixels from the current framebuffer.
@@ -69,12 +89,12 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             instance->m_video_handler->m_last_width  = width;
             instance->m_video_handler->m_last_height = height;
             // Vulkan images are top-to-bottom; GL framebuffers are bottom-to-top.
-            const bool flip = (instance->m_video_handler->m_vulkan_ctx == nullptr);
+            const bool flip = instance->m_video_handler->HwFrameNeedsFlip();
             instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, flip);
         }
         else
         {
-            const bool flip = (instance->m_video_handler->m_vulkan_ctx == nullptr);
+            const bool flip = instance->m_video_handler->HwFrameNeedsFlip();
             instance->UpdateTexture(pixel_data, flip);
         }
 
@@ -146,6 +166,47 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         LogError("Unhandled pixel format: " + std::to_string(instance->m_video_handler->m_pixel_format));
         return;
     }
+}
+
+bool VideoHandler::HwFrameNeedsFlip() const
+{
+    if (m_vulkan_ctx)
+        return false;
+#ifdef _WIN32
+    if (m_d3d11_ctx || m_d3d12_ctx)
+        return false;
+#endif
+    return true;
+}
+
+const retro_hw_render_interface* VideoHandler::GetHwRenderInterface() const
+{
+#ifdef _WIN32
+    if (m_d3d11_ctx)
+        return reinterpret_cast<const retro_hw_render_interface*>(m_d3d11_ctx->GetInterface());
+    if (m_d3d12_ctx)
+        return reinterpret_cast<const retro_hw_render_interface*>(m_d3d12_ctx->GetInterface());
+#endif
+    if (m_vulkan_ctx)
+        return reinterpret_cast<const retro_hw_render_interface*>(m_vulkan_ctx->GetInterface());
+    return nullptr;
+}
+
+namespace
+{
+// Read by GetPreferredHwRender on the emulation thread, written from GDScript
+// before StartContent spins that thread up.
+std::atomic<retro_hw_context_type> g_preferred_hw_render{ RETRO_HW_CONTEXT_VULKAN };
+}
+
+void VideoHandler::SetPreferredHwRender(retro_hw_context_type type)
+{
+    g_preferred_hw_render.store(type, std::memory_order_relaxed);
+}
+
+retro_hw_context_type VideoHandler::GetPreferredHwRenderType()
+{
+    return g_preferred_hw_render.load(std::memory_order_relaxed);
 }
 
 uintptr_t VideoHandler::HwRenderGetCurrentFramebuffer()
@@ -232,6 +293,19 @@ void VideoHandler::DeInit()
         m_vulkan_ctx.reset();
     }
 
+#ifdef _WIN32
+    if (m_d3d11_ctx)
+    {
+        m_d3d11_ctx->Destroy();
+        m_d3d11_ctx.reset();
+    }
+    if (m_d3d12_ctx)
+    {
+        m_d3d12_ctx->Destroy();
+        m_d3d12_ctx.reset();
+    }
+#endif
+
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     if (m_sdl_gl_context)
     {
@@ -286,6 +360,40 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
 {
     if (!m_context_reset)
         return true;
+
+#ifdef _WIN32
+    if (m_hw_context_type == RETRO_HW_CONTEXT_D3D11)
+    {
+        if (m_d3d11_ctx)
+            return true;
+        Log("Creating D3D11 context...");
+        m_d3d11_ctx = std::make_unique<D3D11Context>();
+        if (!m_d3d11_ctx->Init())
+        {
+            LogError("D3D11Context::Init failed.");
+            m_d3d11_ctx.reset();
+            return false;
+        }
+        m_context_reset();
+        return true;
+    }
+
+    if (m_hw_context_type == RETRO_HW_CONTEXT_D3D12)
+    {
+        if (m_d3d12_ctx)
+            return true;
+        Log("Creating D3D12 context...");
+        m_d3d12_ctx = std::make_unique<D3D12Context>();
+        if (!m_d3d12_ctx->Init())
+        {
+            LogError("D3D12Context::Init failed.");
+            m_d3d12_ctx.reset();
+            return false;
+        }
+        m_context_reset();
+        return true;
+    }
+#endif
 
     // ---- Vulkan path (both platforms) ----
     if (m_hw_context_type == RETRO_HW_CONTEXT_VULKAN)
@@ -559,16 +667,30 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
     Log("Setting hardware render callback...");
 
     Log("Context type: " + std::to_string(hw_render_callback->context_type));
+
+    bool supported = false;
+    switch (hw_render_callback->context_type)
+    {
 #ifdef __ANDROID__
-    if (hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES2 &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES3 &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGLES_VERSION &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_VULKAN)
+    case RETRO_HW_CONTEXT_OPENGLES2:
+    case RETRO_HW_CONTEXT_OPENGLES3:
+    case RETRO_HW_CONTEXT_OPENGLES_VERSION:
 #else
-    if (hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGL &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_OPENGL_CORE &&
-        hw_render_callback->context_type != RETRO_HW_CONTEXT_VULKAN)
+    case RETRO_HW_CONTEXT_OPENGL:
+    case RETRO_HW_CONTEXT_OPENGL_CORE:
 #endif
+#ifdef _WIN32
+    case RETRO_HW_CONTEXT_D3D11:
+    case RETRO_HW_CONTEXT_D3D12:
+#endif
+    case RETRO_HW_CONTEXT_VULKAN:
+        supported = true;
+        break;
+    default:
+        break;
+    }
+
+    if (!supported)
     {
         LogError("Unsupported context type: " + std::to_string(hw_render_callback->context_type));
         return false;
@@ -594,9 +716,9 @@ bool VideoHandler::GetPreferredHwRender(retro_hw_context_type* hw_context_type) 
     if (!hw_context_type)
         return false;
 
-    // Advertise Vulkan as the preferred context on both platforms.
-    // Cores that support Vulkan will select it; others will fall back via SET_HW_RENDER.
-    *hw_context_type = RETRO_HW_CONTEXT_VULKAN;
+    // Vulkan unless GDScript asked for something else. Cores that support the
+    // answer select it; the rest fall back to their own order via SET_HW_RENDER.
+    *hw_context_type = GetPreferredHwRenderType();
     return true;
 }
 
