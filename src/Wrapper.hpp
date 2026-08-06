@@ -269,6 +269,14 @@ public:
     const std::string& GetRootDirectory() const { return m_root_directory; }
     const std::string& GetTempDirectory() const { return m_temp_directory; }
 
+    /// The core is handed this struct's address in retro_get_system_av_info, and at least
+    /// one core keeps that pointer and writes through it long afterwards — ScummVM revises
+    /// timing.fps from inside context_reset. It therefore has to outlive the call, and a
+    /// stack local is a use-after-scope waiting to corrupt whatever reuses the frame.
+    /// Read it live at the point of use; do not copy the fields out and cache them, or a
+    /// core that legitimately retimes is pinned to its opening declaration.
+    retro_system_av_info m_system_av_info = {};
+
     std::unique_ptr<Core> m_core = nullptr;
     std::unique_ptr<CallbackTrampolines> m_trampolines = nullptr;
     std::unique_ptr<EnvironmentHandler> m_environment_handler = nullptr;

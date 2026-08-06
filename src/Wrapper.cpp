@@ -1535,16 +1535,16 @@ void Wrapper::EmulationThreadLoop()
         }
     }
 
-    retro_system_av_info systemAvInfo = {};
-    m_core->retro_get_system_av_info(&systemAvInfo);
+    m_system_av_info = {};
+    m_core->retro_get_system_av_info(&m_system_av_info);
 
-    Log("FPS: " + std::to_string(systemAvInfo.timing.fps) + " Sample Rate: " + std::to_string(systemAvInfo.timing.sample_rate));
+    Log("FPS: " + std::to_string(m_system_av_info.timing.fps) + " Sample Rate: " + std::to_string(m_system_av_info.timing.sample_rate));
 
     // Size the hardware render target by the core's MAXIMUM geometry: it is the
     // surface the core draws into, and a core is free to grow its frame up to
     // max_* at any time without re-reporting av_info.
-    const int32_t hw_width = static_cast<int32_t>(std::max(systemAvInfo.geometry.base_width, systemAvInfo.geometry.max_width));
-    const int32_t hw_height = static_cast<int32_t>(std::max(systemAvInfo.geometry.base_height, systemAvInfo.geometry.max_height));
+    const int32_t hw_width = static_cast<int32_t>(std::max(m_system_av_info.geometry.base_width, m_system_av_info.geometry.max_width));
+    const int32_t hw_height = static_cast<int32_t>(std::max(m_system_av_info.geometry.base_height, m_system_av_info.geometry.max_height));
 
     if (!m_video_handler->InitHwRenderContext(hw_width, hw_height))
     {
@@ -1560,13 +1560,13 @@ void Wrapper::EmulationThreadLoop()
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_mutex_done = false;
-        m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandInitAudio>(this, 0.1f, systemAvInfo.timing.sample_rate));
+        m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandInitAudio>(this, 0.1f, m_system_av_info.timing.sample_rate));
         m_condition_variable.wait(lock, [&]{ return m_mutex_done || m_stop_requested.load(); });
         if (m_stop_requested)
             return;
     }
 
-    double frame_duration_ms = 1000.0 / systemAvInfo.timing.fps;
+    double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
 
@@ -1587,13 +1587,30 @@ void Wrapper::EmulationThreadLoop()
     // Billing is floored at the declared frame duration so a core that falls
     // silent, or never produces audio at all, still paces at its declared rate
     // rather than running unbilled.
-    const double sample_rate_hz = systemAvInfo.timing.sample_rate;
+    const double sample_rate_hz = m_system_av_info.timing.sample_rate;
     uint64_t audio_frames_seen = m_audio_handler->FramesProduced();
     double credit_ms = 0.0;
 
     // Unspent credit is capped so a stall is not repaid as fast-forward, the same
     // bound the netplay accumulator uses.
     const double MAX_CREDIT_MS = frame_duration_ms * 4.0;
+
+    // Debt is capped too. A core that bills more emulated time than the real time
+    // a sleep costs feeds the overdraft back into itself: the sleep pays for audio
+    // the sleep itself caused, so each pass waits longer than the last until the
+    // thread parks in one effectively unbounded sleep. Past this bound the excess
+    // is forgiven and the core runs, which is the same trade the frontend makes
+    // anywhere else it refuses to let the audio sink halt emulation. Well above a
+    // legitimately heavy retro_run, far below a stall a player would sit through.
+    constexpr double MAX_OVERDRAFT_MS = 250.0;
+    bool overdraft_clamp_logged = false;
+
+    // How much emulated time one retro_run may bill before the audio clock is
+    // treated as unusable for that call. Generous next to the cores the clock
+    // exists for — azahar covers two refreshes per call — so only a nonsensical
+    // bill trips it.
+    constexpr double MAX_BILL_FRAMES = 4.0;
+    bool overbill_logged = false;
 
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
@@ -1664,6 +1681,24 @@ void Wrapper::EmulationThreadLoop()
                             / sample_rate_hz;
                 audio_frames_seen = produced;
 
+                // The clock assumes a core emits samples in proportion to game
+                // time. A bill this far past the declared rate says the
+                // assumption does not hold for this core, so the declaration is
+                // the better estimate — the same fallback the silence floor
+                // below makes, at the other end of the range.
+                if (cost_ms > frame_duration_ms * MAX_BILL_FRAMES)
+                {
+                    if (!overbill_logged)
+                    {
+                        overbill_logged = true;
+                        LogWarning("Core billed " + std::to_string(cost_ms)
+                                 + " ms of audio for one retro_run (declared "
+                                 + std::to_string(frame_duration_ms)
+                                 + " ms) — pacing on the declared rate instead");
+                    }
+                    cost_ms = frame_duration_ms;
+                }
+
                 credit_ms -= (cost_ms > frame_duration_ms) ? cost_ms : frame_duration_ms;
             }
 
@@ -1672,6 +1707,18 @@ void Wrapper::EmulationThreadLoop()
             // spin helped cause the stalls it then raced to catch up on. Leave a
             // margin for coarse sleep granularity; whatever the sleep overshoots
             // is bought back as credit, so the rate stays honest.
+            if (credit_ms < -MAX_OVERDRAFT_MS)
+            {
+                if (!overdraft_clamp_logged)
+                {
+                    overdraft_clamp_logged = true;
+                    LogWarning("Pacing overdraft clamped at " + std::to_string(MAX_OVERDRAFT_MS)
+                             + " ms (billed " + std::to_string(-credit_ms)
+                             + " ms for one retro_run) — core over-bills emulated time");
+                }
+                credit_ms = -MAX_OVERDRAFT_MS;
+            }
+
             const double overdraft = -credit_ms;
             if (overdraft > SLEEP_MARGIN_MS)
                 std::this_thread::sleep_for(
