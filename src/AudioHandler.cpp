@@ -139,6 +139,36 @@ uint32_t AudioHandler::QueuedFrames() const
     return (avail >= 0 && total > static_cast<uint32_t>(avail)) ? total - static_cast<uint32_t>(avail) : 0;
 }
 
+double AudioHandler::MsUntilSinkWantsFrames() const
+{
+    if (m_mix_rate <= 0.0)
+        return 0.0;
+
+    if (m_use_sdk)
+    {
+        if (m_mx == nullptr || m_voice_l < 0)
+            return 0.0;
+        // The voice reports what it still wants against its own target fill, so the
+        // target lives in one place rather than being restated here.
+        if (static_cast<int>(m_mx->call("voice_frames_wanted", m_voice_l)) > 0)
+            return 0.0;
+
+        const int queued = static_cast<int>(m_mx->call("voice_frames_available", m_voice_l));
+        const double over = static_cast<double>(queued) - static_cast<double>(m_sink_target_frames);
+        return over > 0.0 ? 1000.0 * over / m_mix_rate : 0.0;
+    }
+
+    if (m_audio_stream_generator_playback.is_null())
+        return 0.0;
+
+    // The generator has no target of its own; treat its whole buffer as the target
+    // and wait out whatever sits above the half mark.
+    const int32_t avail = m_audio_stream_generator_playback->get_frames_available();
+    if (avail > 0)
+        return 0.0;
+    return 500.0 * static_cast<double>(m_audio_buffer_total_frames) / m_mix_rate;
+}
+
 uint32_t AudioHandler::EffectiveTotalFrames() const
 {
     // The voice ring is far larger than the generator ever was (0.68 s against
@@ -182,6 +212,13 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
                 m_use_sdk = true;
             }
         }
+    }
+
+    m_sink_target_frames = 0;
+    if (m_use_sdk && m_mx)
+    {
+        const double target_ms = static_cast<double>(m_mx->call("get_target_latency_ms"));
+        m_sink_target_frames = static_cast<uint32_t>(target_ms * m_mix_rate / 1000.0);
     }
 
     if (m_use_sdk)

@@ -43,6 +43,20 @@ public:
     /// emulation thread paces against.
     uint64_t FramesProduced() const { return m_frames_produced.load(std::memory_order_relaxed); }
 
+    /// How long until the sink wants audio again, in milliseconds, and 0 when it
+    /// wants some right now.
+    ///
+    /// This is the brake. The mixer drains at the hardware's rate, so how full the
+    /// sink is measures *real* time — the only quantity here a core cannot
+    /// misreport. Both of the alternatives are claims: timing.fps describes neither
+    /// the call rate nor the time a call covers for cores that return on present,
+    /// and the sample count is only proportional to game time if the core says so
+    /// honestly.
+    ///
+    /// Returns 0 whenever there is no sink to measure, so a missing or stopped sink
+    /// can never brake emulation to a halt.
+    double MsUntilSinkWantsFrames() const;
+
     /// The Meta XR Audio voice ids this core is being spatialised through, or
     /// empty when running on the fallback AudioStreamPlayer3D. GDScript
     /// positions these; it does not own their lifetime.
@@ -77,6 +91,9 @@ private:
     double   m_audio_sample_rate = 0.0;
     uint32_t m_audio_buffer_total_frames = 0;
     uint32_t m_audio_buffer_occupancy = 0;
+    /// The sink's own target fill, cached at Init so the brake does not pay a
+    /// cross-extension call for a constant on every pass of the pacing loop.
+    uint32_t m_sink_target_frames = 0;
     /// Written by the audio callbacks (emulation thread, inside retro_run) and
     /// read by the pacing loop on that same thread; atomic only so exposing it
     /// elsewhere later cannot become a data race.
