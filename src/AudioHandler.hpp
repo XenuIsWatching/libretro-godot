@@ -62,6 +62,13 @@ public:
     /// positions these; it does not own their lifetime.
     godot::PackedInt32Array GetVoiceIds() const;
 
+    /// Which source channel feeds each speaker: 0 stereo, 1 the left channel to
+    /// both, 2 the right to both. A television's mono switch — a duplication, so
+    /// both speakers keep radiating rather than the sound collapsing into one.
+    /// Read on the emulation thread, written from the main one; a torn read costs
+    /// at worst one buffer routed the old way.
+    void SetChannelMode(int mode) { m_channel_mode.store(mode, std::memory_order_relaxed); }
+
 private:
     // --- fallback: Godot's own 3D panning -----------------------------------
     godot::Ref<godot::AudioStreamGenerator> m_audio_stream_generator = nullptr;
@@ -74,6 +81,7 @@ private:
     int    m_voice_r = -1;
     bool   m_use_sdk = false;
     double m_mix_rate = 48000.0;
+    std::atomic<int> m_channel_mode{0};   ///< see SetChannelMode
 
     /// Cores declare their own rate (32040 Hz SNES, 44100 PSX, 48000 N64) while
     /// the SDK context runs at Godot's mix rate, so anything that does not match

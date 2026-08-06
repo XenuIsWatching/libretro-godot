@@ -129,6 +129,9 @@ public:
     /// empty when it is running on the fallback AudioStreamPlayer3D.
     godot::PackedInt32Array GetAudioVoiceIds();
 
+    /// 0 stereo, 1 the left channel to both speakers, 2 the right to both.
+    void SetAudioChannelMode(int mode);
+
     /// Tell the running core which device type is active on a given port.
     void SetControllerPortDevice(int port, int device);
 

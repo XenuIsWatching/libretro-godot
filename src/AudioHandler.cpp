@@ -113,7 +113,8 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
         Vector2* dst = m_push_buf.ptrw();
         for (size_t i = 0; i < frames; ++i)
             dst[i] = Vector2(interleaved[i * 2], interleaved[i * 2 + 1]);
-        m_mx->call("push_stereo_frames", m_voice_l, m_voice_r, m_push_buf);
+        m_mx->call("push_stereo_frames", m_voice_l, m_voice_r, m_push_buf,
+                   m_channel_mode.load(std::memory_order_relaxed));
         return;
     }
 
