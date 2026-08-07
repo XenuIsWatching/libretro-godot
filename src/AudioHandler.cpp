@@ -16,6 +16,15 @@ using namespace godot;
 
 namespace Xenu
 {
+namespace
+{
+/// Widest the resampling ratio may be trimmed to steer the sink's depth. Half a
+/// percent is far below an audible pitch change and is the same bound RetroArch
+/// defaults its rate control to; it is a correction for buffer drift, not a
+/// speed control, and the pacing brake still owns the coarse rate.
+constexpr double k_drc_max_delta = 0.005;
+}
+
 void AudioHandler::SampleCallback(int16_t left, int16_t right)
 {
     auto instance = Wrapper::GetCurrentThreadWrapper();
@@ -59,16 +68,39 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
     // Emulated-time clock — counted at the core's rate, so before resampling.
     self->m_frames_produced.fetch_add(frames, std::memory_order_relaxed);
 
+    // Sink depth drives both the occupancy the core is told about and the rate trim
+    // below, so read it once.
+    const uint32_t queued = self->QueuedFrames();
+
     const uint32_t total = self->EffectiveTotalFrames();
     if (total > 0)
     {
-        const uint32_t queued = self->QueuedFrames();
         uint32_t occupancy = static_cast<uint32_t>(100.0f * static_cast<float>(queued) / static_cast<float>(total));
         if (occupancy > 100)
             occupancy = 100;
         self->m_audio_buffer_occupancy = occupancy;
         if (total > self->m_audio_buffer_total_frames)
             self->m_audio_buffer_total_frames = total;
+    }
+
+    // Dynamic rate control. The pacing brake is one-sided — it only ever holds the
+    // core back when the sink is above target — so nothing stops the ring draining
+    // when a heavy frame or a main-thread hitch outruns the target fill, and the
+    // mixer gets a gap. Resampling fractionally fast while the sink is short and
+    // fractionally slow while it is long corrects the depth continuously, instead of
+    // only at the coarse grain of running or stalling a whole frame. It also absorbs
+    // the drift between a core's nominal rate and the mixer's real one, which are
+    // separate crystals and never exactly agree.
+    double drc_adjust = 1.0;
+    if (self->m_sink_target_frames > 0)
+    {
+        const double target = static_cast<double>(self->m_sink_target_frames);
+        double direction = (target - static_cast<double>(queued)) / target;
+        if (direction > 1.0)
+            direction = 1.0;
+        else if (direction < -1.0)
+            direction = -1.0;
+        drc_adjust = 1.0 + k_drc_max_delta * direction;
     }
 
     // s16 interleaved -> float interleaved.
@@ -78,16 +110,19 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
 
     if (self->m_resampler_backend && self->m_resampler)
     {
+        const double ratio = self->m_resample_ratio * drc_adjust;
+
         // Slack on the output: the sinc resampler can emit a frame or two more
-        // than the ratio implies, depending on its internal phase.
-        const size_t cap = static_cast<size_t>(frames * self->m_resample_ratio) + 32;
+        // than the ratio implies, depending on its internal phase. Sized off the
+        // trimmed ratio, not the nominal one, or the trim can overrun the buffer.
+        const size_t cap = static_cast<size_t>(frames * ratio) + 32;
         self->m_out_float.resize(cap * 2);
 
         struct resampler_data rd = {};
         rd.data_in      = self->m_in_float.data();
         rd.data_out     = self->m_out_float.data();
         rd.input_frames = frames;
-        rd.ratio        = self->m_resample_ratio;
+        rd.ratio        = ratio;
         self->m_resampler_backend->process(self->m_resampler, &rd);
         self->PushFrames(self->m_out_float.data(), rd.output_frames);
     }
@@ -224,22 +259,40 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 
     if (m_use_sdk)
     {
-        if (m_audio_sample_rate > 0.0 && m_mix_rate > 0.0
-         && static_cast<int>(m_audio_sample_rate) != static_cast<int>(m_mix_rate))
+        // Allocated even when the rates already match. Rate control steers the sink's
+        // depth by trimming this ratio, so a core running at the mixer's own rate
+        // needs the resampler present at 1:1 or there is no knob to turn. It costs a
+        // sinc pass those cores did not pay before.
+        const bool rates_differ = m_audio_sample_rate > 0.0 && m_mix_rate > 0.0
+                               && static_cast<int>(m_audio_sample_rate) != static_cast<int>(m_mix_rate);
+
+        if (m_audio_sample_rate > 0.0 && m_mix_rate > 0.0)
         {
             m_resample_ratio = m_mix_rate / m_audio_sample_rate;
             if (!retro_resampler_realloc(&m_resampler, &m_resampler_backend, "sinc",
                                          RESAMPLER_QUALITY_NORMAL, m_resample_ratio))
             {
-                LogWarning("AudioHandler: resampler init failed, using Godot panning instead.");
                 m_resampler = nullptr;
                 m_resampler_backend = nullptr;
-                m_mx->call("destroy_voice", m_voice_l);
-                if (m_voice_r >= 0)
-                    m_mx->call("destroy_voice", m_voice_r);
-                m_voice_l = m_voice_r = -1;
-                m_mx = nullptr;
-                m_use_sdk = false;
+
+                if (rates_differ)
+                {
+                    // Mismatched rates cannot be pushed straight through, so the SDK
+                    // path has to be given up entirely, as it always was.
+                    LogWarning("AudioHandler: resampler init failed, using Godot panning instead.");
+                    m_mx->call("destroy_voice", m_voice_l);
+                    if (m_voice_r >= 0)
+                        m_mx->call("destroy_voice", m_voice_r);
+                    m_voice_l = m_voice_r = -1;
+                    m_mx = nullptr;
+                    m_use_sdk = false;
+                }
+                else
+                {
+                    // At 1:1 the audio still plays correctly straight through; only
+                    // the rate trim is lost. Not worth abandoning the spatial path for.
+                    LogWarning("AudioHandler: resampler init failed at 1:1, running without rate control.");
+                }
             }
         }
         if (m_use_sdk)
