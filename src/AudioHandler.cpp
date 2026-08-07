@@ -207,13 +207,23 @@ double AudioHandler::MsUntilSinkWantsFrames() const
 
 uint32_t AudioHandler::EffectiveTotalFrames() const
 {
-    // The voice ring is far larger than the generator ever was (0.68 s against
-    // the 0.1 s this handler is initialised with). Pacing must NOT use the
-    // physical ring size, or the core is allowed to run most of a second ahead
-    // and the game feels laggy. Treat the queue as if it were still the old
-    // buffer and let the rest of the ring serve as spare headroom.
+    // Occupancy is reported to the core as a percentage of this, and cores use it to
+    // decide frameskip, so it has to answer "how full are you against where the
+    // frontend wants you" rather than against any physical size.
+    //
+    // The voice ring (32768 frames, ~0.68 s) is mostly headroom; the depth is held at
+    // the sink's target fill, a small fraction of it. Against the whole ring, sitting
+    // exactly on target reads ~6% and trips the core's underrun warning permanently.
+    // Against the target alone it reads 100% and looks permanently full. Twice the
+    // target puts the setpoint in the middle, which is the shape a core expects —
+    // RetroArch's buffer is sized near its own target, so half full is normal there.
     if (m_use_sdk)
-        return static_cast<uint32_t>(m_audio_buffer_capacity_sec * m_mix_rate);
+        return m_sink_target_frames > 0
+             ? m_sink_target_frames * 2
+             : static_cast<uint32_t>(m_audio_buffer_capacity_sec * m_mix_rate);
+
+    // The generator's buffer is already about one target deep, so its true size is
+    // the right denominator and needs no correction.
     return m_audio_buffer_total_frames;
 }
 
