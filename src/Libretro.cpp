@@ -173,6 +173,11 @@ void Libretro::SetSramData(const godot::PackedByteArray& data)
     m_wrapper->SetSramData(data);
 }
 
+void Libretro::SetRemovableStorage(bool removable)
+{
+    m_wrapper->SetRemovableStorage(removable);
+}
+
 void Libretro::RequestSramFlush()
 {
     m_wrapper->RequestSramFlush();
@@ -361,6 +366,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
+    ClassDB::bind_method(D_METHOD("SetRemovableStorage", "removable"), &Libretro::SetRemovableStorage);
     ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);
     ClassDB::bind_method(D_METHOD("RequestDiskInfo"), &Libretro::RequestDiskInfo);
     ClassDB::bind_method(D_METHOD("SetDiskEjectState", "ejected"), &Libretro::SetDiskEjectState);

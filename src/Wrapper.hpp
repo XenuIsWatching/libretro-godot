@@ -178,6 +178,21 @@ public:
     /// file, so every peer boots with identical SRAM). Never flushed.
     void SetSramData(const godot::PackedByteArray& data);
 
+    /// Declare that this machine's battery save lives on REMOVABLE media, so
+    /// an unbacked run means "nothing is plugged in" rather than "don't save".
+    /// With this set and no path or injected bytes, SAVE_RAM is blanked at load
+    /// instead of being left as the core initialised it.
+    ///
+    /// pcsx_rearmed hands back a fully FORMATTED card when the frontend supplies
+    /// nothing, so a PSX with no card seated would otherwise accept a save,
+    /// report success, and lose it at power-off. Blanking makes the game report
+    /// an unformatted card, which is what the player needs to see.
+    ///
+    /// Opt-in on purpose: a fixed-storage core may initialise SAVE_RAM to 0xFF
+    /// (flash/EEPROM) and zeroing that would fake corrupt save data, and a
+    /// netplay client legitimately runs with an empty path and empty bytes.
+    void SetRemovableStorage(bool removable);
+
     /// Force a dirty-check flush now (emu-thread command).
     void RequestSramFlush();
 
@@ -373,6 +388,7 @@ public:
     godot::PackedByteArray m_sram_pending;
     std::vector<uint8_t> m_sram_shadow;
     int64_t m_sram_flush_counter = 0;
+    bool m_removable_storage = false;
 
     std::string m_root_directory;
     std::string m_temp_directory;

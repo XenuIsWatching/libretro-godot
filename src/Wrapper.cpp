@@ -804,6 +804,11 @@ void Wrapper::SetSramData(const godot::PackedByteArray& data)
     m_sram_pending = data;
 }
 
+void Wrapper::SetRemovableStorage(bool removable)
+{
+    m_removable_storage = removable;
+}
+
 void Wrapper::RequestSramFlush()
 {
     if (m_core && m_running)
@@ -840,6 +845,15 @@ void Wrapper::LoadSramFromSource()
             file.read(reinterpret_cast<char*>(sram), n);
             Log("SRAM: loaded " + std::to_string(n) + " bytes from " + m_sram_path);
         }
+    }
+    else if (m_removable_storage)
+    {
+        // Nothing plugged in. Cores hand back their own idea of an empty save,
+        // and pcsx_rearmed's is a fully FORMATTED card — which a game will
+        // happily write to and report success on, then lose at power-off.
+        // Blank it so the machine reports unformatted media instead.
+        std::memset(sram, 0, size);
+        Log("SRAM: no removable media seated - SAVE_RAM blanked");
     }
 
     m_sram_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);

@@ -201,6 +201,10 @@ public:
     void SetSramPath(const godot::String& path);
     /// Netplay: inject exact SRAM bytes applied at load instead of the file.
     void SetSramData(const godot::PackedByteArray& data);
+    /// This machine saves to REMOVABLE media (a PSX memory card). With nothing
+    /// seated, SAVE_RAM is blanked so the game reports unformatted media rather
+    /// than accepting a save the core invented and losing it at power-off.
+    void SetRemovableStorage(bool removable);
     /// Force a dirty-check flush of SRAM to its backing file now.
     void RequestSramFlush();
     // ── Disk control (multi-disc games) ──────────────────────────────────────
