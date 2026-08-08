@@ -405,7 +405,10 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
         }
         Log("Creating Vulkan context...");
         m_vulkan_ctx = std::make_unique<VulkanContext>();
-        if (!m_vulkan_ctx->Init(m_negotiation_iface))
+        // The frame size reaches the context now: it sizes the surface a core
+        // like Dolphin builds its swapchain from, and therefore the size of the
+        // frame it presents back. It used to be dropped here.
+        if (!m_vulkan_ctx->Init(m_negotiation_iface, width, height))
         {
             LogError("VulkanContext::Init failed.");
             m_vulkan_ctx.reset();

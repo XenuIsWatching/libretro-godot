@@ -139,9 +139,12 @@ static VkDevice s_CreateDeviceWrapper(VkPhysicalDevice gpu, void* /*opaque*/, co
 // Init
 // ---------------------------------------------------------------------------
 
-bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* neg)
+bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* neg,
+                         int32_t frame_w, int32_t frame_h)
 {
     m_negotiation = neg;
+    m_frame_w = frame_w > 0 ? frame_w : 640;
+    m_frame_h = frame_h > 0 ? frame_h : 480;
 
     // ---- Create VkInstance ----
     // If the core supplies v2 negotiation with create_instance, let it drive instance creation.
@@ -316,11 +319,24 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 #ifdef _WIN32
     {
         // Use WS_POPUP so the entire window is client area (no borders/title
-        // bar that shrink it at high DPI).  Size must exceed the core's EFB
-        // dimensions (640×528 at 1×, 1280×1056 at 2×, etc.).
+        // bar that shrink it at high DPI).
+        //
+        // Sized to the core's MAX FRAME, not to something comfortably large.
+        // This surface is not a viewport, it is the shape of the picture: a core
+        // that needs a surface builds its swapchain to fit it and presents a
+        // frame that size, whatever its internal resolution — Dolphin renders at
+        // its EFB scale and downsamples on the way out.
+        //
+        // It used to be a fixed 1920x1080 "so it exceeds the EFB", which is the
+        // wrong instinct. Dolphin then presented the whole game at 1920x1080
+        // while reporting 640x528, and ReadbackToPixels copies the top-left
+        // reported-size rectangle — so the picture was a CORNER of the game.
+        // OpenGL never showed it because there the core draws into an FBO we
+        // size ourselves.
         m_hidden_hwnd = CreateWindowExW(
             0, L"STATIC", L"XenuLibretro_VkSurface", WS_POPUP,
-            0, 0, 1920, 1080, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            0, 0, m_frame_w, m_frame_h, nullptr, nullptr,
+            GetModuleHandleW(nullptr), nullptr);
 
         if (m_hidden_hwnd)
         {
@@ -335,7 +351,18 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
                 if (r != VK_SUCCESS)
                     LogWarning("VulkanContext: vkCreateWin32SurfaceKHR failed: " + std::to_string(r));
                 else
-                    LogOK("VulkanContext: VkSurfaceKHR created.");
+                {
+                    LogOK("VulkanContext: VkSurfaceKHR created at "
+                        + std::to_string(m_frame_w) + "x" + std::to_string(m_frame_h) + ".");
+                    // What the core will actually see. Worth printing: if this
+                    // disagrees with the frame size reported to video_refresh,
+                    // the readback is cropping and the picture will be a corner.
+                    VkSurfaceCapabilitiesKHR caps{};
+                    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_gpu, m_surface, &caps) == VK_SUCCESS)
+                        Log("VulkanContext: surface extent "
+                            + std::to_string(caps.currentExtent.width) + "x"
+                            + std::to_string(caps.currentExtent.height));
+                }
             }
         }
     }
@@ -855,8 +882,65 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
             dst[i * 4 + 3] = src[i * 4 + 3]; // A ← A
         }
     }
+    else if (format == VK_FORMAT_R8G8B8A8_UNORM ||
+             format == VK_FORMAT_R8G8B8A8_SRGB  ||
+             format == VK_FORMAT_R8G8B8A8_SNORM)
+    {
+        memcpy(dst, src, (size_t)needed);
+    }
+    // 10-bit packed, which is what a modern surface hands back when it can:
+    // Dolphin's swapchain on this GPU is A2B10G10R10. Still 32 bits a pixel, so
+    // the copy sizes hold, but the channels are bit-fields rather than bytes —
+    // read as RGBA8 it comes out in the wrong colours entirely.
+    //
+    // One uint32 per pixel: R in the low 10 bits, then G, then B, and 2 bits of
+    // alpha at the top. Shift each down to 8 bits. Alpha is widened from its
+    // 2 bits rather than forced opaque, so a core that does use it is not lied
+    // about — and 0b11 maps to 255 exactly.
+    else if (format == VK_FORMAT_A2B10G10R10_UNORM_PACK32)
+    {
+        const uint32_t  pixel_count = width * height;
+        const uint32_t* src32       = reinterpret_cast<const uint32_t*>(src);
+        for (uint32_t i = 0; i < pixel_count; ++i)
+        {
+            const uint32_t p = src32[i];
+            dst[i * 4 + 0] = static_cast<uint8_t>(((p >>  0) & 0x3FFu) >> 2);
+            dst[i * 4 + 1] = static_cast<uint8_t>(((p >> 10) & 0x3FFu) >> 2);
+            dst[i * 4 + 2] = static_cast<uint8_t>(((p >> 20) & 0x3FFu) >> 2);
+            dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
+        }
+    }
+    // The same layout with red and blue the other way round. Cheap to support
+    // while we are here, and the two are chosen by the driver, not by us.
+    else if (format == VK_FORMAT_A2R10G10B10_UNORM_PACK32)
+    {
+        const uint32_t  pixel_count = width * height;
+        const uint32_t* src32       = reinterpret_cast<const uint32_t*>(src);
+        for (uint32_t i = 0; i < pixel_count; ++i)
+        {
+            const uint32_t p = src32[i];
+            dst[i * 4 + 0] = static_cast<uint8_t>(((p >> 20) & 0x3FFu) >> 2);
+            dst[i * 4 + 1] = static_cast<uint8_t>(((p >> 10) & 0x3FFu) >> 2);
+            dst[i * 4 + 2] = static_cast<uint8_t>(((p >>  0) & 0x3FFu) >> 2);
+            dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
+        }
+    }
     else
     {
+        // Anything else is copied verbatim into a buffer Godot will read as
+        // RGBA8, which is a guess — and a wrong guess looks like the game in
+        // the wrong colours rather than like an error. A 10-bit swapchain
+        // (A2B10G10R10, common where the surface allows HDR) is the likely one,
+        // and it also breaks the 4-bytes-per-pixel assumption above. Say so
+        // once, naming the format, rather than leaving it to be guessed at.
+        if (m_warned_format != (uint32_t)format)
+        {
+            m_warned_format = (uint32_t)format;
+            LogWarning("VulkanContext: no conversion for VkFormat "
+                + std::to_string((int)format)
+                + " — copying as RGBA8. Colours will be wrong if it is not "
+                  "an 8-bit RGBA/BGRA format.");
+        }
         memcpy(dst, src, (size_t)needed);
     }
 

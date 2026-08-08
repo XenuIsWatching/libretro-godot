@@ -13,7 +13,13 @@ namespace Xenu
 class VulkanContext
 {
 public:
-    bool Init(retro_hw_render_context_negotiation_interface_vulkan* negotiation);
+    /// `frame_w`/`frame_h` are the core's MAXIMUM frame size. They matter because
+    /// a core that needs a surface (Dolphin) builds its swapchain to fit it and
+    /// presents a frame of that size — so the surface has to be the size we
+    /// intend to read back, not an arbitrary one. See the window creation in
+    /// Init() for what went wrong when it was fixed at 1920x1080.
+    bool Init(retro_hw_render_context_negotiation_interface_vulkan* negotiation,
+              int32_t frame_w, int32_t frame_h);
     void Destroy();
 
     void SetImage(const retro_vulkan_image* image, uint32_t num_semaphores,
@@ -86,6 +92,14 @@ private:
     VkDebugUtilsMessengerEXT m_debug_messenger = VK_NULL_HANDLE;
 #ifdef _WIN32
     void* m_hidden_hwnd = nullptr;
+
+    /// The core's max frame size, which is also the size of the surface we make
+    /// for it. See Init().
+    int32_t m_frame_w = 640;
+    int32_t m_frame_h = 480;
+    /// Formats already reported as unconvertible, so the warning fires once per
+    /// format rather than once per frame.
+    mutable uint32_t m_warned_format = 0;
 #endif
 #ifdef __ANDROID__
     void* m_mediandk       = nullptr;  // libmediandk.so handle
