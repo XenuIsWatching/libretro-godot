@@ -8,3 +8,6 @@
 [submodule "external/vulkan-headers"]
 	path = external/vulkan-headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "external/rcheevos"]
+	path = external/rcheevos
+	url = https://github.com/RetroAchievements/rcheevos.git

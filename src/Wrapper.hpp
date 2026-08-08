@@ -269,6 +269,26 @@ public:
     const std::string& GetRootDirectory() const { return m_root_directory; }
     const std::string& GetTempDirectory() const { return m_temp_directory; }
 
+    /// Descriptors handed over by RETRO_ENVIRONMENT_SET_MEMORY_MAPS, deep-copied.
+    /// The core only guarantees the array and the addrspace strings for the
+    /// duration of that one callback — the `ptr` values inside stay valid for the
+    /// session, which is what makes copying the rest worthwhile. rcheevos needs
+    /// this to translate a RetroAchievements address into a host pointer; without
+    /// it, only cores that expose a flat RETRO_MEMORY_SYSTEM_RAM can be supported.
+    void SetMemoryDescriptors(const retro_memory_map* memory_maps);
+    /// A retro_memory_map view over the copies. Empty descriptors when the core
+    /// never sent any, which rc_libretro_memory_init handles by falling back to
+    /// retro_get_memory_data.
+    retro_memory_map GetMemoryMap() const;
+    /// Whether the core declared achievement support via
+    /// RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS. Cores that never call it are
+    /// assumed to support them — the callback exists to opt OUT.
+    bool GetSupportsAchievements() const { return m_supports_achievements; }
+    void SetSupportsAchievements(bool support) { m_supports_achievements = support; }
+    /// retro_get_memory_data/size for a RETRO_MEMORY_* id, for callers that need
+    /// the raw region rather than the CRC ComputeRamCrc returns. Emulation thread.
+    void GetCoreMemory(uint32_t id, uint8_t*& out_data, size_t& out_size) const;
+
     /// The core is handed this struct's address in retro_get_system_av_info, and at least
     /// one core keeps that pointer and writes through it long afterwards — ScummVM revises
     /// timing.fps from inside context_reset. It therefore has to outlive the call, and a
@@ -362,6 +382,14 @@ public:
     std::string m_game_path;
 
     std::vector<unsigned char> m_game_buffer;
+
+    /// Backing store for SetMemoryDescriptors. The strings are held separately so
+    /// the char* inside each descriptor keeps pointing at storage we own; a
+    /// vector<string> would reallocate its elements' buffers on growth, so this is
+    /// only ever filled in one pass and never appended to afterwards.
+    std::vector<retro_memory_descriptor> m_memory_descriptors;
+    std::vector<std::string> m_memory_addrspaces;
+    bool m_supports_achievements = true;
 
     /// The Libretro node that owns this Wrapper (set by Libretro constructor).
     Libretro* m_libretro_node = nullptr;

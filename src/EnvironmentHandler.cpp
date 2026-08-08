@@ -483,12 +483,9 @@ bool EnvironmentHandler::SetSubsystemInfo(const retro_subsystem_info* subsystem_
 
 bool EnvironmentHandler::SetMemoryMaps(const retro_memory_map* memory_maps)
 {
-    if (memory_maps)
-        for (size_t i = 0; i < memory_maps->num_descriptors; ++i)
-        {
-            const retro_memory_descriptor& descriptor = memory_maps->descriptors[i];
-            //Log("Memory Descriptor: flags = " + std::to_string(descriptor.flags));
-        }
+    Wrapper* wrapper = Wrapper::GetCurrentThreadWrapper();
+    if (wrapper)
+        wrapper->SetMemoryDescriptors(memory_maps);
     return true;
 }
 
@@ -508,10 +505,17 @@ bool EnvironmentHandler::GetLanguage(retro_language* language) const
 
 bool EnvironmentHandler::SetSupportAchievements(bool* support)
 {
-    if (support)
-        return true;
+    // This tested the pointer rather than dereferencing it, so a core that called
+    // it to say "no" was recorded as saying nothing at all. The callback exists to
+    // opt OUT — a core that never calls it is assumed to support achievements.
+    if (support == nullptr)
+        return false;
 
-    // Log("Support: " + (support ? "enabled" : "disabled"));
+    Wrapper* wrapper = Wrapper::GetCurrentThreadWrapper();
+    if (wrapper)
+        wrapper->SetSupportsAchievements(*support);
+
+    Log(std::string("Achievements: core reports ") + (*support ? "supported" : "unsupported"));
     return true;
 }
 

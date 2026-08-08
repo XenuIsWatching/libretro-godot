@@ -114,6 +114,15 @@ public:
 
     void StartContent(godot::MeshInstance3D* node, godot::String root_directory, godot::String core_name, godot::String game_path);
     void StopContent();
+
+    /// Ask to track RetroAchievements for the content about to be started.
+    /// `console_id` is an RC_CONSOLE_* value (see RaConsoles.for_systemid); 0 means
+    /// the system has no RetroAchievements equivalent. Call BEFORE StartContent —
+    /// identification happens as the core comes up. False when another machine
+    /// already holds the session, nobody is signed in, or achievements are off.
+    bool RaClaimSession(int console_id);
+    /// True while this node's core is the one being tracked.
+    bool RaHoldsSession() const;
     void SetScreenMesh(godot::MeshInstance3D* node);
     void SetCoreOption(const godot::String& key, const godot::String& value);
     void SetInputEnabled(bool enabled);
@@ -236,6 +245,10 @@ public:
 
 private:
     std::unique_ptr<Wrapper> m_wrapper;
+
+    /// Seconds since the last rc_client_idle. Every node runs this, so the tick
+    /// costs one mutexed no-op per node per second when nothing is signed in.
+    double m_ra_idle_accumulator = 0.0;
 
     static godot::Dictionary ConvertOptionCategories(const std::unordered_map<std::string, OptionCategory>& categories);
     static godot::Dictionary ConvertOptionDefinitions(const std::unordered_map<std::string, OptionDefinition>& definitions);

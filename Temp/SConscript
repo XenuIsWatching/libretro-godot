@@ -20,6 +20,11 @@ env.Append(CPPPATH=[
     "external/godot-cpp/include/",
     "external/godot-cpp/gen/include/",
     "external/libretro-common/include/",
+    # rcheevos splits its headers: the public API is include/, but rc_libretro.h
+    # and rhash/rc_hash_internal.h live in src/ and are included by relative path
+    # from within the library, so both have to be reachable.
+    "external/rcheevos/include/",
+    "external/rcheevos/src/",
 ])
 
 is_windows = env["platform"] == "windows"
@@ -118,6 +123,29 @@ sources.append("external/libretro-common/file/file_path_io.c")
 sources.append("external/libretro-common/time/rtime.c")
 sources.append("external/libretro-common/streams/file_stream.c")
 sources.append("external/libretro-common/vfs/vfs_implementation.c")
+
+# RetroAchievements. rcheevos needs no external dependency — it carries its own
+# md5 and AES — and rc_export.h defaults to RC_STATIC when none of the linkage
+# macros are defined, so there is nothing to declare but the sources.
+#
+# RC_CLIENT_SUPPORTS_HASH turns on rc_client_begin_identify_and_load_game, which
+# is the whole point: it hashes the content by RetroAchievements' console-specific
+# rules and resolves it to a game in one call.
+#
+# The whole of rhash is compiled, including hash_encrypted.c and its aes.c. It is
+# tempting to define RC_HASH_NO_ENCRYPTED to save a few KB, but (a) hash_encrypted.c
+# carries no outer #ifndef of its own, so the define alone does not exclude it —
+# the sources have to be dropped from this list too — and (b) that path is what
+# hashes .cia/.3ds content, which the azahar cabinet needs.
+#
+# rc_client_raintegration.c (the Windows achievement-editor DLL) and
+# rc_client_external.c are each wrapped in an #ifdef we never define, so they
+# compile to nothing and are harmless to glob.
+sources.extend(Glob("external/rcheevos/src/*.c"))
+sources.extend(Glob("external/rcheevos/src/rcheevos/*.c"))
+sources.extend(Glob("external/rcheevos/src/rapi/*.c"))
+sources.extend(Glob("external/rcheevos/src/rhash/*.c"))
+env.Append(CPPDEFINES=["RC_CLIENT_SUPPORTS_HASH"])
 
 lib_prefix = "lib" if is_android else ""
 library = env.SharedLibrary("{}/{}libretro_godot.{}.{}.{}{}".format(output_dir, lib_prefix, env["platform"], env["target"], env["arch"], env["SHLIBSUFFIX"]), source=sources)

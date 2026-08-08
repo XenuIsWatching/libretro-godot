@@ -1,5 +1,7 @@
 #include "Wrapper.hpp"
 
+#include "RetroAchievements.hpp"
+
 #include <godot_cpp/classes/global_constants.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/input.hpp>
@@ -371,6 +373,11 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     m_root_directory = root_directory;
     m_temp_directory = std::filesystem::path(root_directory).append("temp").string();
     m_game_path = game_path;
+    // Per-content, and a restart reuses this Wrapper — the descriptors belong to
+    // the core instance that is about to be torn down and re-created.
+    m_memory_descriptors.clear();
+    m_memory_addrspaces.clear();
+    m_supports_achievements = true;
     std::string system_directory = std::filesystem::path(root_directory).append("system").append(core_name).string();
     std::string save_directory = std::filesystem::path(root_directory).append("save").append(core_name).string();
     std::string core_assets_directory = std::filesystem::path(root_directory).append("core_assets").append(core_name).string();
@@ -890,6 +897,54 @@ void Wrapper::EmitSignalOnMainThread(const godot::StringName& signal_name, const
         std::make_unique<ThreadCommandEmitSignal>(this, signal_name, args));
 }
 
+void Wrapper::SetMemoryDescriptors(const retro_memory_map* memory_maps)
+{
+    m_memory_descriptors.clear();
+    m_memory_addrspaces.clear();
+    if (memory_maps == nullptr || memory_maps->descriptors == nullptr)
+        return;
+
+    const size_t count = memory_maps->num_descriptors;
+    // Both reserved up front. The descriptors hold char* into the strings, so a
+    // reallocation of either vector mid-loop would leave dangling pointers behind.
+    m_memory_descriptors.reserve(count);
+    m_memory_addrspaces.reserve(count);
+
+    for (size_t i = 0; i < count; ++i)
+        m_memory_addrspaces.emplace_back(memory_maps->descriptors[i].addrspace
+            ? memory_maps->descriptors[i].addrspace : "");
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        retro_memory_descriptor descriptor = memory_maps->descriptors[i];
+        // ptr is the core's own allocation and stays valid for the session, so it
+        // is carried across as-is. Only addrspace has to be re-pointed at our copy.
+        descriptor.addrspace = m_memory_addrspaces[i].empty()
+            ? nullptr : m_memory_addrspaces[i].c_str();
+        m_memory_descriptors.push_back(descriptor);
+    }
+
+    Log("Memory map: captured " + std::to_string(count) + " descriptor(s)");
+}
+
+void Wrapper::GetCoreMemory(uint32_t id, uint8_t*& out_data, size_t& out_size) const
+{
+    out_data = nullptr;
+    out_size = 0;
+    if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    out_data = static_cast<uint8_t*>(m_core->retro_get_memory_data(id));
+    out_size = m_core->retro_get_memory_size(id);
+}
+
+retro_memory_map Wrapper::GetMemoryMap() const
+{
+    retro_memory_map map = {};
+    map.descriptors = m_memory_descriptors.empty() ? nullptr : m_memory_descriptors.data();
+    map.num_descriptors = static_cast<unsigned>(m_memory_descriptors.size());
+    return map;
+}
+
 // Self-contained CRC32 (polynomial 0xEDB88320) — libretro-common's crc32.c is
 // not part of this build, and the table init must be thread-safe (multiple
 // emulation threads may race the first call).
@@ -1392,6 +1447,12 @@ void Wrapper::FinishTeardown()
     m_stopping = false;
     m_thread_exited = false;
 
+    // Before the core unloads: the memory regions point into its allocations, and
+    // ReadMemory would follow them into freed pages. Hands the session back so the
+    // next cabinet powered on can claim it.
+    if (RetroAchievements* ra = RetroAchievements::GetSingleton())
+        ra->ReleaseSession(this);
+
     // Set the thread-local pointer on the main thread so that handler DeInit
     // calls (which call GetCurrentThreadWrapper()) can find the right instance.
     SetCurrentThreadWrapper(this);
@@ -1566,6 +1627,19 @@ void Wrapper::EmulationThreadLoop()
             return;
     }
 
+    // Achievements. Deferred to here rather than straight after retro_load_game so
+    // the core is fully initialised — the memory map arrives during load, and a
+    // core may still be registering descriptors while av_info is being read.
+    // Cartridge cores hand over the bytes already resident in m_game_buffer;
+    // need_fullpath cores never read the file, so rc_hash opens the path itself.
+    if (RetroAchievements* ra = RetroAchievements::GetSingleton())
+    {
+        if (ra->HoldsSession(this))
+            ra->BeginLoadGame(this, m_game_path,
+                m_game_buffer.empty() ? nullptr : m_game_buffer.data(),
+                m_game_buffer.size());
+    }
+
     double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
@@ -1679,8 +1753,15 @@ void Wrapper::EmulationThreadLoop()
             }
 
             m_audio_handler->CallAudioBufferStatusCallback();
+
             m_core->retro_run();
             m_frame_counter.fetch_add(1, std::memory_order_relaxed);
+
+            // Achievements. Emulation thread, strictly after the frame the core
+            // just produced, and only ever on a frame that is final — the rollback
+            // paths deliberately do not call this (see NetplayRollbackIteration).
+            if (RetroAchievements* ra = RetroAchievements::GetSingleton())
+                ra->DoFrame(this);
 
             // Charge the ceiling one frame. A call that overran its slot must not
             // earn catch-up calls, so the arrears are floored a few frames back
@@ -1734,6 +1815,11 @@ void Wrapper::EmulationThreadLoop()
         m_core->retro_run();
         int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         accumulator -= frame_duration_ms;
+
+        // Lockstep netplay frames are final — every peer has confirmed the inputs
+        // before the frame runs — so they count, unlike rollback speculation.
+        if (RetroAchievements* ra = RetroAchievements::GetSingleton())
+            ra->DoFrame(this);
 
         if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
             EmitNetplayCrc(frame_done);

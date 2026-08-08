@@ -3,6 +3,7 @@
 #include "Wrapper.hpp"
 #include "AudioHandler.hpp"
 #include "CoreOptionsPeek.hpp"
+#include "RetroAchievements.hpp"
 
 using namespace godot;
 
@@ -219,9 +220,34 @@ void Libretro::_exit_tree()
     m_wrapper->ShutdownForExit();
 }
 
+bool Libretro::RaClaimSession(int console_id)
+{
+    RetroAchievements* ra = RetroAchievements::GetSingleton();
+    if (ra == nullptr || console_id <= 0)
+        return false;
+    return ra->ClaimSession(m_wrapper.get(), static_cast<uint32_t>(console_id));
+}
+
+bool Libretro::RaHoldsSession() const
+{
+    RetroAchievements* ra = RetroAchievements::GetSingleton();
+    return ra != nullptr && ra->HoldsSession(m_wrapper.get());
+}
+
 void Libretro::_process(double delta)
 {
     m_wrapper->_process(delta);
+
+    // rc_client's pending queue (unlocks that failed to send, session pings) is
+    // serviced by do_frame while a game runs and by idle when one does not. Once a
+    // second is what rcheevos asks for; every frame would be wasted work.
+    m_ra_idle_accumulator += delta;
+    if (m_ra_idle_accumulator >= 1.0)
+    {
+        m_ra_idle_accumulator = 0.0;
+        if (RetroAchievements* ra = RetroAchievements::GetSingleton())
+            ra->Idle();
+    }
 }
 
 void Libretro::NotifyOptionsReady()
@@ -340,6 +366,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetDiskEjectState", "ejected"), &Libretro::SetDiskEjectState);
     ClassDB::bind_method(D_METHOD("ReplaceDiskImage", "index", "path"), &Libretro::ReplaceDiskImage);
     ClassDB::bind_method(D_METHOD("ScheduleDiscOp", "frame", "op", "index", "path"), &Libretro::ScheduleDiscOp);
+    ClassDB::bind_method(D_METHOD("RaClaimSession", "console_id"), &Libretro::RaClaimSession);
+    ClassDB::bind_method(D_METHOD("RaHoldsSession"), &Libretro::RaHoldsSession);
 
     ADD_SIGNAL(MethodInfo("savestate_ready",
         PropertyInfo(Variant::PACKED_BYTE_ARRAY, "data"),
