@@ -125,6 +125,7 @@ public:
     /// framebuffer for dual-screen cores — melonDS maps the bottom-screen
     /// region of it to DS touch).
     void SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed);
+    void SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed);
 
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     // In netplay mode the emulation thread runs frame N only once the inputs

@@ -169,7 +169,18 @@ public:
 
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y in [-32767, 32767]
     /// across the whole video output. Drives the DS/3DS touch screen.
+    /// Writes touch index 0 and drops any other index, so a single-point caller
+    /// never inherits leftovers from SetPointerIndexState.
     void SetPointerState(int port, int x, int y, bool pressed);
+
+    /// One touch index of the pointer device (0-3), for cores that read more than
+    /// the first. Dolphin's Wiimote IR passthrough is the reason this exists: it
+    /// takes one camera object per index, so the frontend can hand it the real
+    /// view of the sensor bar instead of a cursor position. Same [-32767, 32767]
+    /// range; that core wants the positive half, 0 = 0.0 and 32767 = 1.0.
+    /// Unlike SetPointerState this leaves the other indices alone — send every
+    /// index you own each frame, visible or not.
+    void SetPointerIndexState(int port, int index, int x, int y, bool pressed);
 
     // ── Netplay (deterministic lockstep) ─────────────────────────────────────
     /// Gate the emulation loop: frame N runs only once PostNetplayInputs(N,…)

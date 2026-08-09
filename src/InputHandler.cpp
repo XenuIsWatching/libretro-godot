@@ -32,7 +32,7 @@ int16_t InputHandler::StateCallback(uint32_t port, uint32_t device, uint32_t ind
     case RETRO_DEVICE_LIGHTGUN:
         return instance->m_input_handler->ProcessLightgunDevice(port, id);
     case RETRO_DEVICE_POINTER:
-        return instance->m_input_handler->ProcessPointerDevice(port, id);
+        return instance->m_input_handler->ProcessPointerDevice(port, index, id);
     case RETRO_DEVICE_ANALOG:
         return instance->m_input_handler->ProcessAnalogDevice(port, index, id);
     default:
@@ -184,32 +184,51 @@ uint32_t InputHandler::GetLightgunButtons(uint32_t port)
 
 void InputHandler::SetPointerPosition(uint32_t port, int16_t x, int16_t y)
 {
-    m_pointer_x[port] = x;
-    m_pointer_y[port] = y;
+    auto& p = m_pointers[port][0];
+    p.x = x;
+    p.y = y;
 }
 void InputHandler::SetPointerPressed(uint32_t port, int16_t pressed)
 {
-    m_pointer_pressed[port] = pressed;
+    m_pointers[port][0].pressed = pressed;
 }
-void InputHandler::SetPointerCount(uint32_t port, int16_t count)
+void InputHandler::SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed)
 {
-    m_pointer_count[port] = count;
+    if (index >= MAX_POINTERS)
+        return;
+
+    auto& p = m_pointers[port][index];
+    p.x = x;
+    p.y = y;
+    p.pressed = pressed ? 1 : 0;
+}
+void InputHandler::ClearPointersFrom(uint32_t port, uint32_t index)
+{
+    auto it = m_pointers.find(port);
+    if (it == m_pointers.end())
+        return;
+
+    for (uint32_t i = index; i < MAX_POINTERS; ++i)
+        it->second[i] = {};
 }
 int16_t InputHandler::GetPointerX(uint32_t port)
 {
-    return m_pointer_x[port];
+    return m_pointers[port][0].x;
 }
 int16_t InputHandler::GetPointerY(uint32_t port)
 {
-    return m_pointer_y[port];
+    return m_pointers[port][0].y;
 }
 int16_t InputHandler::GetPointerPressed(uint32_t port)
 {
-    return m_pointer_pressed[port];
+    return m_pointers[port][0].pressed;
 }
 int16_t InputHandler::GetPointerCount(uint32_t port)
 {
-    return m_pointer_count[port];
+    int16_t count = 0;
+    for (const auto& p : m_pointers[port])
+        count += (p.pressed != 0) ? 1 : 0;
+    return count;
 }
 
 void InputHandler::SetAnalogLeft(uint32_t port, int16_t x, int16_t y)
@@ -463,18 +482,25 @@ int16_t InputHandler::ProcessLightgunDevice(uint32_t port, uint32_t id)
     }
 }
 
-int16_t InputHandler::ProcessPointerDevice(uint32_t port, uint32_t id)
+int16_t InputHandler::ProcessPointerDevice(uint32_t port, uint32_t index, uint32_t id)
 {
+    // COUNT is a property of the whole device, so it ignores the index — cores
+    // read it at index 0 and would otherwise see nothing for the others.
+    if (id == RETRO_DEVICE_ID_POINTER_COUNT)
+        return GetPointerCount(port);
+
+    if (index >= MAX_POINTERS)
+        return 0;
+
+    const auto& p = m_pointers[port][index];
     switch (id)
     {
         case RETRO_DEVICE_ID_POINTER_X:
-            return m_pointer_x[port];
+            return p.x;
         case RETRO_DEVICE_ID_POINTER_Y:
-            return m_pointer_y[port];
+            return p.y;
         case RETRO_DEVICE_ID_POINTER_PRESSED:
-            return m_pointer_pressed[port];
-        case RETRO_DEVICE_ID_POINTER_COUNT:
-            return m_pointer_count[port];
+            return p.pressed;
         default:
             return 0;
     }

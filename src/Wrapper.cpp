@@ -583,8 +583,16 @@ void Wrapper::SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed)
     {
         m_input_handler->SetPointerPosition(port, x, y);
         m_input_handler->SetPointerPressed(port, pressed ? 1 : 0);
-        m_input_handler->SetPointerCount(port, pressed ? 1 : 0);
+        // A single-point caller owns the whole device: anything a multi-point
+        // caller left on the other indices would otherwise keep being reported.
+        m_input_handler->ClearPointersFrom(port, 1);
     }
+}
+
+void Wrapper::SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed)
+{
+    if (m_input_handler)
+        m_input_handler->SetPointerIndexState(port, index, x, y, pressed);
 }
 
 // ── Netplay (deterministic lockstep) ─────────────────────────────────────────
@@ -1044,10 +1052,12 @@ void Wrapper::ApplyNetplayAux(const NpFrame& inputs)
             inputs[21] / 1000.0f, inputs[22] / 1000.0f, inputs[23] / 1000.0f);
     if (flags & 2)
     {
+        // Index 0 only: the aux block has room for one point, so multi-point
+        // input (Wiimote IR passthrough) is not part of the netplay timeline.
         m_input_handler->SetPointerPosition(0,
             static_cast<int16_t>(inputs[24]), static_cast<int16_t>(inputs[25]));
         m_input_handler->SetPointerPressed(0, inputs[26] ? 1 : 0);
-        m_input_handler->SetPointerCount(0, inputs[26] ? 1 : 0);
+        m_input_handler->ClearPointersFrom(0, 1);
     }
     // Key events: applied in slot order on the emulation thread, so the poll
     // bitset AND the core's keyboard event callback see the identical sequence

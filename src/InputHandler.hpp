@@ -58,13 +58,24 @@ public:
     void SetLightgunButtons(uint32_t port, uint32_t buttons);
     uint32_t GetLightgunButtons(uint32_t port);
 
+    // ── Pointer (multi-touch) ────────────────────────────────────────────────
+    // libretro's pointer device carries several simultaneous points, selected by
+    // the `index` argument of the state callback. Most cores read index 0 only,
+    // which is what the unindexed setters below write; Dolphin's IR passthrough
+    // reads all four, one per object the Wiimote camera can see.
+    static constexpr uint32_t MAX_POINTERS = 4;
+
     void SetPointerPosition(uint32_t port, int16_t x, int16_t y);
     int16_t GetPointerX(uint32_t port);
     int16_t GetPointerY(uint32_t port);
     void SetPointerPressed(uint32_t port, int16_t pressed);
     int16_t GetPointerPressed(uint32_t port);
-    void SetPointerCount(uint32_t port, int16_t count);
     int16_t GetPointerCount(uint32_t port);
+
+    void SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed);
+    /// Drop every index above `count`. Cheaper and less error-prone than making
+    /// callers clear the points they no longer have.
+    void ClearPointersFrom(uint32_t port, uint32_t index);
 
     void SetAnalogLeft(uint32_t port, int16_t x, int16_t y);
     int16_t GetAnalogLeftX(uint32_t port);
@@ -117,10 +128,16 @@ private:
     std::unordered_map<uint32_t, int16_t> m_lightgun_is_offscreen;
     std::unordered_map<uint32_t, uint32_t> m_lightgun_buttons;
 
-    std::unordered_map<uint32_t, int16_t> m_pointer_x;
-    std::unordered_map<uint32_t, int16_t> m_pointer_y;
-    std::unordered_map<uint32_t, int16_t> m_pointer_pressed;
-    std::unordered_map<uint32_t, int16_t> m_pointer_count;
+    // One entry per touch index. RETRO_DEVICE_ID_POINTER_COUNT is derived from
+    // the pressed flags rather than stored, so a caller can never leave a count
+    // that disagrees with the points behind it.
+    struct PointerState
+    {
+        int16_t x = 0;
+        int16_t y = 0;
+        int16_t pressed = 0;
+    };
+    std::unordered_map<uint32_t, std::array<PointerState, MAX_POINTERS>> m_pointers;
 
     std::unordered_map<uint32_t, int16_t> m_analog_left_x;
     std::unordered_map<uint32_t, int16_t> m_analog_left_y;
@@ -150,7 +167,7 @@ private:
     int16_t ProcessMouseDevice(uint32_t port, uint32_t id);
     int16_t ProcessKeyboardDevice(uint32_t port, uint32_t id);
     int16_t ProcessLightgunDevice(uint32_t port, uint32_t id);
-    int16_t ProcessPointerDevice(uint32_t port, uint32_t id);
+    int16_t ProcessPointerDevice(uint32_t port, uint32_t index, uint32_t id);
     int16_t ProcessAnalogDevice(uint32_t port, uint32_t index, uint32_t id);
 
     static bool RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_effect effect, uint16_t strength);

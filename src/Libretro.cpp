@@ -133,6 +133,12 @@ void Libretro::SetPointerState(int port, int x, int y, bool pressed)
         static_cast<int16_t>(x), static_cast<int16_t>(y), pressed);
 }
 
+void Libretro::SetPointerIndexState(int port, int index, int x, int y, bool pressed)
+{
+    m_wrapper->SetPointerIndexState(static_cast<uint32_t>(port), static_cast<uint32_t>(index),
+        static_cast<int16_t>(x), static_cast<int16_t>(y), pressed);
+}
+
 void Libretro::SetNetplayMode(bool enabled, int port_mask, int64_t start_frame)
 {
     m_wrapper->SetNetplayMode(enabled, static_cast<uint32_t>(port_mask), start_frame);
@@ -356,6 +362,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("GodotKeyToRetroKey", "event"), &Libretro::GodotKeyToRetroKey);
     ClassDB::bind_method(D_METHOD("SetSensorAccel", "port", "x", "y", "z"), &Libretro::SetSensorAccel);
     ClassDB::bind_method(D_METHOD("SetPointerState", "port", "x", "y", "pressed"), &Libretro::SetPointerState);
+    ClassDB::bind_method(D_METHOD("SetPointerIndexState", "port", "index", "x", "y", "pressed"), &Libretro::SetPointerIndexState);
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
     ClassDB::bind_method(D_METHOD("PostNetplayInputs", "frame", "inputs"), &Libretro::PostNetplayInputs);
     ClassDB::bind_method(D_METHOD("SetNetplayRollback", "enabled", "local_mask", "max_ahead"), &Libretro::SetNetplayRollback);
