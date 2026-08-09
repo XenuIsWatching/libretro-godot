@@ -90,16 +90,21 @@ private:
 
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT m_debug_messenger = VK_NULL_HANDLE;
-#ifdef _WIN32
-    void* m_hidden_hwnd = nullptr;
 
     /// The core's max frame size, which is also the size of the surface we make
-    /// for it. See Init().
+    /// for it on the platforms that build one. See Init().
+    ///
+    /// NOT inside the _WIN32 block below, even though only Windows sizes a window
+    /// with it: Init() and ReadbackToPixels are compiled for every platform, so a
+    /// member they touch has to exist for every platform. Guarded, this built on
+    /// MSVC and failed the NDK outright.
     int32_t m_frame_w = 640;
     int32_t m_frame_h = 480;
     /// Formats already reported as unconvertible, so the warning fires once per
     /// format rather than once per frame.
     mutable uint32_t m_warned_format = 0;
+#ifdef _WIN32
+    void* m_hidden_hwnd = nullptr;
 #endif
 #ifdef __ANDROID__
     void* m_mediandk       = nullptr;  // libmediandk.so handle
