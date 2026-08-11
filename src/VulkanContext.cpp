@@ -389,15 +389,24 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             auto readerGetWindow = reinterpret_cast<PFN_AImageReader_getWindow>(
                 DynLib_Sym(m_mediandk, "AImageReader_getWindow"));
 
-            // Dimensions are irrelevant — the core overrides the reported
-            // surface extent with its own internal resolution.
+            // Sized to the core's MAX FRAME, for the same reason the Windows window
+            // is: a core that needs a surface may build its swapchain from it and
+            // present a frame that size. Android always reports a concrete
+            // currentExtent, so a core that does read it has nothing to choose and
+            // takes these dimensions verbatim.
+            //
+            // These were a fixed 640x480, on the reasoning that the core overrides
+            // the extent with its own internal resolution. A core that fakes its
+            // swapchain does; one that does not would present 640x480 while
+            // reporting, say, 640x528 to video_refresh, and ReadbackToPixels copies
+            // the REPORTED rectangle — running the copy off the end of the image.
             AImageReaderOpaque* reader = nullptr;
             if (readerNewWithUsage)
-                readerNewWithUsage(640, 480, kAImageFormatRGBA8888,
+                readerNewWithUsage(m_frame_w, m_frame_h, kAImageFormatRGBA8888,
                                    kAHBUsageGpuSampled | kAHBUsageGpuFramebuffer,
                                    2, &reader);
             else if (readerNew)
-                readerNew(640, 480, kAImageFormatRGBA8888, 2, &reader);
+                readerNew(m_frame_w, m_frame_h, kAImageFormatRGBA8888, 2, &reader);
 
             m_android_reader = reader;
 
@@ -425,7 +434,18 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
                     if (r != VK_SUCCESS)
                         LogWarning("VulkanContext: vkCreateAndroidSurfaceKHR failed: " + std::to_string(r));
                     else
-                        LogOK("VulkanContext: VkSurfaceKHR created.");
+                    {
+                        LogOK("VulkanContext: VkSurfaceKHR created at "
+                            + std::to_string(m_frame_w) + "x" + std::to_string(m_frame_h) + ".");
+                        // What a core reading the surface will see. Worth printing: if
+                        // this disagrees with the size reported to video_refresh, the
+                        // readback is copying past the end of the image.
+                        VkSurfaceCapabilitiesKHR caps{};
+                        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_gpu, m_surface, &caps) == VK_SUCCESS)
+                            Log("VulkanContext: surface extent "
+                                + std::to_string(caps.currentExtent.width) + "x"
+                                + std::to_string(caps.currentExtent.height));
+                    }
                 }
             }
         }
