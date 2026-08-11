@@ -40,7 +40,7 @@ public:
     bool InitHwRenderContext(int32_t width, int32_t height);
     void SetImageFormat(godot::Image::Format format);
     void CreateTexture(int32_t width, int32_t height, godot::Image::Format image_format, godot::PackedByteArray pixel_data, bool flip_y);
-    void UpdateTexture(godot::PackedByteArray pixel_data, bool flip_y);
+    void UpdateTexture(godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);
 
     bool SetRotation(uint32_t rotation);
     bool GetOverscan(int32_t* overscan);
@@ -85,6 +85,10 @@ public:
 private:
     godot::Ref<godot::StandardMaterial3D> m_original_surface_material_override = nullptr;
     godot::Ref<godot::StandardMaterial3D> m_new_material = nullptr;
+    // Size of the frame the emulation thread produced last. Emulation-thread
+    // state: it decides there whether a frame needs a new texture or fits the
+    // existing one. The main thread must not read it to size a queued frame —
+    // by the time a queued frame executes, this has already moved on.
     uint32_t m_last_width = 0;
     uint32_t m_last_height = 0;
     godot::Image::Format m_image_format;

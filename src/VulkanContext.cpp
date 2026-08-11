@@ -80,9 +80,21 @@ uint32_t VulkanContext::s_GetSyncIndexMask(void* /*handle*/)
     return 0x1;
 }
 
-void VulkanContext::s_SetCommandBuffers(void* /*handle*/, uint32_t /*num_cmd*/, const VkCommandBuffer* /*cmd*/)
+// Not consumed: cores we run submit their own command buffers. A core that
+// hands them over instead expects the FRONTEND to submit them, and per
+// libretro_vulkan.h set_image semaphores are ignored in that mode — so silently
+// dropping them means that core's rendering never executes at all. Say so once
+// rather than presenting a black screen with no explanation.
+void VulkanContext::s_SetCommandBuffers(void* handle, uint32_t num_cmd, const VkCommandBuffer* /*cmd*/)
 {
-    // Phase 1: not consumed; core command buffers submitted directly by the core
+    auto* ctx = static_cast<VulkanContext*>(handle);
+    if (!ctx->m_warned_set_command_buffers)
+    {
+        ctx->m_warned_set_command_buffers = true;
+        LogWarning("VulkanContext: core passed " + std::to_string(num_cmd)
+            + " command buffer(s) via set_command_buffers, which we do not submit. "
+              "Its rendering will not appear.");
+    }
 }
 
 void VulkanContext::s_WaitSyncIndex(void* handle)
@@ -98,8 +110,13 @@ void VulkanContext::s_WaitSyncIndex(void* handle)
         return;
 
     std::lock_guard<std::mutex> lock(ctx->m_fence_mutex);
-    if (ctx->m_readback_pending)
-        ctx->WaitReadbackFenceLocked();
+    // The core is about to draw into the image we read from. If the wait times
+    // out the copy is still in flight, and the honest answer to "is it safe?" is
+    // no — but this callback has no way to say so, and returning without waiting
+    // is what the core takes as a yes. Report it rather than swallow it.
+    if (!ctx->WaitReadbackFenceLocked() && ctx->m_readback_pending)
+        LogWarning("VulkanContext: core is reusing the image while our copy is "
+                   "still running; expect a torn frame.");
 }
 
 void VulkanContext::s_LockQueue(void* handle)
@@ -114,7 +131,20 @@ void VulkanContext::s_UnlockQueue(void* handle)
 
 void VulkanContext::s_SetSignalSemaphore(void* handle, VkSemaphore semaphore)
 {
-    static_cast<VulkanContext*>(handle)->m_signal_semaphore = semaphore;
+    auto* ctx = static_cast<VulkanContext*>(handle);
+
+    VkSemaphore stale = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(ctx->m_state_mutex);
+        stale = ctx->m_signal_semaphore;
+        ctx->m_signal_semaphore = semaphore;
+    }
+
+    // Two calls before one readback used to drop the first on the floor. A
+    // binary semaphore we accepted and never signalled stalls the core's queue
+    // permanently, so retire it instead of overwriting it.
+    if (stale != VK_NULL_HANDLE)
+        ctx->SignalSemaphoreNow(stale);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,9 +158,62 @@ static VkInstance s_CreateInstanceWrapper(void* /*opaque*/, const VkInstanceCrea
     return inst;
 }
 
+static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
+{
+    uint32_t count = 0;
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, nullptr);
+    if (count == 0)
+        return false;
+
+    std::vector<VkExtensionProperties> props(count);
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, props.data());
+    for (const VkExtensionProperties& p : props)
+        if (std::strcmp(p.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0)
+            return true;
+    return false;
+}
+
+// The core creates the device on v2 negotiation and we only wrap the call, so
+// this is the one place an extension can be added to a device we do not own.
+//
+// VK_EXT_device_fault is added because VK_ERROR_DEVICE_LOST on its own carries no
+// information at all: the Adreno GMU reports "GPU hang detected", the device dies,
+// and nothing says which submission or why. With the extension enabled,
+// vkGetDeviceFaultInfoEXT gives the driver's own description of the fault. It is
+// requested unconditionally rather than behind a debug flag — it costs nothing
+// until a device is lost, and by then it is the only account of what happened.
 static VkDevice s_CreateDeviceWrapper(VkPhysicalDevice gpu, void* /*opaque*/, const VkDeviceCreateInfo* ci)
 {
     VkDevice dev = VK_NULL_HANDLE;
+
+    if (s_DeviceSupportsFault(gpu))
+    {
+        std::vector<const char*> exts;
+        if (ci->ppEnabledExtensionNames)
+            exts.assign(ci->ppEnabledExtensionNames,
+                        ci->ppEnabledExtensionNames + ci->enabledExtensionCount);
+        exts.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+
+        // The extension does nothing unless the feature is enabled too.
+        VkPhysicalDeviceFaultFeaturesEXT fault{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
+        fault.deviceFault = VK_TRUE;
+        fault.pNext       = const_cast<void*>(ci->pNext);
+
+        VkDeviceCreateInfo patched      = *ci;
+        patched.pNext                   = &fault;
+        patched.enabledExtensionCount   = static_cast<uint32_t>(exts.size());
+        patched.ppEnabledExtensionNames = exts.data();
+
+        if (vkCreateDevice(gpu, &patched, nullptr, &dev) == VK_SUCCESS)
+            return dev;
+
+        // Never let a diagnostic stop the core from running: fall back to
+        // exactly what it asked for.
+        LogWarning("VulkanContext: device creation with VK_EXT_device_fault failed; "
+                   "retrying without it.");
+        dev = VK_NULL_HANDLE;
+    }
+
     vkCreateDevice(gpu, ci, nullptr, &dev);
     return dev;
 }
@@ -153,6 +236,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         const VkApplicationInfo* app_info =
             (neg->get_application_info) ? neg->get_application_info() : nullptr;
 
+        m_negotiation_engaged = true;
         m_instance = neg->create_instance(vkGetInstanceProcAddr, app_info,
                                           s_CreateInstanceWrapper, this);
 
@@ -172,7 +256,11 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         // compile shaders targeting a higher SPIR-V version.  Query the
         // driver's maximum supported instance version and use that so the
         // validation environment matches what the core actually needs.
-        uint32_t max_api_version = VK_API_VERSION_1_2;
+        //
+        // The default is 1.0, not 1.2: vkEnumerateInstanceVersion is itself a
+        // 1.1 symbol, so its absence means a 1.0 loader, and asking a 1.0
+        // loader for 1.2 fails the whole instance with INCOMPATIBLE_DRIVER.
+        uint32_t max_api_version = VK_API_VERSION_1_0;
         auto enumVer = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
             vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
         if (enumVer)
@@ -199,18 +287,45 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         ici.pApplicationInfo = app_info_ptr;
 
-        // Enable extensions needed by cores for Vulkan HW rendering.
+        // Extensions useful to cores doing Vulkan HW rendering — but every one
+        // of these was previously requested unconditionally, and vkCreateInstance
+        // fails outright on a single unsupported name. VK_KHR_get_surface_
+        // capabilities2 in particular is not core-promoted and is genuinely
+        // absent on some Android drivers, which would take the whole Vulkan path
+        // down rather than degrade. Ask the loader what exists first.
+        uint32_t avail_count = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &avail_count, nullptr);
+        std::vector<VkExtensionProperties> avail(avail_count);
+        if (avail_count)
+            vkEnumerateInstanceExtensionProperties(nullptr, &avail_count, avail.data());
+
+        auto supported = [&avail](const char* name) {
+            for (const auto& e : avail)
+                if (std::strcmp(e.extensionName, name) == 0)
+                    return true;
+            return false;
+        };
+
         std::vector<const char*> inst_exts;
-        inst_exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        auto want = [&](const char* name, bool required) {
+            if (supported(name))
+                inst_exts.push_back(name);
+            else if (required)
+                LogWarning(std::string("VulkanContext: instance extension ") + name
+                    + " unavailable; cores needing a surface will fail.");
+        };
+
+        want(VK_KHR_SURFACE_EXTENSION_NAME, true);
 #ifdef _WIN32
-        inst_exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        want(VK_KHR_WIN32_SURFACE_EXTENSION_NAME, true);
 #endif
 #ifdef __ANDROID__
-        inst_exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+        want(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME, true);
 #endif
-        inst_exts.push_back("VK_KHR_get_physical_device_properties2");
-        inst_exts.push_back("VK_KHR_get_surface_capabilities2");
-        inst_exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        want("VK_KHR_get_physical_device_properties2", false);
+        want("VK_KHR_get_surface_capabilities2", false);
+        want(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false);
+
         ici.enabledExtensionCount   = static_cast<uint32_t>(inst_exts.size());
         ici.ppEnabledExtensionNames = inst_exts.data();
 
@@ -460,6 +575,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     {
         if (neg->interface_version >= 2 && neg->create_device2)
         {
+            m_negotiation_engaged   = true;
             device_from_negotiation = neg->create_device2(
                 &vk_ctx, m_instance, m_gpu, m_surface,
                 vkGetInstanceProcAddr, s_CreateDeviceWrapper, this);
@@ -473,15 +589,51 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             // paraLLEl-RDP does `enabled_features = *required_features`), and
             // RetroArch always passes a zeroed struct plus VK_KHR_swapchain —
             // match that exactly.
-            static const char* device_extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+            std::vector<const char*> device_extensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+            // VK_EXT_device_fault, so a lost device can say what killed it rather
+            // than only that it died. This is the ONLY way in on the v1 path: the
+            // core builds its own VkDeviceCreateInfo and calls vkCreateDevice
+            // itself, and s_CreateDeviceWrapper is reached only through
+            // create_device2 — which Dolphin compiles in for __APPLE__ alone. What
+            // a core is REQUIRED to honour is this list, and Dolphin merges it into
+            // its own (DolphinLibretro/Vulkan.cpp, AddNameUnique).
+            //
+            // Caveat worth knowing: the matching VkPhysicalDeviceFaultFeaturesEXT
+            // cannot be delivered this way — v1 carries a flat
+            // VkPhysicalDeviceFeatures with no pNext — so the extension is enabled
+            // while its feature bit is not. vkGetDeviceFaultInfoEXT resolves either
+            // way; whether this driver populates it without the feature is exactly
+            // what the next run finds out.
+            const bool want_fault = s_DeviceSupportsFault(m_gpu);
+            if (want_fault)
+                device_extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+
             const VkPhysicalDeviceFeatures required_features{};
 
+            m_negotiation_engaged   = true;
             device_from_negotiation = neg->create_device(
                 &vk_ctx, m_instance, m_gpu, m_surface,
                 vkGetInstanceProcAddr,
-                device_extensions, 1,
+                device_extensions.data(), static_cast<unsigned>(device_extensions.size()),
                 nullptr, 0,
                 &required_features);
+
+            // A core is entitled to refuse an extension it was not expecting, and a
+            // diagnostic must never be why the picture does not come up.
+            if (!device_from_negotiation && want_fault)
+            {
+                LogWarning("VulkanContext: create_device failed with VK_EXT_device_fault; "
+                           "retrying without it.");
+                device_extensions.pop_back();
+                vk_ctx = {};
+                device_from_negotiation = neg->create_device(
+                    &vk_ctx, m_instance, m_gpu, m_surface,
+                    vkGetInstanceProcAddr,
+                    device_extensions.data(), static_cast<unsigned>(device_extensions.size()),
+                    nullptr, 0,
+                    &required_features);
+            }
 
             if (!device_from_negotiation)
                 LogWarning("VulkanContext: create_device failed; using self-created device");
@@ -588,11 +740,18 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 // Destroy
 // ---------------------------------------------------------------------------
 
+VulkanContext::~VulkanContext()
+{
+    Destroy();
+}
+
+// Deliberately NOT gated on m_initialized. Init() returns false from eight
+// places, most of them after the instance, the surface and the platform window
+// already exist, and VideoHandler drops the context on that path — so gating
+// here leaked all three (plus the device, pool and fences on the later ones)
+// every time a Vulkan core failed to come up.
 void VulkanContext::Destroy()
 {
-    if (!m_initialized)
-        return;
-
     if (m_device != VK_NULL_HANDLE)
         vkDeviceWaitIdle(m_device);
 
@@ -618,8 +777,13 @@ void VulkanContext::Destroy()
     }
 
     // Let the negotiation interface clean up any auxiliary resources it owns.
-    if (m_negotiation && m_negotiation->destroy_device)
+    // Gated on having actually called one of its create entry points: the spec
+    // requires this even when creation failed, but calling it for a core we
+    // never asked to create anything hands it a teardown for state it does not
+    // have.
+    if (m_negotiation_engaged && m_negotiation && m_negotiation->destroy_device)
         m_negotiation->destroy_device();
+    m_negotiation_engaged = false;
 
     if (m_device != VK_NULL_HANDLE)
     {
@@ -675,7 +839,16 @@ void VulkanContext::Destroy()
         m_instance = VK_NULL_HANDLE;
     }
 
-    m_initialized = false;
+    // Reset the rest so a second Init() on this object starts clean rather than
+    // inheriting a pending readback or a stale image handle.
+    m_gpu              = VK_NULL_HANDLE;
+    m_queue            = VK_NULL_HANDLE;
+    m_readback_pending = false;
+    m_current_vk_image = VK_NULL_HANDLE;
+    m_signal_semaphore = VK_NULL_HANDLE;
+    m_src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+    m_interface        = {};
+    m_initialized      = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -706,15 +879,22 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
         si.pWaitSemaphores    = sems;
         si.pWaitDstStageMask  = wait_stages.data();
 
-        // Its own fence: m_fence tracks the readback, and the main thread can
-        // be waiting on that one right now.
+        // Its own fence: m_fence tracks the readback, and another thread can be
+        // waiting on that one right now.
         vkResetFences(m_device, 1, &m_sem_fence);
+        VkResult sr = VK_SUCCESS;
         {
             std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
-            vkQueueSubmit(m_queue, 1, &si, m_sem_fence);
+            sr = vkQueueSubmit(m_queue, 1, &si, m_sem_fence);
         }
 
-        if (vkWaitForFences(m_device, 1, &m_sem_fence, VK_TRUE, kFenceTimeoutNs) == VK_TIMEOUT)
+        // Only wait if there is something to wait FOR. The wait used to be
+        // unconditional, so a submit that never landed cost the full 2 s
+        // timeout on every single frame — an emulation thread stalled solid,
+        // presenting as a hang rather than as the failure it is.
+        if (sr != VK_SUCCESS)
+            LogError("VulkanContext: semaphore-drain vkQueueSubmit failed: " + std::to_string(sr));
+        else if (vkWaitForFences(m_device, 1, &m_sem_fence, VK_TRUE, kFenceTimeoutNs) == VK_TIMEOUT)
             LogWarning("VulkanContext: semaphore-wait fence timed out.");
     }
 
@@ -736,7 +916,7 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
 // to a PackedByteArray.  Replaces glReadPixels for Vulkan cores.
 // ---------------------------------------------------------------------------
 
-void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByteArray& out)
+bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByteArray& out)
 {
     std::unique_lock<std::mutex> fence_lock(m_fence_mutex);
 
@@ -744,23 +924,25 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // members directly would let SetImage swap them mid-function, and holding
     // m_state_mutex across the queue submit below would invert the lock order
     // against SetImage.
-    VkImage                 image  = VK_NULL_HANDLE;
-    VkFormat                format = VK_FORMAT_UNDEFINED;
-    VkImageLayout           layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImage                 image      = VK_NULL_HANDLE;
+    VkFormat                format     = VK_FORMAT_UNDEFINED;
+    VkImageLayout           layout     = VK_IMAGE_LAYOUT_UNDEFINED;
     VkImageSubresourceRange range{};
+    uint32_t                src_family = VK_QUEUE_FAMILY_IGNORED;
     {
         std::lock_guard<std::mutex> state_lock(m_state_mutex);
-        image  = m_current_vk_image;
-        format = m_current_format;
-        layout = m_current_layout;
-        range  = m_current_subresource_range;
+        image      = m_current_vk_image;
+        format     = m_current_format;
+        layout     = m_current_layout;
+        range      = m_current_subresource_range;
+        src_family = m_src_queue_family;
     }
 
     if (image == VK_NULL_HANDLE)
     {
         LogError("VulkanContext::ReadbackToPixels: no current image set");
-        SignalPendingSemaphoreLocked();
-        return;
+        SignalPendingSemaphore();
+        return false;
     }
 
     const VkDeviceSize needed = (VkDeviceSize)width * height * 4u;
@@ -769,9 +951,21 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         DestroyStagingBuffer();
         if (!CreateStagingBuffer(needed))
         {
-            SignalPendingSemaphoreLocked();
-            return;
+            SignalPendingSemaphore();
+            return false;
         }
+    }
+
+    // A submit from an earlier frame may still be running — that is exactly what
+    // a fence timeout leaves behind. The fence, the command buffer and the
+    // staging buffer are all single instances owned by this context, so reusing
+    // any of them now would reset and re-record objects the GPU is reading.
+    // Wait it out; if it is STILL not done, skip this frame rather than stamp
+    // on it.
+    if (!WaitReadbackFenceLocked())
+    {
+        SignalPendingSemaphore();
+        return false;
     }
 
     // ---- Record command buffer ----
@@ -781,20 +975,50 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     vkResetCommandBuffer(m_cmd_buf, 0);
     vkBeginCommandBuffer(m_cmd_buf, &cbbi);
 
-    // Transition: current layout → TRANSFER_SRC_OPTIMAL
-    const bool need_layout_transition =
-        (layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    // GENERAL is a contract, not just another layout. libretro_vulkan.h: "if
+    // GENERAL layout is used for the image ... the frontend is not allowed to
+    // perform any layout transitions, so concurrent reads from core and frontend
+    // are allowed." This transitioned it to TRANSFER_SRC_OPTIMAL and back like
+    // any other layout, out from under a core entitled to keep reading it.
+    // vkCmdCopyImageToBuffer accepts GENERAL as a source layout directly, so the
+    // copy needs a dependency but no transition.
+    const bool          image_is_general = (layout == VK_IMAGE_LAYOUT_GENERAL);
+    const VkImageLayout copy_layout      = image_is_general
+                                             ? VK_IMAGE_LAYOUT_GENERAL
+                                             : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    const bool need_layout_transition = (layout != copy_layout);
 
-    if (need_layout_transition)
+    // UNDEFINED and PREINITIALIZED are illegal as a barrier's newLayout, so a
+    // core that published one gets no restore rather than an invalid barrier.
+    const bool can_restore_layout = layout != VK_IMAGE_LAYOUT_UNDEFINED &&
+                                    layout != VK_IMAGE_LAYOUT_PREINITIALIZED;
+
+    // Queue family ownership. src_family was captured by SetImage and then never
+    // read: both barriers passed VK_QUEUE_FAMILY_IGNORED, so a core that had
+    // released the image to us got no matching acquire and never got it back.
+    // libretro_vulkan.h spells out the round trip — core releases to us, we
+    // acquire, we release back, core re-acquires.
+    const bool need_qfot = src_family != VK_QUEUE_FAMILY_IGNORED &&
+                           src_family != m_queue_family;
+
+    if (need_qfot && !m_logged_src_queue_family)
+    {
+        m_logged_src_queue_family = true;
+        Log("VulkanContext: core owns the image on queue family "
+            + std::to_string(src_family) + ", ours is "
+            + std::to_string(m_queue_family) + " — doing ownership transfers.");
+    }
+
+    // Acquire half, plus the layout transition if one is due.
     {
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         barrier.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                       VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.oldLayout           = layout;
-        barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.newLayout           = copy_layout;
+        barrier.srcQueueFamilyIndex = need_qfot ? src_family     : VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = need_qfot ? m_queue_family : VK_QUEUE_FAMILY_IGNORED;
         barrier.image               = image;
         barrier.subresourceRange    = range;
 
@@ -811,26 +1035,29 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     copy.bufferRowLength   = 0; // tightly packed
     copy.bufferImageHeight = 0; // tightly packed
     copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy.imageSubresource.mipLevel       = 0;
+    // Both taken from the view the core published. mipLevel was pinned to 0
+    // while baseArrayLayer came from the range, so a view onto any mip but the
+    // first read the wrong one.
+    copy.imageSubresource.mipLevel       = range.baseMipLevel;
     copy.imageSubresource.baseArrayLayer = range.baseArrayLayer;
     copy.imageSubresource.layerCount     = 1;
     copy.imageOffset = { 0, 0, 0 };
     copy.imageExtent = { width, height, 1 };
 
-    vkCmdCopyImageToBuffer(m_cmd_buf, image,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_staging_buf, 1, &copy);
+    vkCmdCopyImageToBuffer(m_cmd_buf, image, copy_layout, m_staging_buf, 1, &copy);
 
-    // Transition image back to its original layout
-    if (need_layout_transition)
+    // Release half, plus the restore transition if one is due.
+    if ((need_layout_transition && can_restore_layout) || need_qfot)
     {
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         barrier.srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                       VK_ACCESS_SHADER_READ_BIT;
-        barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout           = layout;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.oldLayout           = copy_layout;
+        barrier.newLayout           = (need_layout_transition && can_restore_layout)
+                                        ? layout : copy_layout;
+        barrier.srcQueueFamilyIndex = need_qfot ? m_queue_family : VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = need_qfot ? src_family     : VK_QUEUE_FAMILY_IGNORED;
         barrier.image               = image;
         barrier.subresourceRange    = range;
 
@@ -864,25 +1091,54 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     si.pCommandBuffers    = &m_cmd_buf;
 
     // Signal the semaphore requested by the core (if any)
-    if (m_signal_semaphore != VK_NULL_HANDLE)
+    VkSemaphore signal_sem = TakePendingSemaphore();
+    if (signal_sem != VK_NULL_HANDLE)
     {
         si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores    = &m_signal_semaphore;
-        m_signal_semaphore      = VK_NULL_HANDLE;
+        si.pSignalSemaphores    = &signal_sem;
     }
 
     vkResetFences(m_device, 1, &m_fence);
+    VkResult submit_result = VK_SUCCESS;
     {
         std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
-        vkQueueSubmit(m_queue, 1, &si, m_fence);
+        submit_result = vkQueueSubmit(m_queue, 1, &si, m_fence);
+    }
+
+    // Only claim a pending readback if one is actually in flight. Setting the
+    // flag for a submit that never landed left a fence nothing would ever
+    // signal, and every subsequent frame then burned the full 2 s timeout
+    // waiting on it.
+    if (submit_result != VK_SUCCESS)
+    {
+        LogError("VulkanContext: readback vkQueueSubmit failed: "
+            + std::to_string(submit_result));
+        if (submit_result == VK_ERROR_DEVICE_LOST)
+            DumpDeviceFault();
+        if (signal_sem != VK_NULL_HANDLE)
+            SignalSemaphoreNow(signal_sem);
+        return false;
     }
     m_readback_pending = true;
 
-    WaitReadbackFenceLocked();
+    // Nothing below may touch the staging buffer until the copy into it has
+    // finished. On a timeout the submit is still running, so abandon the frame
+    // rather than read a buffer that is still being written.
+    if (!WaitReadbackFenceLocked())
+        return false;
 
     // ---- Map and copy to output ----
     void* mapped = nullptr;
-    vkMapMemory(m_device, m_staging_mem, 0, needed, 0, &mapped);
+    VkResult map_result = vkMapMemory(m_device, m_staging_mem, 0, needed, 0, &mapped);
+    if (map_result != VK_SUCCESS || !mapped)
+    {
+        // FindMemoryType falls back to index 0 when nothing matches, which can
+        // be device-local memory that will not map at all — reaching the memcpy
+        // below with a null pointer.
+        LogError("VulkanContext: vkMapMemory (staging) failed: "
+            + std::to_string(map_result));
+        return false;
+    }
 
     out.resize((int64_t)needed);
     uint8_t*       dst = out.ptrw();
@@ -953,9 +1209,9 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         // (A2B10G10R10, common where the surface allows HDR) is the likely one,
         // and it also breaks the 4-bytes-per-pixel assumption above. Say so
         // once, naming the format, rather than leaving it to be guessed at.
-        if (m_warned_format != (uint32_t)format)
+        if (m_warned_format != (int64_t)format)
         {
-            m_warned_format = (uint32_t)format;
+            m_warned_format = (int64_t)format;
             LogWarning("VulkanContext: no conversion for VkFormat "
                 + std::to_string((int)format)
                 + " — copying as RGBA8. Colours will be wrong if it is not "
@@ -965,36 +1221,158 @@ void VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     }
 
     vkUnmapMemory(m_device, m_staging_mem);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-void VulkanContext::WaitReadbackFenceLocked()
+// What the driver says killed the device. Only meaningful after something has
+// already returned VK_ERROR_DEVICE_LOST.
+void VulkanContext::DumpDeviceFault()
 {
-    VkResult r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, kFenceTimeoutNs);
-    if (r == VK_TIMEOUT)
-        LogWarning("VulkanContext: readback fence timed out; dropping frame.");
+    if (m_fault_reported || m_device == VK_NULL_HANDLE)
+        return;
+    m_fault_reported = true;
 
+    auto getFaultInfo = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
+        vkGetDeviceProcAddr(m_device, "vkGetDeviceFaultInfoEXT"));
+    if (!getFaultInfo)
+    {
+        // Resolves only when the extension was actually enabled on THIS device,
+        // which is the honest test — the core owns device creation and may have
+        // fallen back to a create-info without it.
+        LogError("VulkanContext: device lost, and VK_EXT_device_fault is not "
+                 "enabled on this device — no fault detail available.");
+        return;
+    }
+
+    // Two-call idiom: counts first, then the arrays sized from them.
+    VkDeviceFaultCountsEXT counts{ VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT };
+    if (getFaultInfo(m_device, &counts, nullptr) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: device lost, and vkGetDeviceFaultInfoEXT gave no counts.");
+        return;
+    }
+
+    std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT>  vendors(counts.vendorInfoCount);
+
+    VkDeviceFaultInfoEXT info{ VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT };
+    info.pAddressInfos = addresses.empty() ? nullptr : addresses.data();
+    info.pVendorInfos  = vendors.empty()   ? nullptr : vendors.data();
+    counts.vendorBinarySize = 0;   // not requesting the vendor crash dump
+
+    if (getFaultInfo(m_device, &counts, &info) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: device lost, and vkGetDeviceFaultInfoEXT failed.");
+        return;
+    }
+
+    LogError(std::string("VulkanContext: DEVICE FAULT: ") + info.description);
+
+    for (uint32_t i = 0; i < counts.addressInfoCount; ++i)
+    {
+        const VkDeviceFaultAddressInfoEXT& a = addresses[i];
+        // reportedAddress is only accurate to +/- addressPrecision, which is a
+        // power-of-two mask — quoting it unqualified would overstate the answer.
+        LogError("VulkanContext:   address type " + std::to_string((int)a.addressType)
+            + " at 0x" + std::to_string(a.reportedAddress)
+            + " (precision 0x" + std::to_string(a.addressPrecision) + ")");
+    }
+
+    for (uint32_t i = 0; i < counts.vendorInfoCount; ++i)
+    {
+        const VkDeviceFaultVendorInfoEXT& v = vendors[i];
+        LogError(std::string("VulkanContext:   vendor: ") + v.description
+            + " code " + std::to_string(v.vendorFaultCode)
+            + " data " + std::to_string(v.vendorFaultData));
+    }
+
+    if (counts.addressInfoCount == 0 && counts.vendorInfoCount == 0)
+        LogError("VulkanContext:   (driver reported no address or vendor detail)");
+}
+
+// Returns false when the submission is STILL RUNNING — the caller must not touch
+// anything it owns.
+//
+// A timeout here used to log "dropping frame" and clear m_readback_pending,
+// which is the opposite of the truth: the fence has not signalled precisely
+// BECAUSE the GPU is still executing that submit. Clearing the flag threw away
+// the only record of it, and the next frame then did all three of these to live
+// objects:
+//
+//   * vkResetFences on a fence in use by a pending submission
+//   * vkResetCommandBuffer + re-record of a command buffer still executing
+//   * vkMapMemory and a read of the staging buffer still being written into
+//
+// The first two are undefined behaviour; on Adreno they corrupt the ring buffer
+// and the kernel driver kills the context. The third is a plain data race that
+// shows up as corrupt scanlines rather than as an error.
+bool VulkanContext::WaitReadbackFenceLocked()
+{
+    if (!m_readback_pending)
+        return true;
+
+    VkResult r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, kFenceTimeoutNs);
+    if (r == VK_SUCCESS)
+    {
+        m_readback_pending = false;
+        return true;
+    }
+
+    if (r == VK_TIMEOUT)
+    {
+        // Stays pending on purpose. Every path that would reuse the fence, the
+        // command buffer or the staging buffer checks this first and waits again.
+        LogWarning("VulkanContext: readback fence still pending after "
+            + std::to_string(kFenceTimeoutNs / 1000000ull)
+            + " ms; dropping this frame and leaving the submit in flight.");
+        return false;
+    }
+
+    // Device lost or out of memory: the fence will never signal, so continuing
+    // to wait on it would hang the emulation thread for good. Clear the flag and
+    // let the failure surface on the next submit.
+    LogError("VulkanContext: vkWaitForFences failed (" + std::to_string((int)r)
+        + "); the device is gone, not just slow.");
+    if (r == VK_ERROR_DEVICE_LOST)
+        DumpDeviceFault();
     m_readback_pending = false;
+    return false;
+}
+
+VkSemaphore VulkanContext::TakePendingSemaphore()
+{
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    VkSemaphore sem    = m_signal_semaphore;
+    m_signal_semaphore = VK_NULL_HANDLE;
+    return sem;
+}
+
+void VulkanContext::SignalSemaphoreNow(VkSemaphore semaphore)
+{
+    if (semaphore == VK_NULL_HANDLE || m_queue == VK_NULL_HANDLE)
+        return;
+
+    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores    = &semaphore;
+
+    std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
+    VkResult r = vkQueueSubmit(m_queue, 1, &si, VK_NULL_HANDLE);
+    if (r != VK_SUCCESS)
+        LogError("VulkanContext: semaphore-signal vkQueueSubmit failed: "
+            + std::to_string(r));
 }
 
 // A core that called set_signal_semaphore is waiting on that semaphore. If we
 // bail out of the readback without submitting, nothing else ever signals it
 // and the core's queue stalls for good — so signal it with an empty submit.
-void VulkanContext::SignalPendingSemaphoreLocked()
+void VulkanContext::SignalPendingSemaphore()
 {
-    if (m_signal_semaphore == VK_NULL_HANDLE)
-        return;
-
-    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-    si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores    = &m_signal_semaphore;
-    m_signal_semaphore      = VK_NULL_HANDLE;
-
-    std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
-    vkQueueSubmit(m_queue, 1, &si, VK_NULL_HANDLE);
+    SignalSemaphoreNow(TakePendingSemaphore());
 }
 
 bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)

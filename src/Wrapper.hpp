@@ -422,7 +422,7 @@ public:
     void FinishTeardown();
     void EmulationThreadLoop();
     void CreateTexture(godot::Image::Format image_format, godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);
-    void UpdateTexture(godot::PackedByteArray pixel_data, bool flip_y);
+    void UpdateTexture(godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);
 
     bool Shutdown();
 

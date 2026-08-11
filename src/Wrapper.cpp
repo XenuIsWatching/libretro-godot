@@ -1357,9 +1357,32 @@ void Wrapper::_process(double delta)
     if (!m_running)
         return;
 
+    // Drain to empty, but collapse each run of frame uploads to its last. The
+    // emulation thread produces at the core's frame rate whatever the main
+    // thread manages, so a main thread that falls behind for any reason has to
+    // chase a queue that keeps refilling — and once one upload costs more than
+    // a frame, executing every one of them means _process stops returning at
+    // all. A 640x480 mode change is enough to reach that on a loaded frame.
+    // Ordering is preserved: only uploads a newer upload supersedes are dropped,
+    // and those are frames the player was never going to see.
     std::unique_ptr<ThreadCommand> command;
+    std::unique_ptr<ThreadCommand> newest_upload;
     while (m_main_thread_commands_queue.try_dequeue(command))
+    {
+        if (command->IsFrameUpload())
+        {
+            newest_upload = std::move(command);
+            continue;
+        }
+        if (newest_upload)
+        {
+            newest_upload->Execute();
+            newest_upload.reset();
+        }
         command->Execute();
+    }
+    if (newest_upload)
+        newest_upload->Execute();
 
     auto input = godot::Input::get_singleton();
 
@@ -1870,9 +1893,9 @@ void Wrapper::CreateTexture(Image::Format image_format, PackedByteArray pixel_da
     m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandCreateTexture>(this, image_format, pixel_data, width, height, flip_y));
 }
 
-void Wrapper::UpdateTexture(PackedByteArray pixel_data, bool flip_y)
+void Wrapper::UpdateTexture(PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y)
 {
-    m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandUpdateTexture>(this, pixel_data, flip_y));
+    m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandUpdateTexture>(this, pixel_data, width, height, flip_y));
 }
 
 bool Wrapper::Shutdown()

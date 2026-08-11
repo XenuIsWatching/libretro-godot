@@ -57,8 +57,12 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 
         if (instance->m_video_handler->m_vulkan_ctx)
         {
-            // Vulkan path: readback from Vulkan image via staging buffer
-            instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data);
+            // Vulkan path: readback from Vulkan image via staging buffer.
+            // False is a dropped frame, and pixel_data is then still the
+            // uninitialised buffer resized above — uploading it would put heap
+            // garbage on the screen. Keep the last good frame instead.
+            if (!instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data))
+                return;
         }
 #ifdef _WIN32
         else if (instance->m_video_handler->m_d3d11_ctx)
@@ -95,7 +99,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         else
         {
             const bool flip = instance->m_video_handler->HwFrameNeedsFlip();
-            instance->UpdateTexture(pixel_data, flip);
+            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, flip);
         }
 
         return;
@@ -120,7 +124,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
         }
         else
-            instance->UpdateTexture(pixel_data, false);
+            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_RGB565:
@@ -139,7 +143,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
         }
         else
-            instance->UpdateTexture(pixel_data, false);
+            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_0RGB1555:
@@ -158,7 +162,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
         }
         else
-            instance->UpdateTexture(pixel_data, false);
+            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_UNKNOWN:
@@ -742,12 +746,19 @@ void VideoHandler::CreateTexture(int32_t width, int32_t height, Image::Format im
     m_new_material->set_texture(StandardMaterial3D::TEXTURE_EMISSION, m_texture);
 }
 
-void VideoHandler::UpdateTexture(PackedByteArray pixel_data, bool flip_y)
+void VideoHandler::UpdateTexture(PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y)
 {
     if (m_image.is_null())
         return;
 
-    m_image->set_data(m_last_width, m_last_height, false, m_image_format, pixel_data);
+    // Judged against the image, using the size these pixels were captured at.
+    // A frame queued before a resolution change no longer describes the image
+    // it lands on; the CreateTexture behind it in the queue is the one that
+    // resizes, so drop this rather than push 640x480 bytes at a 256x240 image.
+    if (width != m_image->get_width() || height != m_image->get_height())
+        return;
+
+    m_image->set_data(width, height, false, m_image->get_format(), pixel_data);
     if (flip_y)
         m_image->flip_y();
 
