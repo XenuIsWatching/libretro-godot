@@ -2,6 +2,7 @@
 #include "Debug.hpp"
 
 #include <cstring>
+#include <utility>
 #include <vector>
 
 // Must precede <windows.h> below — godot-cpp's heavy template/object headers
@@ -80,21 +81,22 @@ uint32_t VulkanContext::s_GetSyncIndexMask(void* /*handle*/)
     return 0x1;
 }
 
-// Not consumed: cores we run submit their own command buffers. A core that
-// hands them over instead expects the FRONTEND to submit them, and per
-// libretro_vulkan.h set_image semaphores are ignored in that mode — so silently
-// dropping them means that core's rendering never executes at all. Say so once
-// rather than presenting a black screen with no explanation.
-void VulkanContext::s_SetCommandBuffers(void* handle, uint32_t num_cmd, const VkCommandBuffer* /*cmd*/)
+void VulkanContext::s_SetCommandBuffers(void* handle, uint32_t num_cmd, const VkCommandBuffer* cmd)
 {
     auto* ctx = static_cast<VulkanContext*>(handle);
-    if (!ctx->m_warned_set_command_buffers)
+    if (num_cmd == 0)
+        return;
+    if (!cmd)
     {
-        ctx->m_warned_set_command_buffers = true;
-        LogWarning("VulkanContext: core passed " + std::to_string(num_cmd)
-            + " command buffer(s) via set_command_buffers, which we do not submit. "
-              "Its rendering will not appear.");
+        LogError("VulkanContext: set_command_buffers received a null command-buffer array.");
+        return;
     }
+
+    // Multiple calls before video_refresh are legal. Preserve their order and
+    // submit all of them before the frontend's readback command buffer.
+    std::lock_guard<std::mutex> lock(ctx->m_state_mutex);
+    ctx->m_pending_command_buffers.insert(ctx->m_pending_command_buffers.end(),
+                                           cmd, cmd + num_cmd);
 }
 
 void VulkanContext::s_WaitSyncIndex(void* handle)
@@ -132,19 +134,11 @@ void VulkanContext::s_UnlockQueue(void* handle)
 void VulkanContext::s_SetSignalSemaphore(void* handle, VkSemaphore semaphore)
 {
     auto* ctx = static_cast<VulkanContext*>(handle);
-
-    VkSemaphore stale = VK_NULL_HANDLE;
-    {
-        std::lock_guard<std::mutex> lock(ctx->m_state_mutex);
-        stale = ctx->m_signal_semaphore;
-        ctx->m_signal_semaphore = semaphore;
-    }
-
-    // Two calls before one readback used to drop the first on the floor. A
-    // binary semaphore we accepted and never signalled stalls the core's queue
-    // permanently, so retire it instead of overwriting it.
-    if (stale != VK_NULL_HANDLE)
-        ctx->SignalSemaphoreNow(stale);
+    std::lock_guard<std::mutex> lock(ctx->m_state_mutex);
+    // This is state for the next video_refresh call. A later call replaces it;
+    // signalling the replaced semaphore here would tell the core the image is
+    // reusable before the frontend has even consumed the frame.
+    ctx->m_signal_semaphore = semaphore;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +152,7 @@ static VkInstance s_CreateInstanceWrapper(void* /*opaque*/, const VkInstanceCrea
     return inst;
 }
 
-static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
+static bool s_DeviceSupportsExtension(VkPhysicalDevice gpu, const char* extension)
 {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, nullptr);
@@ -168,9 +162,14 @@ static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
     std::vector<VkExtensionProperties> props(count);
     vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, props.data());
     for (const VkExtensionProperties& p : props)
-        if (std::strcmp(p.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0)
+        if (std::strcmp(p.extensionName, extension) == 0)
             return true;
     return false;
+}
+
+static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
+{
+    return s_DeviceSupportsExtension(gpu, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 }
 
 // The core creates the device on v2 negotiation and we only wrap the call, so
@@ -649,6 +648,55 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     }
     else
     {
+        std::vector<const char*> fallback_extensions;
+
+        if (m_surface != VK_NULL_HANDLE)
+        {
+            // The fallback device must be able to drive the surface we handed
+            // to the core. The original selection considered graphics/compute
+            // only and created a device without VK_KHR_swapchain, making the
+            // non-negotiated surface unusable.
+            VkBool32 present_supported = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(m_gpu, m_queue_family,
+                                                  m_surface, &present_supported);
+            if (!present_supported)
+            {
+                uint32_t qfam_count = 0;
+                vkGetPhysicalDeviceQueueFamilyProperties(m_gpu, &qfam_count, nullptr);
+                std::vector<VkQueueFamilyProperties> qfams(qfam_count);
+                vkGetPhysicalDeviceQueueFamilyProperties(m_gpu, &qfam_count, qfams.data());
+
+                bool found = false;
+                for (uint32_t i = 0; i < qfam_count; ++i)
+                {
+                    constexpr VkQueueFlags required =
+                        VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+                    VkBool32 can_present = VK_FALSE;
+                    vkGetPhysicalDeviceSurfaceSupportKHR(m_gpu, i, m_surface,
+                                                          &can_present);
+                    if ((qfams[i].queueFlags & required) == required && can_present)
+                    {
+                        m_queue_family = i;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    LogError("VulkanContext: no graphics+compute queue can present to the surface.");
+                    return false;
+                }
+            }
+
+            if (!s_DeviceSupportsExtension(m_gpu, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+            {
+                LogError("VulkanContext: surface exists but VK_KHR_swapchain is unavailable.");
+                return false;
+            }
+            fallback_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        }
+
         float queue_priority = 1.0f;
         VkDeviceQueueCreateInfo qci{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         qci.queueFamilyIndex = m_queue_family;
@@ -658,6 +706,8 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         VkDeviceCreateInfo dci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos    = &qci;
+        dci.enabledExtensionCount = static_cast<uint32_t>(fallback_extensions.size());
+        dci.ppEnabledExtensionNames = fallback_extensions.data();
 
         VkResult r = vkCreateDevice(m_gpu, &dci, nullptr, &m_device);
         if (r != VK_SUCCESS)
@@ -702,12 +752,6 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     if (vkCreateFence(m_device, &fci, nullptr, &m_fence) != VK_SUCCESS)
     {
         LogError("VulkanContext: vkCreateFence failed.");
-        return false;
-    }
-
-    if (vkCreateFence(m_device, &fci, nullptr, &m_sem_fence) != VK_SUCCESS)
-    {
-        LogError("VulkanContext: vkCreateFence (semaphore wait) failed.");
         return false;
     }
 
@@ -757,16 +801,14 @@ void VulkanContext::Destroy()
 
     DestroyStagingBuffer();
 
+    for (VkFence fence : m_completion_fences)
+        vkDestroyFence(m_device, fence, nullptr);
+    m_completion_fences.clear();
+
     if (m_fence != VK_NULL_HANDLE)
     {
         vkDestroyFence(m_device, m_fence, nullptr);
         m_fence = VK_NULL_HANDLE;
-    }
-
-    if (m_sem_fence != VK_NULL_HANDLE)
-    {
-        vkDestroyFence(m_device, m_sem_fence, nullptr);
-        m_sem_fence = VK_NULL_HANDLE;
     }
 
     if (m_cmd_pool != VK_NULL_HANDLE)
@@ -845,6 +887,9 @@ void VulkanContext::Destroy()
     m_queue            = VK_NULL_HANDLE;
     m_readback_pending = false;
     m_current_vk_image = VK_NULL_HANDLE;
+    m_wait_semaphores.clear();
+    m_pending_command_buffers.clear();
+    m_new_image_pending = false;
     m_signal_semaphore = VK_NULL_HANDLE;
     m_src_queue_family = VK_QUEUE_FAMILY_IGNORED;
     m_interface        = {};
@@ -859,56 +904,209 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
                              uint32_t n_sems, const VkSemaphore* sems,
                              uint32_t src_family)
 {
+    std::lock_guard<std::mutex> state_lock(m_state_mutex);
+
     if (!image)
     {
-        std::lock_guard<std::mutex> state_lock(m_state_mutex);
         m_current_vk_image = VK_NULL_HANDLE;
+        m_wait_semaphores.clear();
+        m_new_image_pending = true;
         return;
     }
 
-    // Drain the semaphores the core provided (a no-op submit that waits on
-    // them) before publishing, so the image the main thread picks up has
-    // finished rendering.
-    if (n_sems > 0 && sems)
+    if (n_sems > 0 && !sems)
     {
-        std::vector<VkPipelineStageFlags> wait_stages(n_sems,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-
-        VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-        si.waitSemaphoreCount = n_sems;
-        si.pWaitSemaphores    = sems;
-        si.pWaitDstStageMask  = wait_stages.data();
-
-        // Its own fence: m_fence tracks the readback, and another thread can be
-        // waiting on that one right now.
-        vkResetFences(m_device, 1, &m_sem_fence);
-        VkResult sr = VK_SUCCESS;
-        {
-            std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
-            sr = vkQueueSubmit(m_queue, 1, &si, m_sem_fence);
-        }
-
-        // Only wait if there is something to wait FOR. The wait used to be
-        // unconditional, so a submit that never landed cost the full 2 s
-        // timeout on every single frame — an emulation thread stalled solid,
-        // presenting as a hang rather than as the failure it is.
-        if (sr != VK_SUCCESS)
-            LogError("VulkanContext: semaphore-drain vkQueueSubmit failed: " + std::to_string(sr));
-        else if (vkWaitForFences(m_device, 1, &m_sem_fence, VK_TRUE, kFenceTimeoutNs) == VK_TIMEOUT)
-            LogWarning("VulkanContext: semaphore-wait fence timed out.");
+        LogError("VulkanContext: set_image received a null semaphore array.");
+        n_sems = 0;
     }
 
-    // Published as one unit: a readback that paired the new image with the
-    // previous subresource range would copy the wrong mip/layer, and one that
-    // paired it with a stale layout would barrier from a layout the image is
-    // not in.
-    // Copy only the fields we need — do NOT deep-copy pNext chains.
-    std::lock_guard<std::mutex> state_lock(m_state_mutex);
+    // Keep the semaphore handles until video_refresh. Waiting in SetImage used
+    // a second reusable fence and detached the wait from the actual transfer;
+    // after a timeout that fence was reset while still in use. The real
+    // readback submission now performs the one permitted wait directly at the
+    // transfer stage. Copy only the fields we need — do not copy pNext chains.
     m_current_vk_image          = image->create_info.image;
     m_current_format            = image->create_info.format;
     m_current_layout            = image->image_layout;
     m_current_subresource_range = image->create_info.subresourceRange;
     m_src_queue_family          = src_family;
+    m_wait_semaphores.clear();
+    if (n_sems > 0)
+        m_wait_semaphores.assign(sems, sems + n_sems);
+    m_new_image_pending         = true;
+}
+
+VulkanContext::FrameWork VulkanContext::TakeFrameWork(
+    VkImage& image, VkFormat& format, VkImageLayout& layout,
+    VkImageSubresourceRange& range, uint32_t& src_queue_family)
+{
+    std::lock_guard<std::mutex> state_lock(m_state_mutex);
+    image            = m_current_vk_image;
+    format           = m_current_format;
+    layout           = m_current_layout;
+    range            = m_current_subresource_range;
+    src_queue_family = m_src_queue_family;
+
+    FrameWork work;
+    work.wait_semaphores.swap(m_wait_semaphores);
+    work.command_buffers.swap(m_pending_command_buffers);
+    work.signal_semaphore = m_signal_semaphore;
+    work.newly_published  = m_new_image_pending;
+    m_signal_semaphore    = VK_NULL_HANDLE;
+    m_new_image_pending   = false;
+    return work;
+}
+
+bool VulkanContext::SubmitFrameCompletionLocked(
+    FrameWork&& work, VkImage image, VkImageLayout layout,
+    const VkImageSubresourceRange& range, uint32_t src_queue_family,
+    bool detached)
+{
+    const bool has_core_commands = !work.command_buffers.empty();
+    const bool need_qfot = work.newly_published && !has_core_commands &&
+                           !work.wait_semaphores.empty() &&
+                           image != VK_NULL_HANDLE &&
+                           layout != VK_IMAGE_LAYOUT_UNDEFINED &&
+                           layout != VK_IMAGE_LAYOUT_PREINITIALIZED &&
+                           src_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+                           src_queue_family != m_queue_family;
+
+    if (need_qfot)
+    {
+        VkCommandBuffer completion_cmd = m_cmd_buf;
+        if (detached)
+        {
+            // m_cmd_buf still belongs to the timed-out submission. Allocate a
+            // fresh command buffer and leave it owned by the pool until context
+            // teardown; freeing it before this queued recovery runs would be the
+            // same lifetime bug we are avoiding here.
+            VkCommandBufferAllocateInfo allocate{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+            allocate.commandPool        = m_cmd_pool;
+            allocate.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate.commandBufferCount = 1;
+            if (vkAllocateCommandBuffers(m_device, &allocate, &completion_cmd) != VK_SUCCESS)
+            {
+                LogError("VulkanContext: failed to allocate detached ownership-return command buffer.");
+                return false;
+            }
+        }
+
+        VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if ((!detached && vkResetCommandBuffer(completion_cmd, 0) != VK_SUCCESS) ||
+            vkBeginCommandBuffer(completion_cmd, &begin) != VK_SUCCESS)
+        {
+            LogError("VulkanContext: failed to begin ownership-return command buffer.");
+            return false;
+        }
+
+        VkImageMemoryBarrier acquire{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        acquire.oldLayout           = layout;
+        acquire.newLayout           = layout;
+        acquire.srcQueueFamilyIndex = src_queue_family;
+        acquire.dstQueueFamilyIndex = m_queue_family;
+        acquire.image               = image;
+        acquire.subresourceRange    = range;
+        vkCmdPipelineBarrier(completion_cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &acquire);
+
+        VkImageMemoryBarrier release{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        release.oldLayout           = layout;
+        release.newLayout           = layout;
+        release.srcQueueFamilyIndex = m_queue_family;
+        release.dstQueueFamilyIndex = src_queue_family;
+        release.image               = image;
+        release.subresourceRange    = range;
+        vkCmdPipelineBarrier(completion_cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &release);
+
+        if (vkEndCommandBuffer(completion_cmd) != VK_SUCCESS)
+        {
+            LogError("VulkanContext: failed to end ownership-return command buffer.");
+            return false;
+        }
+        work.command_buffers.push_back(completion_cmd);
+    }
+
+    const bool wait_on_image = !has_core_commands && !work.wait_semaphores.empty();
+    std::vector<VkPipelineStageFlags> wait_stages(
+        wait_on_image ? work.wait_semaphores.size() : 0,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+    VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    if (wait_on_image)
+    {
+        submit.waitSemaphoreCount = static_cast<uint32_t>(work.wait_semaphores.size());
+        submit.pWaitSemaphores    = work.wait_semaphores.data();
+        submit.pWaitDstStageMask  = wait_stages.data();
+    }
+    submit.commandBufferCount = static_cast<uint32_t>(work.command_buffers.size());
+    submit.pCommandBuffers    = work.command_buffers.data();
+    if (work.signal_semaphore != VK_NULL_HANDLE)
+    {
+        submit.signalSemaphoreCount = 1;
+        submit.pSignalSemaphores    = &work.signal_semaphore;
+    }
+
+    if (submit.waitSemaphoreCount == 0 && submit.commandBufferCount == 0 &&
+        submit.signalSemaphoreCount == 0)
+        return true;
+
+    VkFence submit_fence = m_fence;
+    if (detached)
+    {
+        VkFenceCreateInfo fence_info{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+        if (vkCreateFence(m_device, &fence_info, nullptr, &submit_fence) != VK_SUCCESS)
+        {
+            LogError("VulkanContext: failed to create detached completion fence.");
+            return false;
+        }
+    }
+    else if (vkResetFences(m_device, 1, &submit_fence) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: failed to reset completion fence.");
+        return false;
+    }
+
+    VkResult result;
+    {
+        std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
+        result = vkQueueSubmit(m_queue, 1, &submit, submit_fence);
+    }
+    if (result != VK_SUCCESS)
+    {
+        LogError("VulkanContext: frame-completion vkQueueSubmit failed: "
+            + std::to_string(result));
+        if (result == VK_ERROR_DEVICE_LOST)
+            DumpDeviceFault();
+        if (detached)
+            vkDestroyFence(m_device, submit_fence, nullptr);
+        return false;
+    }
+
+    if (detached)
+        m_completion_fences.push_back(submit_fence);
+    else
+        m_readback_pending = true;
+    return true;
+}
+
+void VulkanContext::CompleteFrameWithoutReadback()
+{
+    std::unique_lock<std::mutex> fence_lock(m_fence_mutex);
+    VkImage image;
+    VkFormat format;
+    VkImageLayout layout;
+    VkImageSubresourceRange range;
+    uint32_t src_queue_family;
+    const bool previous_complete = WaitReadbackFenceLocked();
+    FrameWork work = TakeFrameWork(image, format, layout, range, src_queue_family);
+
+    SubmitFrameCompletionLocked(std::move(work), image, layout, range,
+                                src_queue_family, !previous_complete);
 }
 
 // ---------------------------------------------------------------------------
@@ -920,28 +1118,67 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 {
     std::unique_lock<std::mutex> fence_lock(m_fence_mutex);
 
-    // Snapshot the core's image state and work from the copy. Reading the
-    // members directly would let SetImage swap them mid-function, and holding
-    // m_state_mutex across the queue submit below would invert the lock order
-    // against SetImage.
+    // Nothing that owns the command buffer, fence or staging allocation may be
+    // touched until the previous submission has completed. In particular this
+    // must precede the resize below: destroying a too-small staging buffer first
+    // freed memory that a timed-out copy could still be writing.
     VkImage                 image      = VK_NULL_HANDLE;
     VkFormat                format     = VK_FORMAT_UNDEFINED;
     VkImageLayout           layout     = VK_IMAGE_LAYOUT_UNDEFINED;
     VkImageSubresourceRange range{};
     uint32_t                src_family = VK_QUEUE_FAMILY_IGNORED;
+    const bool previous_complete = WaitReadbackFenceLocked();
+    FrameWork work = TakeFrameWork(image, format, layout, range, src_family);
+    if (!previous_complete)
     {
-        std::lock_guard<std::mutex> state_lock(m_state_mutex);
-        image      = m_current_vk_image;
-        format     = m_current_format;
-        layout     = m_current_layout;
-        range      = m_current_subresource_range;
-        src_family = m_src_queue_family;
+        // The normal command buffer and fence still belong to the previous
+        // submission. Queue this frame's synchronization behind it using fresh
+        // recovery resources so a transient timeout cannot strand the core's
+        // input or output semaphores.
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range,
+                                    src_family, true);
+        return false;
     }
+
+    // A second refresh without set_image sees no wait semaphores and performs
+    // no second queue-family ownership transfer.
 
     if (image == VK_NULL_HANDLE)
     {
         LogError("VulkanContext::ReadbackToPixels: no current image set");
-        SignalPendingSemaphore();
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
+        return false;
+    }
+
+    if (!work.newly_published)
+    {
+        // A second video_refresh without set_image is a duplicated frame. Keep
+        // the last uploaded texture rather than reading the image again: after
+        // the first readback a cross-family image has already been released
+        // back to the core and cannot legally be acquired a second time.
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
+        return false;
+    }
+
+    const bool supported_format =
+        format == VK_FORMAT_B8G8R8A8_UNORM ||
+        format == VK_FORMAT_B8G8R8A8_SRGB  ||
+        format == VK_FORMAT_B8G8R8A8_SNORM ||
+        format == VK_FORMAT_R8G8B8A8_UNORM ||
+        format == VK_FORMAT_R8G8B8A8_SRGB  ||
+        format == VK_FORMAT_R8G8B8A8_SNORM ||
+        format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+        format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    if (!supported_format)
+    {
+        if (m_warned_format != static_cast<int64_t>(format))
+        {
+            m_warned_format = static_cast<int64_t>(format);
+            LogError("VulkanContext: refusing unsupported VkFormat "
+                + std::to_string(static_cast<int>(format))
+                + "; its texel size/conversion is not implemented.");
+        }
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
         return false;
     }
 
@@ -951,29 +1188,22 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         DestroyStagingBuffer();
         if (!CreateStagingBuffer(needed))
         {
-            SignalPendingSemaphore();
+            SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
             return false;
         }
-    }
-
-    // A submit from an earlier frame may still be running — that is exactly what
-    // a fence timeout leaves behind. The fence, the command buffer and the
-    // staging buffer are all single instances owned by this context, so reusing
-    // any of them now would reset and re-record objects the GPU is reading.
-    // Wait it out; if it is STILL not done, skip this frame rather than stamp
-    // on it.
-    if (!WaitReadbackFenceLocked())
-    {
-        SignalPendingSemaphore();
-        return false;
     }
 
     // ---- Record command buffer ----
     VkCommandBufferBeginInfo cbbi{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    vkResetCommandBuffer(m_cmd_buf, 0);
-    vkBeginCommandBuffer(m_cmd_buf, &cbbi);
+    if (vkResetCommandBuffer(m_cmd_buf, 0) != VK_SUCCESS ||
+        vkBeginCommandBuffer(m_cmd_buf, &cbbi) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: failed to begin readback command buffer.");
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
+        return false;
+    }
 
     // GENERAL is a contract, not just another layout. libretro_vulkan.h: "if
     // GENERAL layout is used for the image ... the frontend is not allowed to
@@ -998,7 +1228,10 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // released the image to us got no matching acquire and never got it back.
     // libretro_vulkan.h spells out the round trip — core releases to us, we
     // acquire, we release back, core re-acquires.
-    const bool need_qfot = src_family != VK_QUEUE_FAMILY_IGNORED &&
+    const bool has_core_commands = !work.command_buffers.empty();
+    const bool need_qfot = work.newly_published && !has_core_commands &&
+                           !work.wait_semaphores.empty() &&
+                           src_family != VK_QUEUE_FAMILY_IGNORED &&
                            src_family != m_queue_family;
 
     if (need_qfot && !m_logged_src_queue_family)
@@ -1012,8 +1245,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // Acquire half, plus the layout transition if one is due.
     {
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        barrier.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                      VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.srcAccessMask       = VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.oldLayout           = layout;
         barrier.newLayout           = copy_layout;
@@ -1023,8 +1255,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         barrier.subresourceRange    = range;
 
         vkCmdPipelineBarrier(m_cmd_buf,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
     }
@@ -1051,8 +1282,8 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     {
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         barrier.srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                      VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask       = VK_ACCESS_MEMORY_READ_BIT |
+                                      VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.oldLayout           = copy_layout;
         barrier.newLayout           = (need_layout_transition && can_restore_layout)
                                         ? layout : copy_layout;
@@ -1063,8 +1294,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 
         vkCmdPipelineBarrier(m_cmd_buf,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
     }
 
@@ -1083,22 +1313,43 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         VK_PIPELINE_STAGE_HOST_BIT,
         0, 0, nullptr, 1, &buf_barrier, 0, nullptr);
 
-    vkEndCommandBuffer(m_cmd_buf);
-
-    // ---- Submit + wait ----
-    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-    si.commandBufferCount = 1;
-    si.pCommandBuffers    = &m_cmd_buf;
-
-    // Signal the semaphore requested by the core (if any)
-    VkSemaphore signal_sem = TakePendingSemaphore();
-    if (signal_sem != VK_NULL_HANDLE)
+    if (vkEndCommandBuffer(m_cmd_buf) != VK_SUCCESS)
     {
-        si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores    = &signal_sem;
+        LogError("VulkanContext: failed to end readback command buffer.");
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
+        return false;
     }
 
-    vkResetFences(m_device, 1, &m_fence);
+    // ---- Submit + wait ----
+    std::vector<VkCommandBuffer> submit_commands = work.command_buffers;
+    submit_commands.push_back(m_cmd_buf);
+    const bool wait_on_image = !has_core_commands && !work.wait_semaphores.empty();
+    std::vector<VkPipelineStageFlags> wait_stages(
+        wait_on_image ? work.wait_semaphores.size() : 0,
+        VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    if (wait_on_image)
+    {
+        si.waitSemaphoreCount = static_cast<uint32_t>(work.wait_semaphores.size());
+        si.pWaitSemaphores    = work.wait_semaphores.data();
+        si.pWaitDstStageMask  = wait_stages.data();
+    }
+    si.commandBufferCount = static_cast<uint32_t>(submit_commands.size());
+    si.pCommandBuffers    = submit_commands.data();
+
+    // Signal the semaphore requested by the core (if any)
+    if (work.signal_semaphore != VK_NULL_HANDLE)
+    {
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = &work.signal_semaphore;
+    }
+
+    if (vkResetFences(m_device, 1, &m_fence) != VK_SUCCESS)
+    {
+        LogError("VulkanContext: failed to reset readback fence.");
+        return false;
+    }
     VkResult submit_result = VK_SUCCESS;
     {
         std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
@@ -1115,8 +1366,9 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
             + std::to_string(submit_result));
         if (submit_result == VK_ERROR_DEVICE_LOST)
             DumpDeviceFault();
-        if (signal_sem != VK_NULL_HANDLE)
-            SignalSemaphoreNow(signal_sem);
+        // The readback command may be what failed validation. Still try to
+        // consume the core work and complete its synchronization without it.
+        SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
         return false;
     }
     m_readback_pending = true;
@@ -1132,9 +1384,6 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     VkResult map_result = vkMapMemory(m_device, m_staging_mem, 0, needed, 0, &mapped);
     if (map_result != VK_SUCCESS || !mapped)
     {
-        // FindMemoryType falls back to index 0 when nothing matches, which can
-        // be device-local memory that will not map at all — reaching the memcpy
-        // below with a null pointer.
         LogError("VulkanContext: vkMapMemory (staging) failed: "
             + std::to_string(map_result));
         return false;
@@ -1146,8 +1395,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 
     // Normalize BGRA formats to RGBA (Godot Image::FORMAT_RGBA8 expects R first)
     if (format == VK_FORMAT_B8G8R8A8_UNORM ||
-        format == VK_FORMAT_B8G8R8A8_SRGB  ||
-        format == VK_FORMAT_B8G8R8A8_SNORM)
+        format == VK_FORMAT_B8G8R8A8_SRGB)
     {
         const uint32_t pixel_count = width * height;
         for (uint32_t i = 0; i < pixel_count; ++i)
@@ -1159,10 +1407,27 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         }
     }
     else if (format == VK_FORMAT_R8G8B8A8_UNORM ||
-             format == VK_FORMAT_R8G8B8A8_SRGB  ||
-             format == VK_FORMAT_R8G8B8A8_SNORM)
+             format == VK_FORMAT_R8G8B8A8_SRGB)
     {
         memcpy(dst, src, (size_t)needed);
+    }
+    else if (format == VK_FORMAT_B8G8R8A8_SNORM ||
+             format == VK_FORMAT_R8G8B8A8_SNORM)
+    {
+        // SNORM bytes are signed values, not display-ready UNORM bytes. Shift
+        // [-128, 127] to [0, 255], swapping R/B for the BGRA variant.
+        const int8_t* signed_src = reinterpret_cast<const int8_t*>(src);
+        const bool bgra = format == VK_FORMAT_B8G8R8A8_SNORM;
+        const uint32_t pixel_count = width * height;
+        for (uint32_t i = 0; i < pixel_count; ++i)
+        {
+            const uint32_t r = bgra ? 2u : 0u;
+            const uint32_t b = bgra ? 0u : 2u;
+            dst[i * 4 + 0] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + r]) + 128);
+            dst[i * 4 + 1] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + 1]) + 128);
+            dst[i * 4 + 2] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + b]) + 128);
+            dst[i * 4 + 3] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + 3]) + 128);
+        }
     }
     // 10-bit packed, which is what a modern surface hands back when it can:
     // Dolphin's swapchain on this GPU is A2B10G10R10. Still 32 bits a pixel, so
@@ -1201,25 +1466,6 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
             dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
         }
     }
-    else
-    {
-        // Anything else is copied verbatim into a buffer Godot will read as
-        // RGBA8, which is a guess — and a wrong guess looks like the game in
-        // the wrong colours rather than like an error. A 10-bit swapchain
-        // (A2B10G10R10, common where the surface allows HDR) is the likely one,
-        // and it also breaks the 4-bytes-per-pixel assumption above. Say so
-        // once, naming the format, rather than leaving it to be guessed at.
-        if (m_warned_format != (int64_t)format)
-        {
-            m_warned_format = (int64_t)format;
-            LogWarning("VulkanContext: no conversion for VkFormat "
-                + std::to_string((int)format)
-                + " — copying as RGBA8. Colours will be wrong if it is not "
-                  "an 8-bit RGBA/BGRA format.");
-        }
-        memcpy(dst, src, (size_t)needed);
-    }
-
     vkUnmapMemory(m_device, m_staging_mem);
     return true;
 }
@@ -1312,67 +1558,64 @@ void VulkanContext::DumpDeviceFault()
 // shows up as corrupt scanlines rather than as an error.
 bool VulkanContext::WaitReadbackFenceLocked()
 {
-    if (!m_readback_pending)
-        return true;
-
-    VkResult r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, kFenceTimeoutNs);
-    if (r == VK_SUCCESS)
+    if (m_readback_pending)
     {
-        m_readback_pending = false;
-        return true;
+        VkResult r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, kFenceTimeoutNs);
+        if (r == VK_SUCCESS)
+        {
+            m_readback_pending = false;
+        }
+        else if (r == VK_TIMEOUT)
+        {
+            // Stays pending on purpose. Every path that would reuse the fence,
+            // command buffer or staging buffer checks this first.
+            LogWarning("VulkanContext: readback fence still pending after "
+                + std::to_string(kFenceTimeoutNs / 1000000ull)
+                + " ms; dropping this frame and leaving the submit in flight.");
+            return false;
+        }
+        else
+        {
+            LogError("VulkanContext: vkWaitForFences failed ("
+                + std::to_string(static_cast<int>(r))
+                + "); the device is gone, not just slow.");
+            if (r == VK_ERROR_DEVICE_LOST)
+                DumpDeviceFault();
+            m_readback_pending = false;
+            return false;
+        }
     }
 
-    if (r == VK_TIMEOUT)
+    // A timeout-recovery submission uses a fresh fence because m_fence still
+    // belongs to the timed-out readback. Reap those fences before reporting the
+    // sync index complete; otherwise wait_sync_index could return while core
+    // command buffers or an ownership-return barrier were still queued.
+    for (auto it = m_completion_fences.begin(); it != m_completion_fences.end();)
     {
-        // Stays pending on purpose. Every path that would reuse the fence, the
-        // command buffer or the staging buffer checks this first and waits again.
-        LogWarning("VulkanContext: readback fence still pending after "
-            + std::to_string(kFenceTimeoutNs / 1000000ull)
-            + " ms; dropping this frame and leaving the submit in flight.");
+        VkResult r = vkWaitForFences(m_device, 1, &*it, VK_TRUE, kFenceTimeoutNs);
+        if (r == VK_SUCCESS)
+        {
+            vkDestroyFence(m_device, *it, nullptr);
+            it = m_completion_fences.erase(it);
+            continue;
+        }
+        if (r == VK_TIMEOUT)
+        {
+            LogWarning("VulkanContext: detached frame-completion fence still pending after "
+                + std::to_string(kFenceTimeoutNs / 1000000ull) + " ms.");
+            return false;
+        }
+
+        LogError("VulkanContext: detached completion vkWaitForFences failed ("
+            + std::to_string(static_cast<int>(r)) + ").");
+        if (r == VK_ERROR_DEVICE_LOST)
+            DumpDeviceFault();
+        vkDestroyFence(m_device, *it, nullptr);
+        m_completion_fences.erase(it);
         return false;
     }
 
-    // Device lost or out of memory: the fence will never signal, so continuing
-    // to wait on it would hang the emulation thread for good. Clear the flag and
-    // let the failure surface on the next submit.
-    LogError("VulkanContext: vkWaitForFences failed (" + std::to_string((int)r)
-        + "); the device is gone, not just slow.");
-    if (r == VK_ERROR_DEVICE_LOST)
-        DumpDeviceFault();
-    m_readback_pending = false;
-    return false;
-}
-
-VkSemaphore VulkanContext::TakePendingSemaphore()
-{
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    VkSemaphore sem    = m_signal_semaphore;
-    m_signal_semaphore = VK_NULL_HANDLE;
-    return sem;
-}
-
-void VulkanContext::SignalSemaphoreNow(VkSemaphore semaphore)
-{
-    if (semaphore == VK_NULL_HANDLE || m_queue == VK_NULL_HANDLE)
-        return;
-
-    VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-    si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores    = &semaphore;
-
-    std::lock_guard<std::mutex> queue_lock(m_queue_mutex);
-    VkResult r = vkQueueSubmit(m_queue, 1, &si, VK_NULL_HANDLE);
-    if (r != VK_SUCCESS)
-        LogError("VulkanContext: semaphore-signal vkQueueSubmit failed: "
-            + std::to_string(r));
-}
-
-// A core that called set_signal_semaphore is waiting on that semaphore. If we
-// bail out of the readback without submitting, nothing else ever signals it
-// and the core's queue stalls for good — so signal it with an empty submit.
-void VulkanContext::SignalPendingSemaphore()
-{
-    SignalSemaphoreNow(TakePendingSemaphore());
+    return true;
 }
 
 bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
@@ -1413,10 +1656,23 @@ bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
         }
     }
 
+    uint32_t memory_type = 0;
+    if (cached_type >= 0)
+    {
+        memory_type = static_cast<uint32_t>(cached_type);
+    }
+    else if (!FindMemoryType(mem_req.memoryTypeBits,
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+             memory_type))
+    {
+        vkDestroyBuffer(m_device, m_staging_buf, nullptr);
+        m_staging_buf = VK_NULL_HANDLE;
+        return false;
+    }
+
     VkMemoryAllocateInfo mai{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     mai.allocationSize  = mem_req.size;
-    mai.memoryTypeIndex = (cached_type >= 0) ? (uint32_t)cached_type : FindMemoryType(mem_req.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    mai.memoryTypeIndex = memory_type;
 
     if (vkAllocateMemory(m_device, &mai, nullptr, &m_staging_mem) != VK_SUCCESS)
     {
@@ -1426,7 +1682,17 @@ bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
         return false;
     }
 
-    vkBindBufferMemory(m_device, m_staging_buf, m_staging_mem, 0);
+    VkResult bind_result = vkBindBufferMemory(m_device, m_staging_buf, m_staging_mem, 0);
+    if (bind_result != VK_SUCCESS)
+    {
+        LogError("VulkanContext: vkBindBufferMemory (staging) failed: "
+            + std::to_string(bind_result));
+        vkFreeMemory(m_device, m_staging_mem, nullptr);
+        vkDestroyBuffer(m_device, m_staging_buf, nullptr);
+        m_staging_mem = VK_NULL_HANDLE;
+        m_staging_buf = VK_NULL_HANDLE;
+        return false;
+    }
     m_staging_size = size;
     return true;
 }
@@ -1449,7 +1715,8 @@ void VulkanContext::DestroyStagingBuffer()
     m_staging_size = 0;
 }
 
-uint32_t VulkanContext::FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlags props)
+bool VulkanContext::FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlags props,
+                                   uint32_t& memory_type)
 {
     VkPhysicalDeviceMemoryProperties mem_props{};
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &mem_props);
@@ -1458,11 +1725,14 @@ uint32_t VulkanContext::FindMemoryType(uint32_t type_filter, VkMemoryPropertyFla
     {
         if ((type_filter & (1u << i)) &&
             (mem_props.memoryTypes[i].propertyFlags & props) == props)
-            return i;
+        {
+            memory_type = i;
+            return true;
+        }
     }
 
     LogError("VulkanContext: FindMemoryType: no suitable memory type found");
-    return 0;
+    return false;
 }
 
 } // namespace Xenu

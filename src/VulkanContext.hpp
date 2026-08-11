@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 namespace Xenu
 {
@@ -30,6 +31,12 @@ public:
 
     void SetImage(const retro_vulkan_image* image, uint32_t num_semaphores,
                   const VkSemaphore* semaphores, uint32_t src_queue_family);
+    /// Consume the synchronization associated with one video_refresh call when
+    /// there is no image to read back (frame duping, muted replay, or a dropped
+    /// frame). This still submits core-provided command buffers, waits the
+    /// set_image semaphores once, returns queue-family ownership, and signals
+    /// the semaphore requested by set_signal_semaphore.
+    void CompleteFrameWithoutReadback();
     /// False when no frame was produced — no image published, an allocation
     /// failed, or an earlier submit is still in flight. `out` is meaningless
     /// then and must not be uploaded: the caller pre-sizes it, so its contents
@@ -53,9 +60,28 @@ public:
     static void     s_SetSignalSemaphore(void* handle, VkSemaphore semaphore);
 
 private:
+    struct FrameWork
+    {
+        std::vector<VkSemaphore>     wait_semaphores;
+        std::vector<VkCommandBuffer> command_buffers;
+        VkSemaphore                 signal_semaphore = VK_NULL_HANDLE;
+        bool                        newly_published  = false;
+    };
+
     bool CreateStagingBuffer(VkDeviceSize size);
     void DestroyStagingBuffer();
-    uint32_t FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties);
+    bool FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties,
+                        uint32_t& memory_type);
+
+    FrameWork TakeFrameWork(VkImage& image, VkFormat& format,
+                            VkImageLayout& layout,
+                            VkImageSubresourceRange& range,
+                            uint32_t& src_queue_family);
+    bool SubmitFrameCompletionLocked(FrameWork&& work, VkImage image,
+                                     VkImageLayout layout,
+                                     const VkImageSubresourceRange& range,
+                                     uint32_t src_queue_family,
+                                     bool detached = false);
 
     /// Requires m_fence_mutex held. True when no readback submit is outstanding —
     /// the fence, the command buffer and the staging buffer are safe to reuse.
@@ -63,16 +89,6 @@ private:
     /// alone; m_readback_pending stays set so the next attempt waits again
     /// rather than resetting objects the GPU is reading.
     [[nodiscard]] bool WaitReadbackFenceLocked();
-
-    /// Hand back whatever the core last passed to set_signal_semaphore, clearing
-    /// it. Takes m_state_mutex.
-    VkSemaphore TakePendingSemaphore();
-    /// Signal a semaphore with an empty submit. Takes m_queue_mutex.
-    void SignalSemaphoreNow(VkSemaphore semaphore);
-    /// TakePendingSemaphore + SignalSemaphoreNow. A core that called
-    /// set_signal_semaphore is waiting on it; bailing out of the readback
-    /// without submitting would stall its queue for good.
-    void SignalPendingSemaphore();
 
     /// Ask the driver what actually killed the device, via VK_EXT_device_fault.
     /// A bare VK_ERROR_DEVICE_LOST says only "something died"; this returns the
@@ -94,7 +110,9 @@ private:
     VkCommandPool    m_cmd_pool     = VK_NULL_HANDLE;
     VkCommandBuffer  m_cmd_buf      = VK_NULL_HANDLE;
     VkFence          m_fence        = VK_NULL_HANDLE;
-    VkFence          m_sem_fence    = VK_NULL_HANDLE;
+    /// Fences for timeout-recovery submissions. Those submissions cannot use
+    /// m_fence because it still belongs to the timed-out readback.
+    std::vector<VkFence> m_completion_fences;
 
     // Guards every m_fence reset/submit/wait as one unit. Resetting a fence
     // while another thread sits in vkWaitForFences on it is undefined, and
@@ -128,6 +146,9 @@ private:
     /// and a release back (libretro_vulkan.h: "the frontend will always release
     /// ownership back to src_queue_family").
     uint32_t                m_src_queue_family         = VK_QUEUE_FAMILY_IGNORED;
+    std::vector<VkSemaphore>     m_wait_semaphores;
+    std::vector<VkCommandBuffer> m_pending_command_buffers;
+    bool                         m_new_image_pending = false;
     VkSemaphore             m_signal_semaphore         = VK_NULL_HANDLE;
 
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
@@ -146,9 +167,6 @@ private:
     /// per format rather than once per frame. Signed because VK_FORMAT_UNDEFINED
     /// is 0 and would otherwise read as "already warned".
     mutable int64_t m_warned_format = -1;
-    /// One-shot latches for core behaviour we do not implement, so a core that
-    /// relies on it says so once instead of failing silently.
-    bool m_warned_set_command_buffers = false;
     bool m_logged_src_queue_family    = false;
 #ifdef _WIN32
     void* m_hidden_hwnd = nullptr;

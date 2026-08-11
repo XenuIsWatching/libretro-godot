@@ -33,9 +33,6 @@ VideoHandler::~VideoHandler() = default;
 
 void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t height, size_t pitch)
 {
-    if (!data || width == 0 || height == 0)
-        return;
-
     auto instance = Wrapper::GetCurrentThreadWrapper();
     if (!instance)
     {
@@ -43,10 +40,27 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         return;
     }
 
+    auto complete_vulkan_frame = [&instance]() {
+        if (instance->m_video_handler->m_vulkan_ctx)
+            instance->m_video_handler->m_vulkan_ctx->CompleteFrameWithoutReadback();
+    };
+
+    // set_signal_semaphore is consumed by the next video_refresh and must be
+    // signalled even for a duplicated/empty frame. Returning here without a
+    // queue submission can leave the core waiting forever before its next run.
+    if (!data || width == 0 || height == 0)
+    {
+        complete_vulkan_frame();
+        return;
+    }
+
     // Rollback replay: skip texture uploads for intermediate replayed frames
     // (only the final frame of the replay refreshes the screen).
     if (instance->IsNetplayReplayVideoMuted())
+    {
+        complete_vulkan_frame();
         return;
+    }
 
     PackedByteArray pixel_data;
 
