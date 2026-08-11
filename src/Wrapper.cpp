@@ -1654,11 +1654,26 @@ void Wrapper::EmulationThreadLoop()
 
     Log("FPS: " + std::to_string(m_system_av_info.timing.fps) + " Sample Rate: " + std::to_string(m_system_av_info.timing.sample_rate));
 
-    // Size the hardware render target by the core's MAXIMUM geometry: it is the
-    // surface the core draws into, and a core is free to grow its frame up to
-    // max_* at any time without re-reporting av_info.
-    const int32_t hw_width = static_cast<int32_t>(std::max(m_system_av_info.geometry.base_width, m_system_av_info.geometry.max_width));
-    const int32_t hw_height = static_cast<int32_t>(std::max(m_system_av_info.geometry.base_height, m_system_av_info.geometry.max_height));
+    // Size the hardware render target by the core's BASE geometry, not its max.
+    //
+    // This used to take max, on the reasoning that a core may grow its frame up
+    // to max_* at any time. That is true of the FRAME, but this size is not just
+    // a hint: for a core that renders through a surface (Dolphin), the surface
+    // IS the swapchain, and Vulkan requires a swapchain's extent to equal the
+    // surface's currentExtent. An oversized surface therefore does not leave the
+    // core room to grow, it forces the core to render bigger and present scaled
+    // into it, while video_refresh still reports the base size. The readback then
+    // takes base rows off the top of a taller picture.
+    //
+    // Measured, with Dolphin reporting 640x528 base and 640x576 max: the surface
+    // came up 640x576, the picture arrived magnified by 576/528 and the bottom
+    // 48 lines were gone, slicing through the Wii Sports Resort logo.
+    //
+    // A core that genuinely grows past base wants the surface rebuilt at the new
+    // size, which is what VideoHandler::SetGeometry's TODO is about. Until then,
+    // matching what the core says it will actually send is the honest size.
+    const int32_t hw_width = static_cast<int32_t>(m_system_av_info.geometry.base_width);
+    const int32_t hw_height = static_cast<int32_t>(m_system_av_info.geometry.base_height);
 
     if (!m_video_handler->InitHwRenderContext(hw_width, hw_height))
     {
