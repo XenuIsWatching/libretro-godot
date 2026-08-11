@@ -91,16 +91,27 @@ public:
     bool SetControllerInfo(const retro_controller_info* controller_info);
     bool GetRumbleInterface(retro_rumble_interface* rumble_interface);
 
-    // ── Sensor interface (accelerometer / tilt) ──────────────────────────────
-    // The frontend feeds device orientation (a held VR handheld) as an
-    // accelerometer in g units, at-rest flat ≈ (0, 0, 1). Cores enable the
-    // sensor via set_sensor_state and poll it via get_sensor_input each frame.
+    // ── Sensor interface (accelerometer + gyroscope) ─────────────────────────
+    // The frontend feeds the motion of a held VR handheld as two sensors on the
+    // device's OWN axes: an accelerometer in g (at-rest flat ≈ (0, 0, 1)) and a
+    // gyroscope in radians/second. Cores enable each independently via
+    // set_sensor_state and poll them with get_sensor_input every frame.
+    //
+    // The two are enabled separately because a core may want either alone.
+    // Dolphin binds tilt and swing off the accelerometer but needs the gyro for
+    // MotionPlus, and asks for them in two calls.
     bool GetSensorInterface(retro_sensor_interface* sensor_interface);
     void SetSensorAccel(uint32_t port, float x, float y, float z);
+    void SetSensorGyro(uint32_t port, float x, float y, float z);
     bool IsSensorEnabled(uint32_t port) const
     {
-        auto it = m_sensor_enabled.find(port);
-        return it != m_sensor_enabled.end() && it->second;
+        auto it = m_sensor_accel_enabled.find(port);
+        return it != m_sensor_accel_enabled.end() && it->second;
+    }
+    bool IsGyroEnabled(uint32_t port) const
+    {
+        auto it = m_sensor_gyro_enabled.find(port);
+        return it != m_sensor_gyro_enabled.end() && it->second;
     }
 
     const std::vector<std::vector<RetroController>>& GetControllers() const { return m_controllers; }
@@ -156,7 +167,13 @@ private:
     std::unordered_map<uint32_t, float> m_sensor_accel_x;
     std::unordered_map<uint32_t, float> m_sensor_accel_y;
     std::unordered_map<uint32_t, float> m_sensor_accel_z;
-    std::unordered_map<uint32_t, bool> m_sensor_enabled;
+    std::unordered_map<uint32_t, bool> m_sensor_accel_enabled;
+
+    // Gyroscope state per port (radians/second), same threading story as above.
+    std::unordered_map<uint32_t, float> m_sensor_gyro_x;
+    std::unordered_map<uint32_t, float> m_sensor_gyro_y;
+    std::unordered_map<uint32_t, float> m_sensor_gyro_z;
+    std::unordered_map<uint32_t, bool> m_sensor_gyro_enabled;
 
     std::vector<std::vector<RetroController>> m_controllers;
     std::unordered_map<uint32_t, uint32_t> m_port_devices;

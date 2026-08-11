@@ -120,6 +120,10 @@ public:
     /// sensor interface — a held handheld's physical tilt drives tilt carts.
     void SetSensorAccel(uint32_t port, float x, float y, float z);
 
+    /// Gyroscope feed (radians/second about the device's own axes) for the same
+    /// interface. Rotation rate, not orientation: a still device reads (0,0,0).
+    void SetSensorGyro(uint32_t port, float x, float y, float z);
+
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y normalized to
     /// [-0x7FFF, 0x7FFF] across the WHOLE video output (the composite
     /// framebuffer for dual-screen cores — melonDS maps the bottom-screen

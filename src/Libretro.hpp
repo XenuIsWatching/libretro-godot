@@ -167,6 +167,11 @@ public:
     /// Fed each frame from a held handheld's physical orientation.
     void SetSensorAccel(int port, float x, float y, float z);
 
+    /// Gyroscope feed in radians/second about the device's own axes, fed each
+    /// frame from how fast a held handheld is turning. This is what drives the
+    /// Wii MotionPlus; a device sitting still reads (0, 0, 0).
+    void SetSensorGyro(int port, float x, float y, float z);
+
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y in [-32767, 32767]
     /// across the whole video output. Drives the DS/3DS touch screen.
     /// Writes touch index 0 and drops any other index, so a single-point caller
