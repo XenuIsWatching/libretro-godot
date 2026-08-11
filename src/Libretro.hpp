@@ -193,7 +193,8 @@ public:
     /// frame counter. Call before StartContent for a cold start.
     void SetNetplayMode(bool enabled, int port_mask, int64_t start_frame);
     /// Agreed inputs for one frame: flat PackedInt32Array of 4 ports × 5 values
-    /// {button_mask, alx, aly, arx, ary}. In rollback mode these are the
+    /// {button_mask, alx, aly, arx, ary}, optionally followed by the
+    /// sensor/pointer/keyboard auxiliary block. In rollback mode these are the
     /// CONFIRMATIONS: a mismatch with what already ran triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs);
 
@@ -232,7 +233,7 @@ public:
     void SetDiskEjectState(bool ejected);
     /// Hand the core a new disc file at image `index` (tray must be open).
     void ReplaceDiskImage(int64_t index, const godot::String& path);
-    /// Netplay: apply a disc op right before running `frame` on every peer.
+    /// Netplay: apply a disc op right before running confirmed `frame` on every peer.
     /// op 0 = eject; op 1 = replace at `index` with `path` + close tray.
     void ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const godot::String& path);
 

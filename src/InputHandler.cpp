@@ -6,6 +6,60 @@
 
 namespace Xenu
 {
+InputHandler::NetplayState InputHandler::CaptureNetplayState() const
+{
+    NetplayState state;
+    state.joypad_buttons = m_joypad_buttons;
+    state.mouse_x = m_mouse_x;
+    state.mouse_y = m_mouse_y;
+    state.mouse_buttons = m_mouse_buttons;
+    state.key_state = m_key_state;
+    state.lightgun_x = m_lightgun_x;
+    state.lightgun_y = m_lightgun_y;
+    state.lightgun_is_offscreen = m_lightgun_is_offscreen;
+    state.lightgun_buttons = m_lightgun_buttons;
+    state.pointers = m_pointers;
+    state.analog_left_x = m_analog_left_x;
+    state.analog_left_y = m_analog_left_y;
+    state.analog_right_x = m_analog_right_x;
+    state.analog_right_y = m_analog_right_y;
+    state.sensor_accel_x = m_sensor_accel_x;
+    state.sensor_accel_y = m_sensor_accel_y;
+    state.sensor_accel_z = m_sensor_accel_z;
+    state.sensor_accel_enabled = m_sensor_accel_enabled;
+    state.sensor_gyro_x = m_sensor_gyro_x;
+    state.sensor_gyro_y = m_sensor_gyro_y;
+    state.sensor_gyro_z = m_sensor_gyro_z;
+    state.sensor_gyro_enabled = m_sensor_gyro_enabled;
+    return state;
+}
+
+void InputHandler::RestoreNetplayState(const NetplayState& state)
+{
+    m_joypad_buttons = state.joypad_buttons;
+    m_mouse_x = state.mouse_x;
+    m_mouse_y = state.mouse_y;
+    m_mouse_buttons = state.mouse_buttons;
+    m_key_state = state.key_state;
+    m_lightgun_x = state.lightgun_x;
+    m_lightgun_y = state.lightgun_y;
+    m_lightgun_is_offscreen = state.lightgun_is_offscreen;
+    m_lightgun_buttons = state.lightgun_buttons;
+    m_pointers = state.pointers;
+    m_analog_left_x = state.analog_left_x;
+    m_analog_left_y = state.analog_left_y;
+    m_analog_right_x = state.analog_right_x;
+    m_analog_right_y = state.analog_right_y;
+    m_sensor_accel_x = state.sensor_accel_x;
+    m_sensor_accel_y = state.sensor_accel_y;
+    m_sensor_accel_z = state.sensor_accel_z;
+    m_sensor_accel_enabled = state.sensor_accel_enabled;
+    m_sensor_gyro_x = state.sensor_gyro_x;
+    m_sensor_gyro_y = state.sensor_gyro_y;
+    m_sensor_gyro_z = state.sensor_gyro_z;
+    m_sensor_gyro_enabled = state.sensor_gyro_enabled;
+}
+
 void InputHandler::PollCallback()
 {
 }

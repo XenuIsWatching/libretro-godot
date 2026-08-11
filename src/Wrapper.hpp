@@ -143,7 +143,9 @@ public:
     void SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_frame);
 
     /// Post the agreed inputs for one frame: flat array of 4 ports × 5 values
-    /// {button_mask, analog_lx, analog_ly, analog_rx, analog_ry}.
+    /// {button_mask, analog_lx, analog_ly, analog_rx, analog_ry}, followed by
+    /// the optional sensor, pointer, and keyboard auxiliary block documented
+    /// below. Legacy 20-value frames remain valid.
     /// Lockstep: releases the gate for `frame`. Rollback: confirms `frame`, and
     /// a mismatch against what was executed triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& flat);
@@ -229,7 +231,7 @@ public:
     void ReplaceDiskImage(uint32_t index, const godot::String& path);
 
     /// Netplay: schedule a disc op to apply deterministically right before
-    /// running `frame` (lockstep only). op 0 = eject (open tray),
+    /// running confirmed `frame`. op 0 = eject (open tray),
     /// op 1 = replace at `index` with `path` then close the tray.
     void ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const godot::String& path);
 
@@ -260,8 +262,10 @@ public:
 
     // Emulation-thread internals (rollback engine).
     void NetplayRollbackIteration(double frame_duration_ms, double& accumulator);
-    void NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask);
-    void SaveRollbackState(int64_t frame);
+    bool NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask);
+    bool SaveRollbackState(int64_t frame);
+    void FailNetplayRollback(const std::string& reason);
+    bool IsNetplayPortManaged(uint32_t port) const;
     // Netplay frame payload: 4 ports × 5 ints (joypad btn/alx/aly/arx/ary, or
     // for RETRO_DEVICE_MOUSE ports: buttons/dx/dy/-/-), then the aux block:
     // [20] flags (bit0 sensor valid, bit1 pointer valid), [21..23] accel in
@@ -271,7 +275,17 @@ public:
     // zeroed).
     static constexpr int NP_KEY_SLOTS = 4;
     static constexpr int NP_FRAME_INTS = 27 + NP_KEY_SLOTS * 2;
+    static constexpr int NP_AUX_OFFSET = 20;
+    static constexpr int64_t NP_ROLLBACK_HISTORY = 40;
+    static constexpr int64_t NP_MAX_FUTURE_INPUTS = 600;
     using NpFrame = std::array<int32_t, NP_FRAME_INTS>;
+
+    struct RollbackState
+    {
+        int64_t frame = 0;
+        std::vector<uint8_t> core;
+        InputHandler::NetplayState input;
+    };
 
     void ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask);
     void ApplyNetplayAux(const NpFrame& inputs);
@@ -370,7 +384,7 @@ public:
     std::vector<int32_t> m_np_local_records;                // flat {frame,port,5 vals} drained by main thread
     // Emulation-thread-only rollback bookkeeping (no lock needed):
     std::map<int64_t, NpFrame> m_np_used;   // inputs each executed frame actually ran with
-    std::deque<std::pair<int64_t, std::vector<uint8_t>>> m_np_states; // state BEFORE running frame N
+    std::deque<RollbackState> m_np_states;            // core + frontend input state before frame N
     std::map<int64_t, uint32_t> m_np_crc_pending;           // captured CRCs awaiting confirmation
     int64_t m_np_watermark = -1;                            // highest contiguous confirmed frame
     int64_t m_np_verified = -1;                             // highest frame verified/corrected against confirmations

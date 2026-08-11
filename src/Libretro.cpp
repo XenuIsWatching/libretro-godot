@@ -400,6 +400,7 @@ void Libretro::_bind_methods()
     ADD_SIGNAL(MethodInfo("netplay_crc",
         PropertyInfo(Variant::INT, "frame"),
         PropertyInfo(Variant::INT, "crc")));
+    ADD_SIGNAL(MethodInfo("netplay_error", PropertyInfo(Variant::STRING, "message")));
     /// SAVE_RAM reached disk. Only fires when the dirty check found a change,
     /// so it is the real "the game saved" event, not a timer tick. `final` is
     /// the flush at core shutdown.

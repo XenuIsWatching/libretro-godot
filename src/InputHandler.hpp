@@ -33,6 +33,47 @@ public:
         std::string description;
     };
 
+    static constexpr uint32_t MAX_POINTERS = 4;
+
+    struct PointerState
+    {
+        int16_t x = 0;
+        int16_t y = 0;
+        int16_t pressed = 0;
+    };
+
+    /// Input state owned by the frontend rather than the core. Core savestates
+    /// do not contain this data, so rollback snapshots must preserve it too or
+    /// a replay can poll keyboard/mouse/sensor state from the abandoned future.
+    struct NetplayState
+    {
+        std::unordered_map<uint32_t, uint16_t> joypad_buttons;
+        std::unordered_map<uint32_t, int16_t> mouse_x;
+        std::unordered_map<uint32_t, int16_t> mouse_y;
+        std::unordered_map<uint32_t, uint32_t> mouse_buttons;
+        std::array<std::bitset<RETROK_LAST>, 4> key_state{};
+        std::unordered_map<uint32_t, int16_t> lightgun_x;
+        std::unordered_map<uint32_t, int16_t> lightgun_y;
+        std::unordered_map<uint32_t, int16_t> lightgun_is_offscreen;
+        std::unordered_map<uint32_t, uint32_t> lightgun_buttons;
+        std::unordered_map<uint32_t, std::array<PointerState, MAX_POINTERS>> pointers;
+        std::unordered_map<uint32_t, int16_t> analog_left_x;
+        std::unordered_map<uint32_t, int16_t> analog_left_y;
+        std::unordered_map<uint32_t, int16_t> analog_right_x;
+        std::unordered_map<uint32_t, int16_t> analog_right_y;
+        std::unordered_map<uint32_t, float> sensor_accel_x;
+        std::unordered_map<uint32_t, float> sensor_accel_y;
+        std::unordered_map<uint32_t, float> sensor_accel_z;
+        std::unordered_map<uint32_t, bool> sensor_accel_enabled;
+        std::unordered_map<uint32_t, float> sensor_gyro_x;
+        std::unordered_map<uint32_t, float> sensor_gyro_y;
+        std::unordered_map<uint32_t, float> sensor_gyro_z;
+        std::unordered_map<uint32_t, bool> sensor_gyro_enabled;
+    };
+
+    NetplayState CaptureNetplayState() const;
+    void RestoreNetplayState(const NetplayState& state);
+
     void SetJoypadButtonStates(uint32_t port, uint16_t states);
     uint16_t GetJoypadButtonStates(uint32_t port);
 
@@ -63,8 +104,6 @@ public:
     // the `index` argument of the state callback. Most cores read index 0 only,
     // which is what the unindexed setters below write; Dolphin's IR passthrough
     // reads all four, one per object the Wiimote camera can see.
-    static constexpr uint32_t MAX_POINTERS = 4;
-
     void SetPointerPosition(uint32_t port, int16_t x, int16_t y);
     int16_t GetPointerX(uint32_t port);
     int16_t GetPointerY(uint32_t port);
@@ -142,12 +181,6 @@ private:
     // One entry per touch index. RETRO_DEVICE_ID_POINTER_COUNT is derived from
     // the pressed flags rather than stored, so a caller can never leave a count
     // that disagrees with the points behind it.
-    struct PointerState
-    {
-        int16_t x = 0;
-        int16_t y = 0;
-        int16_t pressed = 0;
-    };
     std::unordered_map<uint32_t, std::array<PointerState, MAX_POINTERS>> m_pointers;
 
     std::unordered_map<uint32_t, int16_t> m_analog_left_x;
