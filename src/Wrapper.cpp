@@ -1669,9 +1669,12 @@ void Wrapper::EmulationThreadLoop()
     // came up 640x576, the picture arrived magnified by 576/528 and the bottom
     // 48 lines were gone, slicing through the Wii Sports Resort logo.
     //
-    // A core that genuinely grows past base wants the surface rebuilt at the new
-    // size, which is what VideoHandler::SetGeometry's TODO is about. Until then,
-    // matching what the core says it will actually send is the honest size.
+    // Nor can this be repaired by resizing on SET_GEOMETRY: that call is
+    // specified to complete in constant time and to perform no video
+    // reinitialisation, so it may not rebuild a surface. A core that genuinely
+    // needs to grow past base has to say so through SET_SYSTEM_AV_INFO, which is
+    // the call that does permit reinitialisation. Until this handles that, what
+    // the core says it will actually send is the honest size.
     const int32_t hw_width = static_cast<int32_t>(m_system_av_info.geometry.base_width);
     const int32_t hw_height = static_cast<int32_t>(m_system_av_info.geometry.base_height);
 
