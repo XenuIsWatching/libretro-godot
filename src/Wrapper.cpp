@@ -1722,13 +1722,26 @@ void Wrapper::EmulationThreadLoop()
     // call rather than reset to now, so a call that overruns is not paid for twice.
     auto next_call_due = std::chrono::steady_clock::now();
 
-    // The brake is bounded: a sink that stops draining at all must not be able to
-    // halt emulation — losing audio focus to a system overlay would otherwise
-    // freeze the game outright. Past this the frame runs anyway and samples drop,
-    // the same trade made everywhere else here. The wait is recomputed from the
-    // sink's current depth on every pass and never accumulates, so unlike the
-    // stall counter this replaces, it cannot latch open.
+    // One wait is bounded: past this the frame runs anyway and samples drop, the
+    // same trade made everywhere else here.
     constexpr double MAX_BRAKE_WAIT_MS = 250.0;
+
+    // Bounding one wait does not bound the loop of them. Each pass recomputes the
+    // wait from the sink's current depth, so no single wait accumulates — but a
+    // sink nothing is draining reports "still full" on every pass, and the loop
+    // brakes forever without ever calling the core. Measured: with the Meta XR
+    // Audio voices created but never pulled, emulation stopped dead at frame 3
+    // and never restarted.
+    //
+    // So bound the silence instead. The brake's whole premise is that the sink
+    // drains at the mixer's rate, which makes its depth a measure of real time;
+    // a sink that has not asked for audio for longer than it could possibly hold
+    // (the voice ring is 32768 frames, ~0.68 s at 48 kHz) is not draining, and is
+    // therefore measuring nothing. Ignore it and let the fps ceiling pace, which
+    // is already what carries a core that emits no audio at all. Self-healing:
+    // the brake resumes the moment the sink asks for a frame again.
+    constexpr double SINK_SILENCE_LIMIT_MS = 1000.0;
+    auto last_sink_want = std::chrono::steady_clock::now();
 
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
@@ -1798,7 +1811,13 @@ void Wrapper::EmulationThreadLoop()
             double brake_ms = m_audio_handler->MsUntilSinkWantsFrames();
             if (brake_ms > MAX_BRAKE_WAIT_MS)
                 brake_ms = MAX_BRAKE_WAIT_MS;
-            if (brake_ms > SLEEP_MARGIN_MS)
+            if (brake_ms <= SLEEP_MARGIN_MS)
+            {
+                // The sink wants audio: it is draining, so it is still a clock.
+                last_sink_want = now;
+            }
+            else if (std::chrono::duration<double, std::milli>(now - last_sink_want).count()
+                     < SINK_SILENCE_LIMIT_MS)
             {
                 std::this_thread::sleep_for(
                     std::chrono::duration<double, std::milli>(brake_ms - SLEEP_MARGIN_MS));
