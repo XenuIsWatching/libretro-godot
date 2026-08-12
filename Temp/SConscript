@@ -31,8 +31,6 @@ is_windows = env["platform"] == "windows"
 is_android = env["platform"] == "android"
 is_linux = env["platform"] == "linux"
 
-import os
-
 if is_windows:
     env.Append(CPPPATH=["external/SDL3/include/"])
     env.Append(CXXFLAGS=["/std:c++latest"])
@@ -40,9 +38,10 @@ if is_windows:
     env.Append(LIBS=["user32", "gdi32", "opengl32", "SDL3", "vulkan-1",
                      "d3d11", "d3d12", "dxgi"])
     env.Append(LINKFLAGS=['/IGNORE:4099'])
-    # Locate vulkan-1.lib: prefer VULKAN_SDK env var, fall back to known install path
-    vulkan_sdk = os.environ.get("VULKAN_SDK", r"C:\VulkanSDK\1.4.341.1")
-    env.Append(LIBPATH=[vulkan_sdk + r"\Lib"])
+    # vulkan-1.lib is the loader's import library — symbol thunks, no loader code —
+    # so it is vendored rather than taken from an installed Vulkan SDK. vulkan-1.dll
+    # still comes from the user's graphics driver at runtime.
+    env.Append(LIBPATH=[r"external/vulkan-loader/lib/x64"])
 
 if is_android:
     env.Append(CXXFLAGS=["-std=c++20"])
