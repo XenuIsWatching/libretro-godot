@@ -46,7 +46,7 @@ private:
     int64_t m_frame;
 };
 
-/// retro_set_controller_port_device on the emulation thread — a live plug/
+/// retro_set_controller_port_device on the emulation thread: a live plug/
 /// unplug while the core runs must not call into the core from the main
 /// thread mid-retro_run.
 class EmuThreadCommandSetPortDevice : public EmuThreadCommand
@@ -113,7 +113,7 @@ private:
 };
 
 /// Hand the core a brand-new disc file at image `index`
-/// (replace_image_index — RetroArch's "Load New Disc"), then re-emit
+/// (replace_image_index, RetroArch's "Load New Disc"), then re-emit
 /// disk_control_ready. The tray must be open; the caller closes it after.
 class EmuThreadCommandReplaceDisk : public EmuThreadCommand
 {

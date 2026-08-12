@@ -20,7 +20,7 @@ public:
 
     void SetDirectories(const std::string& system_directory, const std::string& save_directory, const std::string& core_assets_directory);
 
-    // Disk control (physical disc eject/swap). EMULATION THREAD ONLY — these
+    // Disk control (physical disc eject/swap). EMULATION THREAD ONLY, since these
     // call straight into the core's registered callbacks. Prefer the ext
     // callback, fall back to v0; every call is null-guarded so cores without
     // the interface are safe no-ops.

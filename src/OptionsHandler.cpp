@@ -27,7 +27,7 @@ bool OptionsHandler::GetVariable(retro_variable* variable)
     if (!m_variables.contains(key))
         return true;
 
-    // NOTE: variable->value is an OUT parameter — cores pass it UNINITIALIZED
+    // NOTE: variable->value is an OUT parameter, and cores pass it UNINITIALIZED
     // (legacy melonds on Android hands us stack garbage). Never read it.
     variable->value = m_variables[key].c_str();
     return true;
@@ -62,7 +62,7 @@ bool OptionsHandler::SetVariable(const retro_variable* variable)
 // Legacy (v0) options API, still used by cores that never adopted core options
 // v1/v2 (the beetle/mednafen family among them). Each value string is
 // "Description; value1|value2|value3" with the FIRST value as the default.
-// Synthesize full definitions so the options panel lists these cores too —
+// Synthesize full definitions so the options panel lists these cores too;
 // only filling m_variables leaves the UI showing "no options".
 bool OptionsHandler::SetVariables(const retro_variable* variables)
 {
@@ -108,7 +108,7 @@ bool OptionsHandler::SetVariableUpdate(bool update)
     return true;
 }
 
-// Core options v1: like v2 but without categories. Build definitions too —
+// Core options v1: like v2 but without categories. Build definitions too, since
 // m_variables alone leaves the options panel empty for v1 cores.
 bool OptionsHandler::SetCoreOptions(const retro_core_option_definition* definitions)
 {
@@ -224,7 +224,7 @@ void OptionsHandler::SerializeToFile()
     auto* wrapper = Wrapper::GetCurrentThreadWrapper();
     if (!wrapper)
     {
-        LogError("SerializeToFile: GetCurrentThreadWrapper() returned null — cannot serialize");
+        LogError("SerializeToFile: GetCurrentThreadWrapper() returned null, cannot serialize");
         return;
     }
     Log("SerializeToFile: got wrapper, fetching root_directory");

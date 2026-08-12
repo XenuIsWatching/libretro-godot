@@ -6,10 +6,10 @@ Originally forked from [Skurdt/SK.Libretro.Godot](https://github.com/Skurdt/SK.L
 
 ## Prerequisites
 
-- **SCons** — build system
+- **SCons**: build system
 - **MSVC** (Windows), **GCC/Clang** (Linux), or **Android NDK r27d+** (Android/Quest)
-- **Python 3** — required by SCons
-- **Vulkan loader, SDL3, OpenGL** (Linux) — linked by soname at build time
+- **Python 3**: required by SCons
+- **Vulkan loader, SDL3, OpenGL** (Linux): linked by soname at build time
   (`libvulkan.so.1`, `libSDL3.so.0`, `libGL.so.1`); these ship with the distro's Vulkan
   runtime, SDL3 package, and Mesa. The `-dev`/`-devel` packages are not required.
 
@@ -46,7 +46,7 @@ Links the Vulkan loader, SDL3, and the GL loader by soname (`libvulkan.so.1`,
 `libSDL3.so.0`, `libGL.so.1`), so no `-dev`/`-devel` packages are needed. Software,
 OpenGL, and Vulkan hardware-render cores all work. OpenGL uses SDL3 to create a hidden
 GL context (the same code path as Windows), so a display server (X11/Wayland) must be
-available when a GL core runs — headless GL init fails gracefully.
+available when a GL core runs; headless GL init fails gracefully.
 
 ### Android / Quest (arm64)
 
@@ -58,14 +58,14 @@ ANDROID_NDK_ROOT="/path/to/android-ndk-r27d" ANDROID_HOME="" \
 ```
 
 The Android build defines both `HAVE_NEON` and `__ARM_NEON__`. libretro-common keys
-every NEON path off `__ARM_NEON__` — the ARMv7-era spelling — but clang for aarch64
+every NEON path off `__ARM_NEON__` (the ARMv7-era spelling), but clang for aarch64
 defines `__ARM_NEON` without the trailing underscores, so all of them silently compile
 out and the resampler, pixel conversion and s16→float conversion fall back to scalar C.
 
 Both defines are needed and they do different jobs: `HAVE_NEON` compiles the NEON code
 in, `__ARM_NEON__` makes `features_cpu.c` set `RETRO_SIMD_NEON`, which is what the
 resampler's runtime dispatch actually tests. With only `HAVE_NEON` the code is present
-but never selected — the CPU mask reports `ASIMD`, the dispatch asks for `NEON`, and the
+but never selected: the CPU mask reports `ASIMD`, the dispatch asks for `NEON`, and the
 branch body is empty after preprocessing. Measured on a Quest 3 resampling 32040 → 44100
 Hz: scalar 33.5 µs/batch, `HAVE_NEON` alone 33.1 µs (i.e. unchanged), both defines
 20.7 µs.
@@ -88,24 +88,24 @@ LIBRETRO_GODOT_OUTPUT_DIR="../MyProject/addons/libretro_godot" scons platform=wi
 
 Core audio has two output paths, chosen at `StartContent` time.
 
-**Default — Godot's own 3D audio.** `AudioHandler` creates an `AudioStreamGenerator`
+**Default: Godot's own 3D audio.** `AudioHandler` creates an `AudioStreamGenerator`
 at the core's declared sample rate and feeds an `AudioStreamPlayer3D` parented to the
 `Libretro` node. Nothing extra is required; this is what runs unless the optional
 extension below is present.
 
-**Optional — Meta XR Audio (HRTF).** If the host project also has the
-`metaxr-audio` GDExtension loaded *and* its native library initialised, core audio is
-routed through two spatialised voices instead, giving real HRTF placement rather than
+**Optional: Meta XR Audio (HRTF).** If the host project also has the
+`metaxr-audio` GDExtension loaded *and* its native library initialized, core audio is
+routed through two spatialized voices instead, giving real HRTF placement rather than
 amplitude panning. The dependency is one-way and soft: resolved by name through
 `Engine.get_singleton("MetaXRAudio")`, never linked, so this extension builds and runs
-identically without it. On Linux it is always the default path — Meta ships no Linux
-binary.
+identically without it. On Linux it is always the default path, since Meta ships no
+Linux binary.
 
 ### Voice ids
 
-A *voice* is one spatialised mono source slot in the Meta XR Audio mixer. When the SDK
-path is active, `AudioHandler` claims two of them — a console's sound comes out of a TV,
-and a TV has two speakers — and pushes the core's left and right channels into them
+A *voice* is one spatialized mono source slot in the Meta XR Audio mixer. When the SDK
+path is active, `AudioHandler` claims two of them (a console's sound comes out of a TV,
+and a TV has two speakers) and pushes the core's left and right channels into them
 separately.
 
 `Libretro.GetAudioVoiceIds()` exposes those slot indices to GDScript as a
@@ -121,15 +121,15 @@ else:
     mx.set_voice_position(voices[1], origin + right * separation)
 ```
 
-**An empty array means the fallback path is in use** — that is the check callers should
-branch on. The C++ side owns the voices' lifetime (created in `AudioHandler::Init`,
+**An empty array means the fallback path is in use**, and that is the check callers
+should branch on. The C++ side owns the voices' lifetime (created in `AudioHandler::Init`,
 released in `DeInit`); GDScript only positions them and sets their gain.
 
 ### Sample rates and pacing
 
 Cores declare their own rate (32040 Hz SNES, 44100 PSX, 48000 N64) while the SDK context
 runs at the device mix rate, so anything that does not match is resampled with
-libretro-common's sinc resampler — on the emulation thread, never the audio thread. Note
+libretro-common's sinc resampler (on the emulation thread, never the audio thread). Note
 a Quest reports **44100 Hz** even when the project requests 48000, so a 48000 Hz core is
 resampled there although it passes straight through on desktop.
 
@@ -137,7 +137,7 @@ Emulation pacing is gated on audio buffer occupancy: `IsBufferSaturated()` throt
 `retro_run()` so a core that advances more than one display frame per call cannot run
 fast. The voice ring is much larger than the `AudioStreamGenerator` it replaces, so
 `EffectiveTotalFrames()` deliberately reports the *old* buffer capacity on the SDK path
-and treats the rest of the ring as spare headroom — pacing on the physical ring size
+and treats the rest of the ring as spare headroom; pacing on the physical ring size
 would let a core run most of a second ahead.
 
 ## Using as a Submodule
@@ -170,20 +170,20 @@ covers **hardware**-render support:
 
 All dependencies are included in `external/` or as submodules:
 
-- **godot-cpp** (submodule, 4.5 branch) — Godot C++ bindings
-- **SDL3** — DLL loading and HW render context on Windows
-- **libretro-common** — VFS, audio conversion, pixel format conversion, and the sinc
+- **godot-cpp** (submodule, 4.5 branch): Godot C++ bindings
+- **SDL3**: DLL loading and HW render context on Windows
+- **libretro-common**: VFS, audio conversion, pixel format conversion, and the sinc
   audio resampler (core rate → device mix rate)
-- **moodycamel::ReaderWriterQueue** — Lock-free SPSC queue for cross-thread communication
+- **moodycamel::ReaderWriterQueue**: Lock-free SPSC queue for cross-thread communication
 
-## Licence
+## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Ryan McClelland (XenuIsWatching),
+MIT; see [LICENSE](LICENSE). Copyright (c) 2026 Ryan McClelland (XenuIsWatching),
 and (c) 2025 Skurdt for the SK.Libretro.Godot code this was forked from, whose notice
-is retained as the licence requires.
+is retained as the license requires.
 
-Bundled dependencies keep their own licences: SDL3 (zlib, `external/SDL3/LICENSE.txt`),
+Bundled dependencies keep their own licenses: SDL3 (zlib, `external/SDL3/LICENSE.txt`),
 godot-cpp (MIT), vulkan-headers (Apache-2.0 OR MIT, see its `LICENSES/`), and
-libretro-common, which carries no top-level licence file — each source file states its
+libretro-common, which carries no top-level license file; each source file states its
 own terms in its header (MIT, "The following license statement only applies to this
 file"), so consult the specific files listed in `Temp/SConscript`.

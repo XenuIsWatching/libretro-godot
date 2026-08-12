@@ -27,9 +27,9 @@ static uint32_t RandomChar()
 
 // Build a random hex string WITHOUT std::stringstream. On Linux the first stream
 // op on the emulation thread lazily instantiates locale/codecvt facets (via
-// std::call_once), which threw here and aborted the whole thread (uncaught) — a
-// latent crash that only surfaced once cores actually load (the .so path fix).
-// Manual hex has no locale dependency.
+// std::call_once), which throws here and aborts the whole thread uncaught, since
+// there is no try/catch around the raw std::thread. Manual hex has no locale
+// dependency.
 static std::string GenerateHex(const uint32_t len)
 {
     static const char digits[] = "0123456789abcdef";
@@ -64,7 +64,7 @@ bool Core::Load(CallbackTrampolines* trampolines)
     std::string name = std::filesystem::path(m_path).filename().replace_extension("").string();
     // Longest first: stripping "_libretro" off an Android name would leave "_android"
     // behind. Both are tried on every platform because the "_android" infix is a
-    // convention, not a rule — azahar ships as "azahar_libretro.so" on Android — and
+    // convention, not a rule (azahar ships as "azahar_libretro.so" on Android), and
     // the bare name keys core_options/<name>.opt, which must match across platforms.
     static const char* const suffixes[] = { "_libretro_android", "_libretro" };
     for (const char* suffix : suffixes)
@@ -80,7 +80,7 @@ bool Core::Load(CallbackTrampolines* trampolines)
 
     std::string extension = std::filesystem::path(m_path).extension().string();
     std::filesystem::path temp_path = std::filesystem::path(Wrapper::GetCurrentThreadWrapper()->GetTempDirectory()) / (name + GenerateHex(10) + extension);
-    // error_code overload — the throwing overload would abort the emulation thread
+    // error_code overload: the throwing overload would abort the emulation thread
     // (no try/catch around the raw std::thread) on any copy failure.
     std::error_code copy_ec;
     if (!std::filesystem::copy_file(m_path, temp_path, std::filesystem::copy_options::overwrite_existing, copy_ec) || copy_ec)
@@ -121,7 +121,7 @@ bool Core::Load(CallbackTrampolines* trampolines)
     LoadFunction(retro_get_memory_data);
     LoadFunction(retro_get_memory_size);
 
-    // Cache need_fullpath before retro_init — it decides whether Wrapper hands the
+    // Cache need_fullpath before retro_init: it decides whether Wrapper hands the
     // core a byte buffer or just a path. Disc cores set it and open the image
     // themselves (VFS), so filling a multi-GB buffer for them is pure waste.
     {

@@ -29,8 +29,8 @@ void SafeRelease(T*& p)
 
 /// True for the formats ConvertRowToRgba8 can handle. The TYPELESS variants are
 /// included because they are byte-identical to their UNORM counterparts and a
-/// core that wants both an SRGB and a linear view of its frame — Dolphin's
-/// swapchain does — has to declare the texture TYPELESS to get them.
+/// core that wants both an SRGB and a linear view of its frame (Dolphin's
+/// swapchain does) has to declare the texture TYPELESS to get them.
 bool IsSupportedD3DFormat(DXGI_FORMAT format)
 {
     switch (format)

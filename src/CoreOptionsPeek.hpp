@@ -11,7 +11,7 @@ namespace Xenu
 /// Cores register their options from inside retro_set_environment, which the
 /// libretro API requires be callable before retro_init. Opening the library,
 /// handing it a capture-only environment callback and closing it again is
-/// therefore enough to read the whole set — no retro_init, no content, no
+/// therefore enough to read the whole set: no retro_init, no content, no
 /// emulation thread, no GPU, no audio.
 ///
 /// Opens the core in place rather than through Core's temp-copy scheme: nothing

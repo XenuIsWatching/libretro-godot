@@ -100,7 +100,7 @@ class Wrapper;
 
 // Node3D, not Node: the AudioStreamPlayer3D created per-instance in
 // Wrapper::StartContent is parented here, and a Node3D under a plain Node roots
-// its own transform hierarchy — the emitter would sit at the world origin and
+// its own transform hierarchy, so the emitter would sit at the world origin and
 // never follow the cabinet/handheld when it is picked up and carried around.
 class Libretro : public godot::Node3D
 {
@@ -117,8 +117,8 @@ public:
 
     /// Ask to track RetroAchievements for the content about to be started.
     /// `console_id` is an RC_CONSOLE_* value (see RaConsoles.for_systemid); 0 means
-    /// the system has no RetroAchievements equivalent. Call BEFORE StartContent —
-    /// identification happens as the core comes up. False when another machine
+    /// the system has no RetroAchievements equivalent. Call BEFORE StartContent,
+    /// since identification happens as the core comes up. False when another machine
     /// already holds the session, nobody is signed in, or achievements are off.
     bool RaClaimSession(int console_id);
     /// True while this node's core is the one being tracked.
@@ -134,7 +134,7 @@ public:
 
     /// Returns per-port controller info as Array[Dictionary{port, controllers: Array[{name,id}], current_id}].
     godot::Array GetControllerInfo();
-    /// Meta XR Audio voice ids this core's sound is spatialised through, or
+    /// Meta XR Audio voice ids this core's sound is spatialized through, or
     /// empty when it is running on the fallback AudioStreamPlayer3D.
     godot::PackedInt32Array GetAudioVoiceIds();
 
@@ -144,12 +144,12 @@ public:
     /// Tell the running core which device type is active on a given port.
     void SetControllerPortDevice(int port, int device);
 
-    /// Light gun input — called from GDScript each frame when the gun is plugged in.
+    /// Light gun input. Called from GDScript each frame when the gun is plugged in.
     void SetLightgunPosition(int port, int x, int y);
     void SetLightgunIsOffscreen(int port, bool offscreen);
     void SetLightgunButton(int port, int button_id, bool pressed);
 
-    /// Per-port joypad input — called from GDScript by physical retro controller objects.
+    /// Per-port joypad input. Called from GDScript by physical retro controller objects.
     void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
     /// Relative mouse deltas (accumulated until the core's next read) + button
     /// bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) for a RETRO_DEVICE_MOUSE port.
@@ -183,7 +183,7 @@ public:
     /// takes one camera object per index, so the frontend can hand it the real
     /// view of the sensor bar instead of a cursor position. Same [-32767, 32767]
     /// range; that core wants the positive half, 0 = 0.0 and 32767 = 1.0.
-    /// Unlike SetPointerState this leaves the other indices alone — send every
+    /// Unlike SetPointerState this leaves the other indices alone, so send every
     /// index you own each frame, visible or not.
     void SetPointerIndexState(int port, int index, int x, int y, bool pressed);
 
@@ -194,7 +194,7 @@ public:
     void SetNetplayMode(bool enabled, int port_mask, int64_t start_frame);
     /// Agreed inputs for one frame: flat PackedInt32Array of 4 ports × 5 values
     /// {button_mask, alx, aly, arx, ary}. In rollback mode these are the
-    /// CONFIRMATIONS — a mismatch with what already ran triggers rewind+replay.
+    /// CONFIRMATIONS: a mismatch with what already ran triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs);
 
     /// Enable GGPO-style rollback within netplay mode: locally-owned ports
@@ -203,7 +203,7 @@ public:
     void SetNetplayRollback(bool enabled, int local_mask, int max_ahead);
 
     /// Drain per-frame local-input records: flat groups of 7 ints
-    /// {frame, port, buttons, alx, aly, arx, ary} — what this peer actually
+    /// {frame, port, buttons, alx, aly, arx, ary}: what this peer actually
     /// pressed each frame, to be shipped to the host for assembly.
     godot::PackedInt32Array TakeNetplayLocalRecords();
     /// Async savestate → savestate_ready(data: PackedByteArray, frame: int).
@@ -212,7 +212,7 @@ public:
     void RequestLoadState(const godot::PackedByteArray& data, int64_t frame);
     // ── Battery saves (SRAM) ─────────────────────────────────────────────────
     /// Backing .srm file for this run. Call before StartContent; while running
-    /// it hot-swaps (flush old, load new) — a physical memory-card swap.
+    /// it hot-swaps (flush old, load new): a physical memory-card swap.
     /// Empty path = no persistence (PSX with no card seated).
     void SetSramPath(const godot::String& path);
     /// Netplay: inject exact SRAM bytes applied at load instead of the file.
@@ -251,16 +251,16 @@ public:
     void NotifyOptionsReady();
 
     /// Called from the emulation thread after SAVE_RAM was actually written to
-    /// disk — i.e. only when the dirty check found a change. `final` marks the
+    /// disk, i.e. only when the dirty check found a change. `final` marks the
     /// flush at core shutdown, the last one for this run.
     void NotifySramFlushed(const godot::String& path, int64_t size, bool final_flush);
 
     /// Read a core's option set without starting it, for menus that let the
     /// player set options before launch. Returns a dictionary shaped like the
-    /// options_ready signal — "categories", "definitions", "values" — with each
+    /// options_ready signal ("categories", "definitions", "values"), with each
     /// option sitting at its core-declared default. Empty if the core could not
     /// be read. Blocking, but only as long as a dlopen plus the core's static
-    /// initialisers; no emulation is started.
+    /// initializers; no emulation is started.
     godot::Dictionary PeekCoreOptions(const godot::String& root_directory, const godot::String& core_name);
 
 private:

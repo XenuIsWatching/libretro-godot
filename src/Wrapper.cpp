@@ -54,10 +54,9 @@ void Wrapper::SetCurrentThreadWrapper(Wrapper* wrapper)
 }
 
 // Godot reports both Shift/Ctrl/Alt/Super keys under one keycode, so the whole
-// event is needed: get_location() picks the left or right RETROK_* variant. Kept
-// in C++ and exposed to GDScript (Libretro::GodotKeyToRetroKey) so there is only
-// one copy of this table — retro_keyboard.gd decides *when* to send a key, this
-// only translates it.
+// event is needed: get_location() picks the left or right RETROK_* variant.
+// Exposed to GDScript as Libretro::GodotKeyToRetroKey so there is only one copy
+// of this table; retro_keyboard.gd decides *when* to send a key.
 retro_key Wrapper::GodotKeyToRetroKey(const Ref<InputEventKey>& keyEvent)
 {
     switch (keyEvent->get_keycode())
@@ -310,10 +309,10 @@ static int16_t ToShort(float floatValue, int mul = 1)
 }
 
 // Locate a core inside <root>/cores. Android cores are conventionally named
-// "<name>_libretro_android.so", but not universally — azahar's CMake never set
-// an Android OUTPUT_NAME, so the buildbot ships it as "azahar_libretro.so".
-// Try every convention the platform can use and take the first that exists;
-// with none present, return the canonical name so the error names that file.
+// "<name>_libretro_android.so" but not universally (azahar ships as plain
+// "azahar_libretro.so"), so try every convention the platform can use and take
+// the first that exists. With none present, return the canonical name so the
+// error names that file.
 std::string Wrapper::ResolveCorePath(const std::string& root_directory, const std::string& core_name)
 {
     const std::filesystem::path cores_dir = std::filesystem::path(root_directory).append("cores");
@@ -350,7 +349,6 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 
     auto audio_stream_player = memnew(AudioStreamPlayer3D);
     audio_stream_player->set_name("AudioStreamPlayer3D");
-    // Configure spatial audio for better immersion
     audio_stream_player->set_attenuation_model(AudioStreamPlayer3D::ATTENUATION_INVERSE_DISTANCE);
     audio_stream_player->set_panning_strength(1.0f);
     audio_stream_player->set_max_db(0.0f);
@@ -373,7 +371,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     m_root_directory = root_directory;
     m_temp_directory = std::filesystem::path(root_directory).append("temp").string();
     m_game_path = game_path;
-    // Per-content, and a restart reuses this Wrapper — the descriptors belong to
+    // Per-content, and a restart reuses this Wrapper, so the descriptors belong to
     // the core instance that is about to be torn down and re-created.
     m_memory_descriptors.clear();
     m_memory_addrspaces.clear();
@@ -402,14 +400,14 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 void Wrapper::StopContent()
 {
     // Silence output immediately (main-thread entry point, so touching the
-    // AudioStreamPlayer3D is safe here): a core whose teardown hangs (mupen
-    // gles3) can keep firing audio callbacks from its internal threads long
-    // after the stop — the player must not keep voicing them.
+    // AudioStreamPlayer3D is safe here): a core whose teardown hangs can keep
+    // firing audio callbacks from its internal threads long after the stop, and
+    // the player must not keep voicing them.
     if (m_audio_handler)
         m_audio_handler->SetPlaying(false);
     // Non-blocking: the join + teardown (SRAM flush, retro_unload_game,
     // retro_deinit, DLL unload) all happen off the main thread / deferred to
-    // _process, so powering a system off no longer hitches the frame.
+    // _process, so powering a system off does not hitch the frame.
     StopEmulationThread(false);
 }
 
@@ -467,7 +465,7 @@ godot::Array Wrapper::GetControllerInfo() const
 
 void Wrapper::SetControllerPortDevice(uint32_t port, uint32_t device)
 {
-    // Always remember the selection — a controller/mouse plugged in while the
+    // Always remember the selection: a controller/mouse plugged in while the
     // system is OFF has no core yet; the emulation thread applies this map
     // right after retro_load_game so the core polls the right device.
     {
@@ -476,7 +474,7 @@ void Wrapper::SetControllerPortDevice(uint32_t port, uint32_t device)
     }
     if (!m_core || !m_input_handler)
     {
-        Log("SetControllerPortDevice: no core running — port=" + std::to_string(port)
+        Log("SetControllerPortDevice: no core running, port=" + std::to_string(port)
             + " device=" + std::to_string(device) + " recorded for next start");
         return;
     }
@@ -515,7 +513,7 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
     if (!m_input_handler)
         return;
     // In netplay mode the emulation thread applies the agreed per-frame inputs
-    // for the masked ports — live main-thread writes would desync peers.
+    // for the masked ports; live main-thread writes would desync peers.
     if (m_netplay_enabled.load(std::memory_order_acquire) &&
         (m_np_port_mask.load(std::memory_order_relaxed) & (1u << port)))
     {
@@ -543,7 +541,7 @@ void Wrapper::SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t butt
     if (!m_input_handler)
         return;
     // Mouse input is not part of the deterministic netplay input schedule
-    // (same policy as sensors/pointer) — block writes to masked ports so
+    // (same policy as sensors/pointer): block writes to masked ports so
     // peers can't diverge on it.
     if (m_netplay_enabled.load(std::memory_order_acquire) &&
         (m_np_port_mask.load(std::memory_order_relaxed) & (1u << port)))
@@ -561,7 +559,7 @@ void Wrapper::SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t c
     if (!m_input_handler)
         return;
     // During netplay, keyboard input rides the deterministic frame schedule
-    // (key-event slots) — live writes would desync peers. Keyboard state is
+    // (key-event slots); live writes would desync peers. Keyboard state is
     // global (port 0), so gate on port 0 being masked.
     if (m_netplay_enabled.load(std::memory_order_acquire) &&
         (m_np_port_mask.load(std::memory_order_relaxed) & 1u))
@@ -631,7 +629,7 @@ void Wrapper::PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& fl
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
         // Lockstep: inputs for already-run frames are stale. Rollback: they are
-        // CONFIRMATIONS for speculatively-run frames — exactly the point.
+        // CONFIRMATIONS for speculatively-run frames, which is the point.
         if (!rollback && frame < m_frame_counter.load(std::memory_order_relaxed))
             return;
         if (m_np_inputs.size() > 600)
@@ -762,7 +760,7 @@ void Wrapper::EmitDiskInfo()
 }
 
 /// Emulation thread: apply any netplay-scheduled disc op whose frame has
-/// arrived — strictly before running `frame`, so every lockstep peer swaps
+/// arrived, strictly before running `frame`, so every lockstep peer swaps
 /// on the identical frame.
 void Wrapper::ApplyScheduledDiscOps(int64_t frame)
 {
@@ -863,9 +861,9 @@ void Wrapper::LoadSramFromSource()
     else if (m_removable_storage)
     {
         // Nothing plugged in. Cores hand back their own idea of an empty save,
-        // and pcsx_rearmed's is a fully FORMATTED card — which a game will
-        // happily write to and report success on, then lose at power-off.
-        // Blank it so the machine reports unformatted media instead.
+        // and pcsx_rearmed's is a fully FORMATTED card that a game will write to
+        // and then lose at power-off. Blank it so the machine reports
+        // unformatted media instead.
         std::memset(sram, 0, size);
         Log("SRAM: no removable media seated - SAVE_RAM blanked");
     }
@@ -901,13 +899,13 @@ void Wrapper::FlushSramIfDirty(bool final_flush)
     Log("SRAM: flushed " + std::to_string(size) + " bytes to " + m_sram_path);
 
     // Closed above so the file is complete on disk before anyone is told about
-    // it — a listener that uploads must never read a half-written save.
+    // it; a listener that uploads must never read a half-written save.
     if (m_libretro_node)
         m_libretro_node->NotifySramFlushed(
             godot::String(m_sram_path.c_str()), static_cast<int64_t>(size), final_flush);
 }
 
-/// Emu thread: memory-card hot-swap — flush the old card, adopt the new one.
+/// Emu thread: memory-card hot-swap. Flush the old card, adopt the new one.
 void Wrapper::ApplySramSwap(const std::string& new_path)
 {
     // Final for the outgoing file: nothing will write to it again this run, so
@@ -973,7 +971,7 @@ retro_memory_map Wrapper::GetMemoryMap() const
     return map;
 }
 
-// Self-contained CRC32 (polynomial 0xEDB88320) — libretro-common's crc32.c is
+// Self-contained CRC32 (polynomial 0xEDB88320). libretro-common's crc32.c is
 // not part of this build, and the table init must be thread-safe (multiple
 // emulation threads may race the first call).
 static uint32_t Crc32(const uint8_t* data, size_t size)
@@ -1033,7 +1031,7 @@ void Wrapper::ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask)
         // Route by the port's device type: a RETRO_DEVICE_MOUSE port carries
         // {buttons, dx, dy, -, -} in its five slots (deltas accumulate until
         // the core's next read, so replaying a frame re-supplies exactly that
-        // frame's delta — deterministic under both lockstep and rollback).
+        // frame's delta, deterministic under both lockstep and rollback).
         uint32_t device = m_input_handler->GetPortDevice(port) & RETRO_DEVICE_MASK;
         if (device == RETRO_DEVICE_MOUSE)
         {
@@ -1098,14 +1096,14 @@ void Wrapper::SaveRollbackState(int64_t frame)
         m_np_states.pop_front();
 }
 
-/// Emit captured RAM CRCs once their frame is confirmed-verified — a CRC of a
+/// Emit captured RAM CRCs once their frame is confirmed-verified; a CRC of a
 /// speculative frame would false-positive against peers.
 void Wrapper::FlushNetplayCrcs()
 {
     for (auto it = m_np_crc_pending.begin(); it != m_np_crc_pending.end();)
     {
         if (it->first - 1 > m_np_verified)
-            break;   // ordered map — nothing later qualifies either
+            break;   // ordered map, so nothing later qualifies either
         godot::Array args;
         args.append(it->first);
         args.append(static_cast<int64_t>(it->second));
@@ -1153,7 +1151,7 @@ void Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t lo
                 int32_t* dst = inputs.data() + port * 5;
                 if (local_mask & (1u << port))
                 {
-                    // Local input is ground truth — replay exactly what was pressed.
+                    // Local input is ground truth: replay exactly what was pressed.
                     auto used = prev_used.find(x);
                     if (used != prev_used.end())
                         std::copy_n(used->second.data() + port * 5, 5, dst);
@@ -1252,7 +1250,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
                 return m_stop_requested.load() || frame <= m_np_watermark + m_np_max_ahead;
             });
             if (m_stop_requested.load() || frame > m_np_watermark + m_np_max_ahead)
-                return;   // still stalled — outer loop spins us back in
+                return;   // still stalled; outer loop spins us back in
         }
     }
 
@@ -1328,9 +1326,7 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
 
     // SerializeToFile (called by SetVariable) uses GetCurrentThreadWrapper() to
     // resolve the root directory and core name. SetCoreOption runs on the main
-    // thread where the thread-local pointer is null, so we set it here — the
-    // same pattern used in StopEmulationThread for DeInit calls.
-    Log("SetCoreOption: setting thread-local wrapper and calling SetVariable");
+    // thread where the thread-local pointer is null, so set it here.
     SetCurrentThreadWrapper(this);
     m_options_handler->SetVariable(key, value);
     SetCurrentThreadWrapper(nullptr);
@@ -1340,7 +1336,7 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
 void Wrapper::_process(double delta)
 {
     // Deferred stop: once the emulation thread has fully exited on its own,
-    // the join is instant — finish the teardown here without ever blocking.
+    // the join is instant, so finish the teardown here without ever blocking.
     if (m_stopping.load(std::memory_order_acquire))
     {
         // While the stop is pending, keep DISCARDING queued main-thread
@@ -1365,12 +1361,10 @@ void Wrapper::_process(double delta)
 
     // Drain to empty, but collapse each run of frame uploads to its last. The
     // emulation thread produces at the core's frame rate whatever the main
-    // thread manages, so a main thread that falls behind for any reason has to
-    // chase a queue that keeps refilling — and once one upload costs more than
-    // a frame, executing every one of them means _process stops returning at
-    // all. A 640x480 mode change is enough to reach that on a loaded frame.
-    // Ordering is preserved: only uploads a newer upload supersedes are dropped,
-    // and those are frames the player was never going to see.
+    // thread manages, so a main thread that falls behind has to chase a queue
+    // that keeps refilling; once one upload costs more than a frame, executing
+    // every one of them means _process stops returning at all. Ordering is
+    // preserved: only uploads that a newer upload supersedes are dropped.
     std::unique_ptr<ThreadCommand> command;
     std::unique_ptr<ThreadCommand> newest_upload;
     while (m_main_thread_commands_queue.try_dequeue(command))
@@ -1468,7 +1462,7 @@ void Wrapper::_process(double delta)
 
 Wrapper::~Wrapper()
 {
-    // Destroying a joinable std::thread is std::terminate — always block here.
+    // Destroying a joinable std::thread calls std::terminate, so always block here.
     StopEmulationThread(true);
 }
 
@@ -1528,7 +1522,7 @@ void Wrapper::FinishTeardown()
     m_node = nullptr;
     m_node_id = 0;
 
-    // Discard commands the dying thread left queued — they must not execute
+    // Discard commands the dying thread left queued; they must not execute
     // against the next content run's handlers.
     std::unique_ptr<ThreadCommand> stale;
     while (m_main_thread_commands_queue.try_dequeue(stale)) {}
@@ -1582,9 +1576,9 @@ void Wrapper::EmulationThreadLoop()
         {
             // Disc cores (PS1/PS2/Saturn/Dreamcast/GC/PSP, MAME, ...) open the
             // image themselves from the path so they can seek, read tracks lazily
-            // and hot-swap discs — they never touch game_info.data. Reading a 4 GB
+            // and hot-swap discs; they never touch game_info.data. Reading a 4 GB
             // ISO into a buffer nobody reads is an instant OOM kill on Quest.
-            Log("Core needs fullpath — passing path only: " + m_game_path);
+            Log("Core needs fullpath, passing path only: " + m_game_path);
         }
         else
         {
@@ -1600,7 +1594,7 @@ void Wrapper::EmulationThreadLoop()
 
             // A core that wants the bytes in memory is a cartridge core; those top
             // out well under this. Anything larger is a mismatch (or a corrupt
-            // download) and would blow the app's memory budget — fail loudly
+            // download) and would blow the app's memory budget, so fail loudly
             // instead of attempting the allocation.
             constexpr size_t MAX_GAME_BUFFER_BYTES = 512ull * 1024ull * 1024ull;
             if (game_size > MAX_GAME_BUFFER_BYTES)
@@ -1656,25 +1650,18 @@ void Wrapper::EmulationThreadLoop()
 
     // Size the hardware render target by the core's BASE geometry, not its max.
     //
-    // This used to take max, on the reasoning that a core may grow its frame up
-    // to max_* at any time. That is true of the FRAME, but this size is not just
-    // a hint: for a core that renders through a surface (Dolphin), the surface
-    // IS the swapchain, and Vulkan requires a swapchain's extent to equal the
-    // surface's currentExtent. An oversized surface therefore does not leave the
-    // core room to grow, it forces the core to render bigger and present scaled
-    // into it, while video_refresh still reports the base size. The readback then
-    // takes base rows off the top of a taller picture.
+    // For a core that renders through a surface (Dolphin), the surface IS the
+    // swapchain, and Vulkan requires a swapchain's extent to equal the surface's
+    // currentExtent. An oversized surface therefore does not leave the core room
+    // to grow; it forces the core to render bigger and present scaled into it
+    // while video_refresh still reports the base size, so the readback takes
+    // base rows off the top of a taller picture.
     //
-    // Measured, with Dolphin reporting 640x528 base and 640x576 max: the surface
-    // came up 640x576, the picture arrived magnified by 576/528 and the bottom
-    // 48 lines were gone, slicing through the Wii Sports Resort logo.
-    //
-    // Nor can this be repaired by resizing on SET_GEOMETRY: that call is
-    // specified to complete in constant time and to perform no video
-    // reinitialisation, so it may not rebuild a surface. A core that genuinely
-    // needs to grow past base has to say so through SET_SYSTEM_AV_INFO, which is
-    // the call that does permit reinitialisation. Until this handles that, what
-    // the core says it will actually send is the honest size.
+    // SET_GEOMETRY cannot repair this: it is specified to complete in constant
+    // time and to perform no video reinitialization, so it may not rebuild a
+    // surface. A core that genuinely needs to grow past base has to say so
+    // through SET_SYSTEM_AV_INFO, which is the call that does permit
+    // reinitialization.
     const int32_t hw_width = static_cast<int32_t>(m_system_av_info.geometry.base_width);
     const int32_t hw_height = static_cast<int32_t>(m_system_av_info.geometry.base_height);
 
@@ -1699,7 +1686,7 @@ void Wrapper::EmulationThreadLoop()
     }
 
     // Achievements. Deferred to here rather than straight after retro_load_game so
-    // the core is fully initialised — the memory map arrives during load, and a
+    // the core is fully initialized: the memory map arrives during load, and a
     // core may still be registering descriptors while av_info is being read.
     // Cartridge cores hand over the bytes already resident in m_game_buffer;
     // need_fullpath cores never read the file, so rc_hash opens the path itself.
@@ -1723,41 +1710,31 @@ void Wrapper::EmulationThreadLoop()
     // Pacing has two parts, and the declared fps is only one of them.
     //
     // The brake is the audio sink. Its mixer drains at the hardware's rate, so how
-    // full it is measures real time — the one quantity in this loop a core cannot
+    // full it is measures real time, the one quantity in this loop a core cannot
     // misreport. Run a frame while the sink still wants audio; wait when it does
-    // not. This needs no correct fps and no honest sample count, which matters
-    // because a real core has now falsified each: azahar returns when the *game*
-    // presents (citra_libretro.cpp spins RunLoop until HasSubmittedFrame) so its
-    // declared 60 describes neither the call rate nor the time a call covers, and
-    // ScummVM has billed 2.5 million ms of audio for a single retro_run.
+    // not. This needs neither a correct fps nor an honest sample count, and cores
+    // falsify both: azahar returns when the *game* presents, so its declared 60
+    // describes neither the call rate nor the time a call covers, and ScummVM can
+    // bill 2.5 million ms of audio for a single retro_run.
     //
     // The declared fps is a ceiling on top of that, never a target: it caps how
     // fast the loop may run, and is the only brake left for a core that emits no
-    // audio at all for the sink to measure. RetroArch is shaped the same way —
-    // frame_limit_minimum_time is a *minimum time per frame*, and with audio_sync
-    // on it disables even that and defers to audio back-pressure.
+    // audio for the sink to measure.
+
     // When the next call may go out under the ceiling. Advanced by one frame per
     // call rather than reset to now, so a call that overruns is not paid for twice.
     auto next_call_due = std::chrono::steady_clock::now();
 
-    // One wait is bounded: past this the frame runs anyway and samples drop, the
-    // same trade made everywhere else here.
+    // One wait is bounded: past this the frame runs anyway and samples drop.
     constexpr double MAX_BRAKE_WAIT_MS = 250.0;
 
-    // Bounding one wait does not bound the loop of them. Each pass recomputes the
-    // wait from the sink's current depth, so no single wait accumulates — but a
-    // sink nothing is draining reports "still full" on every pass, and the loop
-    // brakes forever without ever calling the core. Measured: with the Meta XR
-    // Audio voices created but never pulled, emulation stopped dead at frame 3
-    // and never restarted.
-    //
-    // So bound the silence instead. The brake's whole premise is that the sink
-    // drains at the mixer's rate, which makes its depth a measure of real time;
-    // a sink that has not asked for audio for longer than it could possibly hold
-    // (the voice ring is 32768 frames, ~0.68 s at 48 kHz) is not draining, and is
-    // therefore measuring nothing. Ignore it and let the fps ceiling pace, which
-    // is already what carries a core that emits no audio at all. Self-healing:
-    // the brake resumes the moment the sink asks for a frame again.
+    // Bounding one wait does not bound the loop of them: a sink nothing is
+    // draining reports "still full" on every pass, and the loop would brake
+    // forever without ever calling the core. Bound the silence instead. A sink
+    // that has not asked for audio for longer than it could possibly hold (the
+    // voice ring is 32768 frames, ~0.68 s at 48 kHz) is not draining and is
+    // therefore measuring nothing, so ignore it and let the fps ceiling pace.
+    // The brake resumes the moment the sink asks for a frame again.
     constexpr double SINK_SILENCE_LIMIT_MS = 1000.0;
     auto last_sink_want = std::chrono::steady_clock::now();
 
@@ -1848,7 +1825,7 @@ void Wrapper::EmulationThreadLoop()
             m_frame_counter.fetch_add(1, std::memory_order_relaxed);
 
             // Achievements. Emulation thread, strictly after the frame the core
-            // just produced, and only ever on a frame that is final — the rollback
+            // just produced, and only ever on a frame that is final; the rollback
             // paths deliberately do not call this (see NetplayRollbackIteration).
             if (RetroAchievements* ra = RetroAchievements::GetSingleton())
                 ra->DoFrame(this);
@@ -1886,7 +1863,7 @@ void Wrapper::EmulationThreadLoop()
             if (m_stop_requested)
                 break;
             if (!ready)
-                continue;   // stall — loop again (drains commands, re-checks stop)
+                continue;   // stall; loop again (drains commands, re-checks stop)
             frame_inputs = m_np_inputs[frame];
             m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(frame - 30));
         }
@@ -1895,7 +1872,7 @@ void Wrapper::EmulationThreadLoop()
         // so every peer's core swaps discs on the identical frame.
         ApplyScheduledDiscOps(m_frame_counter.load(std::memory_order_relaxed));
 
-        // Apply the agreed inputs — in netplay mode the emulation thread is
+        // Apply the agreed inputs: in netplay mode the emulation thread is
         // the sole InputHandler writer for the masked ports. Device-aware
         // (mouse ports get deltas), plus the aux block (sensor/touch).
         ApplyNetplayInputs(frame_inputs, m_np_port_mask.load(std::memory_order_relaxed));
@@ -1906,8 +1883,8 @@ void Wrapper::EmulationThreadLoop()
         int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         accumulator -= frame_duration_ms;
 
-        // Lockstep netplay frames are final — every peer has confirmed the inputs
-        // before the frame runs — so they count, unlike rollback speculation.
+        // Lockstep netplay frames are final (every peer has confirmed the inputs
+        // before the frame runs), so they count, unlike rollback speculation.
         if (RetroAchievements* ra = RetroAchievements::GetSingleton())
             ra->DoFrame(this);
 
@@ -1915,7 +1892,7 @@ void Wrapper::EmulationThreadLoop()
             EmitNetplayCrc(frame_done);
     }
     // Final battery-save flush while the core memory is still valid. Injected
-    // netplay SRAM is one-shot — clear it so a later offline run loads its own.
+    // netplay SRAM is one-shot; clear it so a later offline run loads its own.
     FlushSramIfDirty(true);
     m_sram_pending = godot::PackedByteArray();
 
@@ -1944,7 +1921,7 @@ void Wrapper::UpdateTexture(PackedByteArray pixel_data, int32_t width, int32_t h
 bool Wrapper::Shutdown()
 {
     // RETRO_ENVIRONMENT_SHUTDOWN arrives ON the emulation thread (inside
-    // retro_run) — a blocking stop would join the thread from itself. Signal
+    // retro_run), and a blocking stop would join the thread from itself. Signal
     // only; _process() finishes the teardown after this thread exits.
     Log("Shutting down from core...");
     StopEmulationThread(false);

@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-// Must precede <windows.h> below — godot-cpp's heavy template/object headers
+// Must precede <windows.h> below: godot-cpp's heavy template/object headers
 // don't play well with windows.h's macro soup (min/max/interface/etc.) once
 // windows.h has already been included.
 #include <godot_cpp/classes/os.hpp>
@@ -22,9 +22,9 @@
 
 // Flip this to 1 and rebuild to opt back into Vulkan validation. Off by
 // default: the editor process is always debug-tagged, so OS::is_debug_build()
-// below can't tell "editor Play" apart from "real debug testing" — leaving
-// validation gated on that runtime check alone means it's always on in the
-// editor, adding real per-call CPU overhead on this hot HW-render path.
+// below cannot tell "editor Play" apart from "real debug testing", and gating
+// validation on that check alone leaves it always on in the editor, adding
+// per-call CPU overhead on this hot HW-render path.
 #define VULKAN_VALIDATION_ENABLED 0
 
 using namespace godot;
@@ -35,7 +35,7 @@ namespace Xenu
 #ifdef __ANDROID__
 // AImageReader hands out an ANativeWindow with no JNI or Java Surface
 // plumbing. The NDK only declares it at API 24+, so it's resolved out of
-// libmediandk.so at runtime instead — that keeps the build's API level from
+// libmediandk.so at runtime instead, which keeps the build's API level from
 // deciding whether Vulkan cores can get a surface.
 namespace
 {
@@ -105,7 +105,7 @@ void VulkanContext::s_WaitSyncIndex(void* handle)
     // The core calls this before it starts rendering into the image, to
     // make sure nothing is still reading from it. The only GPU work WE ever
     // submit against that image is the ReadbackToPixels copy, already
-    // tracked by m_fence — waiting on just that (instead of a full
+    // tracked by m_fence. Waiting on just that (instead of a full
     // vkDeviceWaitIdle, which stalls every queue on the entire device) gives
     // the same guarantee without serializing the whole GPU every frame.
     if (ctx->m_device == VK_NULL_HANDLE || ctx->m_fence == VK_NULL_HANDLE)
@@ -113,9 +113,9 @@ void VulkanContext::s_WaitSyncIndex(void* handle)
 
     std::lock_guard<std::mutex> lock(ctx->m_fence_mutex);
     // The core is about to draw into the image we read from. If the wait times
-    // out the copy is still in flight, and the honest answer to "is it safe?" is
-    // no — but this callback has no way to say so, and returning without waiting
-    // is what the core takes as a yes. Report it rather than swallow it.
+    // out the copy is still in flight, but this callback has no way to say so:
+    // returning without waiting is what the core takes as a yes. Report it
+    // rather than swallow it.
     if (!ctx->WaitReadbackFenceLocked() && ctx->m_readback_pending)
         LogWarning("VulkanContext: core is reusing the image while our copy is "
                    "still running; expect a torn frame.");
@@ -179,7 +179,7 @@ static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
 // information at all: the Adreno GMU reports "GPU hang detected", the device dies,
 // and nothing says which submission or why. With the extension enabled,
 // vkGetDeviceFaultInfoEXT gives the driver's own description of the fault. It is
-// requested unconditionally rather than behind a debug flag — it costs nothing
+// requested unconditionally rather than behind a debug flag: it costs nothing
 // until a device is lost, and by then it is the only account of what happened.
 static VkDevice s_CreateDeviceWrapper(VkPhysicalDevice gpu, void* /*opaque*/, const VkDeviceCreateInfo* ci)
 {
@@ -286,12 +286,11 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         ici.pApplicationInfo = app_info_ptr;
 
-        // Extensions useful to cores doing Vulkan HW rendering — but every one
-        // of these was previously requested unconditionally, and vkCreateInstance
-        // fails outright on a single unsupported name. VK_KHR_get_surface_
-        // capabilities2 in particular is not core-promoted and is genuinely
-        // absent on some Android drivers, which would take the whole Vulkan path
-        // down rather than degrade. Ask the loader what exists first.
+        // Extensions useful to cores doing Vulkan HW rendering. vkCreateInstance
+        // fails outright on a single unsupported name, and
+        // VK_KHR_get_surface_capabilities2 is not core-promoted and is absent on
+        // some Android drivers, so ask the loader what exists first rather than
+        // taking the whole Vulkan path down.
         uint32_t avail_count = 0;
         vkEnumerateInstanceExtensionProperties(nullptr, &avail_count, nullptr);
         std::vector<VkExtensionProperties> avail(avail_count);
@@ -328,11 +327,9 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         ici.enabledExtensionCount   = static_cast<uint32_t>(inst_exts.size());
         ici.ppEnabledExtensionNames = inst_exts.data();
 
-        // Enable validation layers in debug builds to catch invalid Vulkan usage.
-        // Validation intercepts and checks every Vulkan call, which is real CPU
-        // overhead on this hot per-frame HW-render path — this used to run
-        // unconditionally in every build (including template_release) despite
-        // the comment above claiming otherwise.
+        // Validation layers, gated on VULKAN_VALIDATION_ENABLED above: validation
+        // intercepts and checks every Vulkan call, which is real CPU overhead on
+        // this hot per-frame HW-render path.
         const char* validation_layer = "VK_LAYER_KHRONOS_validation";
 #if VULKAN_VALIDATION_ENABLED
         if (OS::get_singleton()->is_debug_build())
@@ -435,17 +432,15 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         // Use WS_POPUP so the entire window is client area (no borders/title
         // bar that shrink it at high DPI).
         //
-        // Sized to the core's MAX FRAME, not to something comfortably large.
-        // This surface is not a viewport, it is the shape of the picture: a core
-        // that needs a surface builds its swapchain to fit it and presents a
-        // frame that size, whatever its internal resolution — Dolphin renders at
-        // its EFB scale and downsamples on the way out.
-        //
-        // It used to be a fixed 1920x1080 "so it exceeds the EFB", which is the
-        // wrong instinct. Dolphin then presented the whole game at 1920x1080
-        // while reporting 640x528, and ReadbackToPixels copies the top-left
-        // reported-size rectangle — so the picture was a CORNER of the game.
-        // OpenGL never showed it because there the core draws into an FBO we
+        // Sized to the frame geometry the core declared, not to something
+        // comfortably large. This surface is not a viewport, it is the shape of
+        // the picture: a core that needs a surface builds its swapchain to fit it
+        // and presents a frame that size, whatever its internal resolution
+        // (Dolphin renders at its EFB scale and downsamples on the way out).
+        // Oversize it and the core presents oversized while still reporting the
+        // base size to video_refresh, and since ReadbackToPixels copies the
+        // top-left reported-size rectangle the picture becomes a corner of the
+        // game. OpenGL is immune because there the core draws into an FBO we
         // size ourselves.
         m_hidden_hwnd = CreateWindowExW(
             0, L"STATIC", L"XenuLibretro_VkSurface", WS_POPUP,
@@ -483,12 +478,12 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 #elif defined(__ANDROID__)
     {
         // Nothing is ever presented to this surface: PPSSPP fakes its whole
-        // swapchain and delivers frames through set_image. But it still runs
-        // its full desktop bring-up on whatever handle we pass to
-        // create_device — its hooked vkCreate*SurfaceKHR just hands ours back,
-        // so ReinitSurface() "succeeds" on a null one and ChooseQueue() then
-        // aborts the process querying formats for it. An offscreen
-        // ImageReader window is all the surface has to be.
+        // swapchain and delivers frames through set_image. It still runs its
+        // full desktop bring-up on whatever handle create_device is given, and
+        // its hooked vkCreate*SurfaceKHR hands ours straight back, so a null
+        // surface lets ReinitSurface() "succeed" and ChooseQueue() then aborts
+        // the process querying formats for it. An offscreen ImageReader window
+        // is all the surface has to be.
         m_mediandk = DynLib_Open("libmediandk.so");
         if (!m_mediandk)
         {
@@ -503,17 +498,13 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             auto readerGetWindow = reinterpret_cast<PFN_AImageReader_getWindow>(
                 DynLib_Sym(m_mediandk, "AImageReader_getWindow"));
 
-            // Sized to the core's MAX FRAME, for the same reason the Windows window
-            // is: a core that needs a surface may build its swapchain from it and
-            // present a frame that size. Android always reports a concrete
-            // currentExtent, so a core that does read it has nothing to choose and
-            // takes these dimensions verbatim.
-            //
-            // These were a fixed 640x480, on the reasoning that the core overrides
-            // the extent with its own internal resolution. A core that fakes its
-            // swapchain does; one that does not would present 640x480 while
-            // reporting, say, 640x528 to video_refresh, and ReadbackToPixels copies
-            // the REPORTED rectangle — running the copy off the end of the image.
+            // Sized to the declared frame geometry, for the same reason the Windows
+            // window is: a core that needs a surface may build its swapchain from
+            // it and present a frame that size. Android always reports a concrete
+            // currentExtent, so a core that reads it has nothing to choose and
+            // takes these dimensions verbatim. A surface smaller than the size
+            // reported to video_refresh would have ReadbackToPixels copy the
+            // reported rectangle off the end of the image.
             AImageReaderOpaque* reader = nullptr;
             if (readerNewWithUsage)
                 readerNewWithUsage(m_frame_w, m_frame_h, kAImageFormatRGBA8888,
@@ -586,24 +577,20 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
         {
             // Cores dereference required_features without a null check (e.g.
             // paraLLEl-RDP does `enabled_features = *required_features`), and
-            // RetroArch always passes a zeroed struct plus VK_KHR_swapchain —
+            // RetroArch always passes a zeroed struct plus VK_KHR_swapchain, so
             // match that exactly.
             std::vector<const char*> device_extensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
-            // VK_EXT_device_fault, so a lost device can say what killed it rather
-            // than only that it died. This is the ONLY way in on the v1 path: the
-            // core builds its own VkDeviceCreateInfo and calls vkCreateDevice
-            // itself, and s_CreateDeviceWrapper is reached only through
-            // create_device2 — which Dolphin compiles in for __APPLE__ alone. What
-            // a core is REQUIRED to honour is this list, and Dolphin merges it into
-            // its own (DolphinLibretro/Vulkan.cpp, AddNameUnique).
+            // VK_EXT_device_fault, so a lost device can say what killed it. This
+            // list is the only way in on the v1 path: the core builds its own
+            // VkDeviceCreateInfo and calls vkCreateDevice itself, so
+            // s_CreateDeviceWrapper is never reached. A core is required to honor
+            // this list (Dolphin merges it into its own via AddNameUnique).
             //
-            // Caveat worth knowing: the matching VkPhysicalDeviceFaultFeaturesEXT
-            // cannot be delivered this way — v1 carries a flat
-            // VkPhysicalDeviceFeatures with no pNext — so the extension is enabled
-            // while its feature bit is not. vkGetDeviceFaultInfoEXT resolves either
-            // way; whether this driver populates it without the feature is exactly
-            // what the next run finds out.
+            // The matching VkPhysicalDeviceFaultFeaturesEXT cannot be delivered
+            // this way, because v1 carries a flat VkPhysicalDeviceFeatures with no
+            // pNext, so the extension is enabled while its feature bit is not.
+            // vkGetDeviceFaultInfoEXT resolves either way.
             const bool want_fault = s_DeviceSupportsFault(m_gpu);
             if (want_fault)
                 device_extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -745,7 +732,7 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 
     // ---- Fence ----
     // Pre-signaled: s_WaitSyncIndex waits on this fence, and the core calls
-    // it before the FIRST frame too, when nothing has been submitted yet —
+    // it before the FIRST frame too, when nothing has been submitted yet, and
     // an unsignaled fence would hang that first wait forever.
     VkFenceCreateInfo fci{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -789,11 +776,10 @@ VulkanContext::~VulkanContext()
     Destroy();
 }
 
-// Deliberately NOT gated on m_initialized. Init() returns false from eight
-// places, most of them after the instance, the surface and the platform window
-// already exist, and VideoHandler drops the context on that path — so gating
-// here leaked all three (plus the device, pool and fences on the later ones)
-// every time a Vulkan core failed to come up.
+// Deliberately NOT gated on m_initialized. Init() can return false after the
+// instance, the surface and the platform window already exist, and VideoHandler
+// drops the context on that path, so gating here would leak all three (plus the
+// device, pool and fences on the later failures).
 void VulkanContext::Destroy()
 {
     if (m_device != VK_NULL_HANDLE)
@@ -848,7 +834,7 @@ void VulkanContext::Destroy()
 #endif
 
 #ifdef __ANDROID__
-    // Strictly after vkDestroySurfaceKHR above — the surface holds a reference
+    // Strictly after vkDestroySurfaceKHR above: the surface holds a reference
     // on the reader's ANativeWindow.
     if (m_android_reader && m_mediandk)
     {
@@ -897,7 +883,7 @@ void VulkanContext::Destroy()
 }
 
 // ---------------------------------------------------------------------------
-// SetImage — called by the core before retro_video_refresh
+// SetImage: called by the core before retro_video_refresh
 // ---------------------------------------------------------------------------
 
 void VulkanContext::SetImage(const retro_vulkan_image* image,
@@ -920,11 +906,9 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
         n_sems = 0;
     }
 
-    // Keep the semaphore handles until video_refresh. Waiting in SetImage used
-    // a second reusable fence and detached the wait from the actual transfer;
-    // after a timeout that fence was reset while still in use. The real
-    // readback submission now performs the one permitted wait directly at the
-    // transfer stage. Copy only the fields we need — do not copy pNext chains.
+    // Keep the semaphore handles until video_refresh; the readback submission
+    // performs the one permitted wait directly at the transfer stage. Copy only
+    // the fields we need, never pNext chains.
     m_current_vk_image          = image->create_info.image;
     m_current_format            = image->create_info.format;
     m_current_layout            = image->image_layout;
@@ -1110,7 +1094,7 @@ void VulkanContext::CompleteFrameWithoutReadback()
 }
 
 // ---------------------------------------------------------------------------
-// ReadbackToPixels — blits the Vulkan image to a staging buffer and copies
+// ReadbackToPixels: blits the Vulkan image to a staging buffer and copies
 // to a PackedByteArray.  Replaces glReadPixels for Vulkan cores.
 // ---------------------------------------------------------------------------
 
@@ -1121,7 +1105,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // Nothing that owns the command buffer, fence or staging allocation may be
     // touched until the previous submission has completed. In particular this
     // must precede the resize below: destroying a too-small staging buffer first
-    // freed memory that a timed-out copy could still be writing.
+    // would free memory that a timed-out copy could still be writing.
     VkImage                 image      = VK_NULL_HANDLE;
     VkFormat                format     = VK_FORMAT_UNDEFINED;
     VkImageLayout           layout     = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1208,10 +1192,8 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // GENERAL is a contract, not just another layout. libretro_vulkan.h: "if
     // GENERAL layout is used for the image ... the frontend is not allowed to
     // perform any layout transitions, so concurrent reads from core and frontend
-    // are allowed." This transitioned it to TRANSFER_SRC_OPTIMAL and back like
-    // any other layout, out from under a core entitled to keep reading it.
-    // vkCmdCopyImageToBuffer accepts GENERAL as a source layout directly, so the
-    // copy needs a dependency but no transition.
+    // are allowed." vkCmdCopyImageToBuffer accepts GENERAL as a source layout
+    // directly, so the copy needs a dependency but no transition.
     const bool          image_is_general = (layout == VK_IMAGE_LAYOUT_GENERAL);
     const VkImageLayout copy_layout      = image_is_general
                                              ? VK_IMAGE_LAYOUT_GENERAL
@@ -1223,11 +1205,10 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     const bool can_restore_layout = layout != VK_IMAGE_LAYOUT_UNDEFINED &&
                                     layout != VK_IMAGE_LAYOUT_PREINITIALIZED;
 
-    // Queue family ownership. src_family was captured by SetImage and then never
-    // read: both barriers passed VK_QUEUE_FAMILY_IGNORED, so a core that had
-    // released the image to us got no matching acquire and never got it back.
-    // libretro_vulkan.h spells out the round trip — core releases to us, we
-    // acquire, we release back, core re-acquires.
+    // Queue family ownership. libretro_vulkan.h spells out the round trip: the
+    // core releases the image to us, we acquire it, we release it back, the core
+    // re-acquires. Skipping either half leaves a core that released the image
+    // without a matching acquire, and it never gets the image back.
     const bool has_core_commands = !work.command_buffers.empty();
     const bool need_qfot = work.newly_published && !has_core_commands &&
                            !work.wait_semaphores.empty() &&
@@ -1239,7 +1220,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
         m_logged_src_queue_family = true;
         Log("VulkanContext: core owns the image on queue family "
             + std::to_string(src_family) + ", ours is "
-            + std::to_string(m_queue_family) + " — doing ownership transfers.");
+            + std::to_string(m_queue_family) + ", doing ownership transfers.");
     }
 
     // Acquire half, plus the layout transition if one is due.
@@ -1266,9 +1247,8 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     copy.bufferRowLength   = 0; // tightly packed
     copy.bufferImageHeight = 0; // tightly packed
     copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    // Both taken from the view the core published. mipLevel was pinned to 0
-    // while baseArrayLayer came from the range, so a view onto any mip but the
-    // first read the wrong one.
+    // Both taken from the view the core published; pinning mipLevel to 0 would
+    // read the wrong mip for a view onto anything but the first.
     copy.imageSubresource.mipLevel       = range.baseMipLevel;
     copy.imageSubresource.baseArrayLayer = range.baseArrayLayer;
     copy.imageSubresource.layerCount     = 1;
@@ -1429,15 +1409,14 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
             dst[i * 4 + 3] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + 3]) + 128);
         }
     }
-    // 10-bit packed, which is what a modern surface hands back when it can:
-    // Dolphin's swapchain on this GPU is A2B10G10R10. Still 32 bits a pixel, so
-    // the copy sizes hold, but the channels are bit-fields rather than bytes —
-    // read as RGBA8 it comes out in the wrong colours entirely.
+    // 10-bit packed, which is what a modern surface hands back when it can
+    // (Dolphin's swapchain on this GPU is A2B10G10R10). Still 32 bits a pixel,
+    // so the copy sizes hold, but the channels are bit-fields rather than bytes,
+    // and read as RGBA8 it comes out in the wrong colors entirely.
     //
     // One uint32 per pixel: R in the low 10 bits, then G, then B, and 2 bits of
     // alpha at the top. Shift each down to 8 bits. Alpha is widened from its
-    // 2 bits rather than forced opaque, so a core that does use it is not lied
-    // about — and 0b11 maps to 255 exactly.
+    // 2 bits rather than forced opaque, and 0b11 maps to 255 exactly.
     else if (format == VK_FORMAT_A2B10G10R10_UNORM_PACK32)
     {
         const uint32_t  pixel_count = width * height;
@@ -1451,8 +1430,8 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
             dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
         }
     }
-    // The same layout with red and blue the other way round. Cheap to support
-    // while we are here, and the two are chosen by the driver, not by us.
+    // The same layout with red and blue the other way round; the driver chooses
+    // between the two, not us.
     else if (format == VK_FORMAT_A2R10G10B10_UNORM_PACK32)
     {
         const uint32_t  pixel_count = width * height;
@@ -1487,10 +1466,10 @@ void VulkanContext::DumpDeviceFault()
     if (!getFaultInfo)
     {
         // Resolves only when the extension was actually enabled on THIS device,
-        // which is the honest test — the core owns device creation and may have
+        // which is the honest test: the core owns device creation and may have
         // fallen back to a create-info without it.
         LogError("VulkanContext: device lost, and VK_EXT_device_fault is not "
-                 "enabled on this device — no fault detail available.");
+                 "enabled on this device; no fault detail available.");
         return;
     }
 
@@ -1522,7 +1501,7 @@ void VulkanContext::DumpDeviceFault()
     {
         const VkDeviceFaultAddressInfoEXT& a = addresses[i];
         // reportedAddress is only accurate to +/- addressPrecision, which is a
-        // power-of-two mask — quoting it unqualified would overstate the answer.
+        // power-of-two mask, so quoting it unqualified would overstate the answer.
         LogError("VulkanContext:   address type " + std::to_string((int)a.addressType)
             + " at 0x" + std::to_string(a.reportedAddress)
             + " (precision 0x" + std::to_string(a.addressPrecision) + ")");
@@ -1540,20 +1519,18 @@ void VulkanContext::DumpDeviceFault()
         LogError("VulkanContext:   (driver reported no address or vendor detail)");
 }
 
-// Returns false when the submission is STILL RUNNING — the caller must not touch
-// anything it owns.
+// Returns false when the submission is STILL RUNNING, in which case the caller
+// must not touch anything it owns.
 //
-// A timeout here used to log "dropping frame" and clear m_readback_pending,
-// which is the opposite of the truth: the fence has not signalled precisely
-// BECAUSE the GPU is still executing that submit. Clearing the flag threw away
-// the only record of it, and the next frame then did all three of these to live
-// objects:
+// A timeout means the fence has not signaled precisely BECAUSE the GPU is still
+// executing that submit, so m_readback_pending must survive it. Clearing the
+// flag would let the next frame do all three of these to live objects:
 //
 //   * vkResetFences on a fence in use by a pending submission
 //   * vkResetCommandBuffer + re-record of a command buffer still executing
 //   * vkMapMemory and a read of the staging buffer still being written into
 //
-// The first two are undefined behaviour; on Adreno they corrupt the ring buffer
+// The first two are undefined behavior; on Adreno they corrupt the ring buffer
 // and the kernel driver kills the context. The third is a plain data race that
 // shows up as corrupt scanlines rather than as an error.
 bool VulkanContext::WaitReadbackFenceLocked()
@@ -1634,13 +1611,12 @@ bool VulkanContext::CreateStagingBuffer(VkDeviceSize size)
     VkMemoryRequirements mem_req{};
     vkGetBufferMemoryRequirements(m_device, m_staging_buf, &mem_req);
 
-    // This buffer exists purely for the CPU to READ BACK from (GPU → CPU),
-    // every frame — HOST_VISIBLE | HOST_COHERENT alone doesn't guarantee
-    // HOST_CACHED, and on most drivers that means write-combined (uncached)
-    // memory: fine for CPU→GPU uploads, but CPU reads from it are drastically
-    // slower than normal RAM (measured ~45ms to read back a 480x272 frame —
-    // this was the entire per-frame bottleneck). Prefer a cached memory type
-    // when one exists for this buffer; fall back to the old combo otherwise.
+    // This buffer exists purely for the CPU to READ BACK from (GPU → CPU) every
+    // frame. HOST_VISIBLE | HOST_COHERENT alone does not guarantee HOST_CACHED,
+    // and on most drivers that means write-combined (uncached) memory: fine for
+    // CPU→GPU uploads, but CPU reads from it are drastically slower than normal
+    // RAM (~45 ms to read back a 480x272 frame). Prefer a cached memory type when
+    // one exists for this buffer, and fall back to the plain combo otherwise.
     VkPhysicalDeviceMemoryProperties mem_props{};
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &mem_props);
     const VkMemoryPropertyFlags cached_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |

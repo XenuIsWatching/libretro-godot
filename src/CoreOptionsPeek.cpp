@@ -12,7 +12,7 @@ namespace Xenu
 namespace
 {
 // retro_environment_t is a plain C function pointer with no user-data argument,
-// so the destination travels in a thread_local — the same pattern Wrapper uses
+// so the destination travels in a thread_local, the same pattern Wrapper uses
 // for its own callbacks. A peek runs start to finish on the calling thread.
 thread_local OptionsHandler* t_peek_target = nullptr;
 
@@ -87,8 +87,8 @@ bool PeekCoreOptions(const std::string& core_path, OptionsHandler& out)
     // Most cores register from retro_set_environment, but not all: fceumm returns
     // nothing until retro_init has run. RetroArch reaches its options menu the same
     // way (set_environment, then init), so this is a supported order rather than a
-    // trick — it is just skipped when the first call already produced the set,
-    // since retro_init is far more work than a peek should do by default.
+    // trick. It is skipped when the first call already produced the set, since
+    // retro_init is far more work than a peek should do by default.
     if (out.GetDefinitions().empty())
     {
         auto core_init = reinterpret_cast<decltype(&::retro_init)>(DynLib_Sym(handle, "retro_init"));

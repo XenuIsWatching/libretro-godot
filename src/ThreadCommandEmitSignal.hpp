@@ -11,7 +11,7 @@ class Wrapper;
 
 /// Emits a signal on the owning Libretro node from the main thread. Queued by
 /// the emulation thread (savestate results, netplay CRCs) and executed during
-/// Wrapper::_process's command drain — the same marshaling pattern as
+/// Wrapper::_process's command drain, the same marshaling pattern as
 /// NotifyOptionsReady.
 class ThreadCommandEmitSignal : public ThreadCommand
 {

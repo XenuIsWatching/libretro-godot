@@ -16,7 +16,7 @@ namespace Xenu
 ///
 /// Unlike D3D11, this interface is explicit: the core transitions its frame to
 /// `required_state` and calls set_texture with the resource before video_refresh.
-/// We ask for COPY_SOURCE so the readback needs no barrier of its own — putting
+/// We ask for COPY_SOURCE so the readback needs no barrier of its own; putting
 /// a barrier on a resource the core owns would desync its state tracking.
 class D3D12Context
 {

@@ -41,7 +41,7 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
 
     if (ok)
     {
-        // Restart the netplay schedule from the state's frame — including the
+        // Restart the netplay schedule from the state's frame, including the
         // rollback bookkeeping (this runs on the emulation thread, which owns
         // the states/used/crc structures).
         wrapper.m_np_states.clear();

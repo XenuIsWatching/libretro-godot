@@ -257,7 +257,7 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_GET_USERNAME:                                        return instance->m_environment_handler->GetUsername(static_cast<const char**>(data));
     case RETRO_ENVIRONMENT_GET_LANGUAGE:                                        return instance->m_environment_handler->GetLanguage(static_cast<retro_language*>(data));
     // Optional per-frame optimization (core renders straight into our framebuffer);
-    // we don't provide one, so return false WITHOUT logging — the core falls back
+    // we don't provide one, so return false WITHOUT logging: the core falls back
     // to its own buffer + video_refresh, and cores poll this every frame (spam).
     case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER:                    return EnvironmentNotImplemented(cmd, false);
     case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
@@ -505,9 +505,9 @@ bool EnvironmentHandler::GetLanguage(retro_language* language) const
 
 bool EnvironmentHandler::SetSupportAchievements(bool* support)
 {
-    // This tested the pointer rather than dereferencing it, so a core that called
-    // it to say "no" was recorded as saying nothing at all. The callback exists to
-    // opt OUT — a core that never calls it is assumed to support achievements.
+    // Dereference rather than just testing the pointer, or a core calling this to
+    // say "no" is recorded as saying nothing at all. The callback exists to opt
+    // OUT; a core that never calls it is assumed to support achievements.
     if (support == nullptr)
         return false;
 
@@ -636,7 +636,7 @@ bool EnvironmentHandler::SetDiskImageIndex(uint32_t index)
 
 bool EnvironmentHandler::ReplaceDiskImage(uint32_t index, const std::string& path)
 {
-    // Disc cores are need_fullpath — a path-only game info suffices (this is
+    // Disc cores are need_fullpath, so a path-only game info suffices (this is
     // what RetroArch's "Load New Disc" sends for such cores).
     retro_game_info info = { path.c_str(), nullptr, 0, nullptr };
     if (m_disk_control_ext_callback.replace_image_index)

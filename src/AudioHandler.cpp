@@ -35,7 +35,7 @@ void AudioHandler::SampleCallback(int16_t left, int16_t right)
     }
 
     // Rollback replay: this frame's audio already played on the first
-    // (mispredicted) run — re-emitting it would double up.
+    // (mispredicted) run, so re-emitting it would double up.
     if (instance->IsNetplayReplaying())
         return;
 
@@ -65,7 +65,7 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
     if (instance->IsNetplayReplaying())
         return frames;
 
-    // Emulated-time clock — counted at the core's rate, so before resampling.
+    // Emulated-time clock, counted at the core's rate, so before resampling.
     self->m_frames_produced.fetch_add(frames, std::memory_order_relaxed);
 
     // Sink depth drives both the occupancy the core is told about and the rate trim
@@ -83,8 +83,8 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
             self->m_audio_buffer_total_frames = total;
     }
 
-    // Dynamic rate control. The pacing brake is one-sided — it only ever holds the
-    // core back when the sink is above target — so nothing stops the ring draining
+    // Dynamic rate control. The pacing brake is one-sided (it only ever holds the
+    // core back when the sink is above target), so nothing stops the ring draining
     // when a heavy frame or a main-thread hitch outruns the target fill, and the
     // mixer gets a gap. Resampling fractionally fast while the sink is short and
     // fractionally slow while it is long corrects the depth continuously, instead of
@@ -215,7 +215,7 @@ uint32_t AudioHandler::EffectiveTotalFrames() const
     // the sink's target fill, a small fraction of it. Against the whole ring, sitting
     // exactly on target reads ~6% and trips the core's underrun warning permanently.
     // Against the target alone it reads 100% and looks permanently full. Twice the
-    // target puts the setpoint in the middle, which is the shape a core expects —
+    // target puts the setpoint in the middle, which is the shape a core expects:
     // RetroArch's buffer is sized near its own target, so half full is normal there.
     if (m_use_sdk)
         return m_sink_target_frames > 0
@@ -364,7 +364,7 @@ void AudioHandler::SetPlaying(bool playing)
 {
     if (m_use_sdk)
     {
-        // Nothing to start or stop — a voice with an empty ring is silent. Only
+        // Nothing to start or stop: a voice with an empty ring is silent. Only
         // flush, so a stale tail cannot replay when the core resumes.
         if (!playing && m_mx && m_voice_l >= 0)
         {

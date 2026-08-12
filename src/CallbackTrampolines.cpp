@@ -99,7 +99,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineX64(uint8_t* cursor, void* wrapper_p
     // we restore the exact register state before jumping to the handler.
     //
     // Stack alignment proof:
-    //   Entry: RSP ≡ 8 (mod 16) — return address was pushed by caller
+    //   Entry: RSP ≡ 8 (mod 16), return address was pushed by caller
     //   After 4 pushes (32 bytes): RSP ≡ 8 (mod 16)
     //   After sub rsp, 0x28 (40 bytes): RSP ≡ 0 (mod 16) ✓
     //   (0x20 shadow space + 0x08 alignment padding)
@@ -115,7 +115,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineX64(uint8_t* cursor, void* wrapper_p
     // sub rsp, 0x28
     *cursor++ = 0x48; *cursor++ = 0x83; *cursor++ = 0xEC; *cursor++ = 0x28;
 
-    // movabs rcx, <wrapper_ptr>  — first arg to SetCurrentThreadWrapper
+    // movabs rcx, <wrapper_ptr>  (first arg to SetCurrentThreadWrapper)
     *cursor++ = 0x48; *cursor++ = 0xB9;
     std::memcpy(cursor, &wrapper_ptr, 8); cursor += 8;
 
@@ -141,7 +141,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineX64(uint8_t* cursor, void* wrapper_p
     *cursor++ = 0x48; *cursor++ = 0xB8;
     std::memcpy(cursor, &handler, 8); cursor += 8;
 
-    // jmp rax  — tail-call, stack is exactly as the caller left it
+    // jmp rax  (tail-call, stack is exactly as the caller left it)
     *cursor++ = 0xFF; *cursor++ = 0xE0;
 
     return cursor;
@@ -297,9 +297,9 @@ uint8_t* CallbackTrampolines::EmitTrampolineSysV(uint8_t* cursor, void* wrapper_
     //   4. Tail-jump to handler via R11 (so the restored RAX/AL survives)
     //
     // Stack alignment:
-    //   Entry:                RSP ≡ 8 (mod 16)  — call pushed the return address
+    //   Entry:                RSP ≡ 8 (mod 16)  (call pushed the return address)
     //   After 7 pushes (56B): RSP ≡ 0 (mod 16)
-    //   After sub rsp,128:    RSP ≡ 0 (mod 16)  — aligned for the call ✓
+    //   After sub rsp,128:    RSP ≡ 0 (mod 16)  (aligned for the call) ✓
 
     // Save GP arg registers + RAX (AL) for variadic callees.
     *cursor++ = 0x57;                    // push rdi
@@ -314,7 +314,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineSysV(uint8_t* cursor, void* wrapper_
     // sub rsp, 0x80
     *cursor++ = 0x48; *cursor++ = 0x81; *cursor++ = 0xEC;
     *cursor++ = 0x80; *cursor++ = 0x00; *cursor++ = 0x00; *cursor++ = 0x00;
-    // movups [rsp+disp8], xmmN — ModRM (mod=01,reg=N,rm=100/SIB), SIB=0x24 (base=rsp)
+    // movups [rsp+disp8], xmmN: ModRM (mod=01,reg=N,rm=100/SIB), SIB=0x24 (base=rsp)
     static const uint8_t k_xmm_modrm[8] = { 0x44, 0x4C, 0x54, 0x5C, 0x64, 0x6C, 0x74, 0x7C };
     for (int i = 0; i < 8; ++i)
     {
@@ -349,10 +349,10 @@ uint8_t* CallbackTrampolines::EmitTrampolineSysV(uint8_t* cursor, void* wrapper_
     *cursor++ = 0x5E;                    // pop rsi
     *cursor++ = 0x5F;                    // pop rdi
 
-    // movabs r11, <handler>  — use r11 so the restored rax/al survives
+    // movabs r11, <handler>  (r11 so the restored rax/al survives)
     *cursor++ = 0x49; *cursor++ = 0xBB;
     std::memcpy(cursor, &handler, 8); cursor += 8;
-    // jmp r11  — tail-call, stack is exactly as the caller left it
+    // jmp r11  (tail-call, stack is exactly as the caller left it)
     *cursor++ = 0x41; *cursor++ = 0xFF; *cursor++ = 0xE3;
 
     return cursor;
@@ -363,7 +363,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineSysV(uint8_t* cursor, void* wrapper_
 #endif
 
 // ============================================================================
-// Getters — cast entry points to the appropriate libretro callback types
+// Getters: cast entry points to the appropriate libretro callback types
 // ============================================================================
 
 retro_environment_t CallbackTrampolines::GetEnvironmentCallback() const

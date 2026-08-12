@@ -28,8 +28,8 @@ class Wrapper;
 ///
 /// Threading. rc_client calls are synchronous and are all taken under m_mutex, so
 /// a main-thread HTTP reply cannot race a DoFrame on an emulation thread. Memory
-/// is only ever touched from inside rc_client_do_frame/rc_client_idle — enforced by
-/// rc_client_set_allow_background_memory_reads(0) — and DoFrame is only ever called
+/// is only ever touched from inside rc_client_do_frame/rc_client_idle (enforced by
+/// rc_client_set_allow_background_memory_reads(0)), and DoFrame is only ever called
 /// from the emulation thread of the Wrapper that owns the session, so ReadMemory
 /// runs on the one thread that is allowed to look at core RAM.
 ///
@@ -51,7 +51,7 @@ public:
     bool GetEnabled() const { return m_enabled; }
 
     /// Identifies this client to the RetroAchievements server. Must be set before
-    /// any request — RA's documentation is explicit that dorequest.php must never
+    /// any request: RA's documentation is explicit that dorequest.php must never
     /// be called without one. GDScript builds it (app name/version + platform) and
     /// AppendUserAgentClause() adds the rcheevos version RA also wants to see.
     void SetUserAgent(const godot::String& user_agent);
@@ -65,7 +65,7 @@ public:
     /// Reply to an `ra_http_request`. `body` is the raw response text; rc_client
     /// parses it. Pass RC_API_SERVER_RESPONSE_CLIENT_ERROR (-1) or
     /// RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR (-2) as http_status for a
-    /// transport failure — the retryable form makes rc_client queue an unlock
+    /// transport failure; the retryable form makes rc_client queue an unlock
     /// rather than drop it.
     void HttpResponse(int request_id, int http_status, const godot::String& body);
 
@@ -96,7 +96,7 @@ public:
     void UnloadGame(Wrapper* wrapper);
 
     /// One emulated frame elapsed. Emulation thread. Must not be called for
-    /// netplay rollback replays — those frames are speculative and re-run.
+    /// netplay rollback replays, since those frames are speculative and re-run.
     void DoFrame(Wrapper* wrapper);
 
 protected:
@@ -123,7 +123,7 @@ private:
     static void RC_CCONV GetCoreMemoryInfo(uint32_t id, rc_libretro_core_memory_info_t* info);
 
     /// Queue a signal onto the main thread. rc_client events arrive on whichever
-    /// thread called into it — usually an emulation thread — and Godot signals
+    /// thread called into it, usually an emulation thread, and Godot signals
     /// must not be emitted from there.
     void EmitDeferred(const godot::StringName& signal, const godot::Array& args);
 
@@ -131,10 +131,10 @@ private:
 
     rc_client_t* m_client = nullptr;
     rc_libretro_memory_regions_t m_memory_regions = {};
-    bool m_memory_initialised = false;
+    bool m_memory_initialized = false;
 
     /// Guards every rc_client_* entry point. Recursive because rc_client invokes
-    /// our callbacks synchronously from inside calls we make while holding it —
+    /// our callbacks synchronously from inside calls we make while holding it:
     /// ServerCall from a login, EventHandler from a DoFrame.
     mutable std::recursive_mutex m_mutex;
 
@@ -142,7 +142,7 @@ private:
     std::string m_user_agent = "RetroXR";
 
     /// The Wrapper whose memory ReadMemory reads and whose frames drive DoFrame.
-    /// Raw, but only ever compared and only ever cleared by the owner itself —
+    /// Raw, but only ever compared and only ever cleared by the owner itself:
     /// ReleaseSession is called from Wrapper teardown before the pointer dies.
     Wrapper* m_session_owner = nullptr;
     uint32_t m_console_id = 0;

@@ -18,8 +18,8 @@
 
 namespace Xenu
 {
-// Held by pointer only, so <d3d11.h>/<d3d12.h> — and the windows.h macros they
-// drag in, one of which renames GetSystemDirectory — stay out of this header.
+// Held by pointer only, so <d3d11.h>/<d3d12.h> stay out of this header, along
+// with the windows.h macros they drag in (one of which renames GetSystemDirectory).
 class D3D11Context;
 class D3D12Context;
 
@@ -51,7 +51,7 @@ public:
     bool GetPreferredHwRender(retro_hw_context_type* hw_context_type) const;
 
     /// Invoke the core's context_destroy callback. Must run on the emulation
-    /// thread before retro_unload_game (RetroArch's ordering) — Vulkan cores
+    /// thread before retro_unload_game (RetroArch's ordering), since Vulkan cores
     /// like paraLLEl-RDP free all their VkDevice objects only in this callback.
     void NotifyContextDestroy();
 
@@ -87,7 +87,7 @@ private:
     godot::Ref<godot::StandardMaterial3D> m_new_material = nullptr;
     // Size of the frame the emulation thread produced last. Emulation-thread
     // state: it decides there whether a frame needs a new texture or fits the
-    // existing one. The main thread must not read it to size a queued frame —
+    // existing one. The main thread must not read it to size a queued frame:
     // by the time a queued frame executes, this has already moved on.
     uint32_t m_last_width = 0;
     uint32_t m_last_height = 0;

@@ -73,7 +73,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         {
             // Vulkan path: readback from Vulkan image via staging buffer.
             // False is a dropped frame, and pixel_data is then still the
-            // uninitialised buffer resized above — uploading it would put heap
+            // uninitialized buffer resized above, and uploading it would put heap
             // garbage on the screen. Keep the last good frame instead.
             if (!instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data))
                 return;
@@ -93,12 +93,13 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             // OpenGL path: read pixels from the current framebuffer.
             //
             // Deliberately NOT followed by a buffer swap. get_current_framebuffer()
-            // hands the core FBO 0 — the back buffer of a hidden, never-presented
-            // window that exists only to own the GL context. Swapping it rotated
-            // front/back under the core, so it drew each frame into the buffer
-            // holding the frame before last. Cores that repaint every pixel hid
-            // this; ScummVM updates only dirty rectangles, so the two buffers
-            // diverged and the picture alternated between two half-stale images.
+            // hands the core FBO 0, the back buffer of a hidden, never-presented
+            // window that exists only to own the GL context. Swapping it would
+            // rotate front/back under the core, so it would draw each frame into
+            // the buffer holding the frame before last. A core that repaints
+            // every pixel would not notice; ScummVM updates only dirty
+            // rectangles, so its picture would alternate between two half-stale
+            // images.
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
         }
 
@@ -253,11 +254,11 @@ void VideoHandler::Init(MeshInstance3D* mesh)
     m_new_material->set_feature(StandardMaterial3D::FEATURE_EMISSION, true);
     // Point-sample the core's picture. StandardMaterial3D defaults to
     // LINEAR_WITH_MIPMAPS, which on a 240x160 GBA frame blends every texel with its
-    // neighbours no matter how the screen is scaled — the emulator output arrived
-    // pre-softened before any headset resampling. Every shader in RetroVR that
-    // handles a core picture (screen_window, gameboy_lcd, vb_stereo) already
-    // declares filter_nearest; this is the one path that did not, and it is the one
-    // the plain handheld screens (GBA, PSP) and non-CRT TVs use.
+    // neighbors no matter how the screen is scaled, so the emulator output arrives
+    // pre-softened before any headset resampling. Every shader that handles a core
+    // picture (screen_window, gameboy_lcd, vb_stereo) already declares
+    // filter_nearest; this is the path the plain handheld screens (GBA, PSP) and
+    // non-CRT TVs use.
     m_new_material->set_texture_filter(StandardMaterial3D::TEXTURE_FILTER_NEAREST);
 
     // mesh may be null (console powered on with no TV): create the material now
@@ -365,7 +366,7 @@ void VideoHandler::DeInit()
 void VideoHandler::NotifyContextDestroy()
 {
     // Runs on the emulation thread, before retro_unload_game/retro_deinit,
-    // while the GL/Vulkan context is still current on this thread — matches
+    // while the GL/Vulkan context is still current on this thread. Matches
     // RetroArch's teardown order so cores can free API objects they own.
     if (m_context_destroy)
     {
@@ -418,7 +419,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
     {
         if (m_vulkan_ctx)
         {
-            Log("Vulkan context already initialized — skipping.");
+            Log("Vulkan context already initialized, skipping.");
             return true;
         }
         Log("Creating Vulkan context...");

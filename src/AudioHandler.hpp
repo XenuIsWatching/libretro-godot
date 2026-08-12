@@ -47,7 +47,7 @@ public:
     /// wants some right now.
     ///
     /// This is the brake. The mixer drains at the hardware's rate, so how full the
-    /// sink is measures *real* time — the only quantity here a core cannot
+    /// sink is measures *real* time, the only quantity here a core cannot
     /// misreport. Both of the alternatives are claims: timing.fps describes neither
     /// the call rate nor the time a call covers for cores that return on present,
     /// and the sample count is only proportional to game time if the core says so
@@ -57,13 +57,13 @@ public:
     /// can never brake emulation to a halt.
     double MsUntilSinkWantsFrames() const;
 
-    /// The Meta XR Audio voice ids this core is being spatialised through, or
+    /// The Meta XR Audio voice ids this core is being spatialized through, or
     /// empty when running on the fallback AudioStreamPlayer3D. GDScript
     /// positions these; it does not own their lifetime.
     godot::PackedInt32Array GetVoiceIds() const;
 
     /// Which source channel feeds each speaker: 0 stereo, 1 the left channel to
-    /// both, 2 the right to both. A television's mono switch — a duplication, so
+    /// both, 2 the right to both. A television's mono switch: a duplication, so
     /// both speakers keep radiating rather than the sound collapsing into one.
     /// Read on the emulation thread, written from the main one; a torn read costs
     /// at worst one buffer routed the old way.

@@ -75,7 +75,7 @@ if is_linux:
     env.Append(CPPPATH=["external/SDL3/include/"])
     env.Append(LIBS=["dl", "pthread"])
     # Link the Vulkan loader, SDL3 (OpenGL HW-render context), and the GL loader
-    # (direct glReadPixels) by their versioned sonames — distros ship lib*.so.N
+    # (direct glReadPixels) by their versioned sonames: distros ship lib*.so.N
     # but the unversioned symlinks that -lvulkan / -lSDL3 / -lGL need come with the
     # -dev/-devel packages, which may not be installed.
     #
@@ -96,7 +96,7 @@ if is_linux:
     env.Append(LIBS=[":libvulkan.so.1", ":libSDL3.so.0", ":libGL.so.1"])
     env.Append(LIBPATH=["external/SDL3/lib/linux-x64"])
 
-# Vulkan headers (bundled submodule — used on both platforms)
+# Vulkan headers (bundled submodule, used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])
 
 sources = Glob("src/*.cpp")
@@ -124,8 +124,8 @@ sources.append("external/libretro-common/time/rtime.c")
 sources.append("external/libretro-common/streams/file_stream.c")
 sources.append("external/libretro-common/vfs/vfs_implementation.c")
 
-# RetroAchievements. rcheevos needs no external dependency — it carries its own
-# md5 and AES — and rc_export.h defaults to RC_STATIC when none of the linkage
+# RetroAchievements. rcheevos needs no external dependency (it carries its own
+# md5 and AES), and rc_export.h defaults to RC_STATIC when none of the linkage
 # macros are defined, so there is nothing to declare but the sources.
 #
 # RC_CLIENT_SUPPORTS_HASH turns on rc_client_begin_identify_and_load_game, which
@@ -134,8 +134,8 @@ sources.append("external/libretro-common/vfs/vfs_implementation.c")
 #
 # The whole of rhash is compiled, including hash_encrypted.c and its aes.c. It is
 # tempting to define RC_HASH_NO_ENCRYPTED to save a few KB, but (a) hash_encrypted.c
-# carries no outer #ifndef of its own, so the define alone does not exclude it —
-# the sources have to be dropped from this list too — and (b) that path is what
+# carries no outer #ifndef of its own, so the define alone does not exclude it
+# (the sources have to be dropped from this list too), and (b) that path is what
 # hashes .cia/.3ds content, which the azahar cabinet needs.
 #
 # rc_client_raintegration.c (the Windows achievement-editor DLL) and

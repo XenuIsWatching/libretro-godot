@@ -25,8 +25,8 @@ String ToGodot(const char* text)
     return text ? String::utf8(text) : String();
 }
 
-/// rc_client only distinguishes UNLOCKED from everything else here — any other
-/// state yields the greyed badge — so ACTIVE is the idiomatic "locked" argument.
+/// rc_client only distinguishes UNLOCKED from everything else here, and any other
+/// state yields the grayed badge, so ACTIVE is the idiomatic "locked" argument.
 String AchievementBadge(const rc_client_achievement_t* achievement, int state)
 {
     char buffer[256] = {};
@@ -50,10 +50,10 @@ RetroAchievements::~RetroAchievements()
             rc_client_destroy(m_client);
             m_client = nullptr;
         }
-        if (m_memory_initialised)
+        if (m_memory_initialized)
         {
             rc_libretro_memory_destroy(&m_memory_regions);
-            m_memory_initialised = false;
+            m_memory_initialized = false;
         }
     }
     if (s_singleton == this)
@@ -75,10 +75,10 @@ void RetroAchievements::SetEnabled(bool enabled)
             rc_client_destroy(m_client);
             m_client = nullptr;
         }
-        if (m_memory_initialised)
+        if (m_memory_initialized)
         {
             rc_libretro_memory_destroy(&m_memory_regions);
-            m_memory_initialised = false;
+            m_memory_initialized = false;
         }
         m_session_owner = nullptr;
         m_pending.clear();
@@ -218,7 +218,7 @@ void RetroAchievements::HttpResponse(int request_id, int http_status, const Stri
         m_pending.erase(it);
     }
 
-    // The CharString has to outlive the callback — server_response.body points
+    // The CharString has to outlive the callback: server_response.body points
     // straight into it and rc_client parses during the call.
     const CharString utf8 = body.utf8();
 
@@ -259,11 +259,11 @@ uint32_t RetroAchievements::ReadMemory(uint32_t address, uint8_t* buffer,
                                        uint32_t num_bytes, rc_client_t* /*client*/)
 {
     RetroAchievements* self = GetSingleton();
-    if (self == nullptr || !self->m_memory_initialised)
+    if (self == nullptr || !self->m_memory_initialized)
         return 0;
 
     // No lock. This only ever runs inside do_frame/idle, which already hold the
-    // mutex, and taking it again here would serialise every single memory read an
+    // mutex, and taking it again here would serialize every single memory read an
     // achievement performs.
     return rc_libretro_memory_read(&self->m_memory_regions, address, buffer, num_bytes);
 }
@@ -316,7 +316,7 @@ void RetroAchievements::EventHandler(const rc_client_event_t* event, rc_client_t
     {
         const bool shown = event->type != RC_CLIENT_EVENT_ACHIEVEMENT_PROGRESS_INDICATOR_HIDE;
         const rc_client_achievement_t* achievement = event->achievement;
-        // The hide event carries no achievement — the UI just takes the panel down.
+        // The hide event carries no achievement; the UI just takes the panel down.
         if (achievement == nullptr)
         {
             self->EmitDeferred("ra_progress_indicator", Array::make(
@@ -417,10 +417,10 @@ void RetroAchievements::BeginLoadGame(Wrapper* wrapper, const std::string& file_
         return;
     }
 
-    if (m_memory_initialised)
+    if (m_memory_initialized)
     {
         rc_libretro_memory_destroy(&m_memory_regions);
-        m_memory_initialised = false;
+        m_memory_initialized = false;
     }
 
     const retro_memory_map memory_map = wrapper->GetMemoryMap();
@@ -434,7 +434,7 @@ void RetroAchievements::BeginLoadGame(Wrapper* wrapper, const std::string& file_
             String("This core does not expose memory RetroAchievements can read")));
         return;
     }
-    m_memory_initialised = true;
+    m_memory_initialized = true;
 
     // Disc cores never read the ROM into a buffer, so data is null and rc_hash
     // opens the path itself; cartridge cores hand over the bytes already resident.
@@ -502,17 +502,17 @@ void RetroAchievements::UnloadGame(Wrapper* wrapper)
         return;
 
     rc_client_unload_game(m_client);
-    if (m_memory_initialised)
+    if (m_memory_initialized)
     {
         rc_libretro_memory_destroy(&m_memory_regions);
-        m_memory_initialised = false;
+        m_memory_initialized = false;
     }
 }
 
 void RetroAchievements::DoFrame(Wrapper* wrapper)
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (m_client == nullptr || m_session_owner != wrapper || !m_memory_initialised)
+    if (m_client == nullptr || m_session_owner != wrapper || !m_memory_initialized)
         return;
     rc_client_do_frame(m_client);
 }
@@ -523,7 +523,7 @@ void RetroAchievements::Idle()
     if (m_client == nullptr)
         return;
     // do_frame calls idle internally, so this is only for when nothing is running.
-    if (m_session_owner != nullptr && m_memory_initialised)
+    if (m_session_owner != nullptr && m_memory_initialized)
         return;
     rc_client_idle(m_client);
 }
@@ -654,8 +654,8 @@ void RetroAchievements::EmitDeferred(const StringName& signal, const Array& args
     for (int i = 0; i < args.size(); ++i)
         full.push_back(args[i]);
 
-    // rc_client events arrive on whichever thread called into it — usually an
-    // emulation thread — and a Godot signal must be emitted on the main one.
+    // rc_client events arrive on whichever thread called into it, usually an
+    // emulation thread, and a Godot signal must be emitted on the main one.
     Callable(this, "emit_signal").bindv(full).call_deferred();
 }
 

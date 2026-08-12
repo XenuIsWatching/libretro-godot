@@ -517,7 +517,7 @@ int16_t InputHandler::ProcessLightgunDevice(uint32_t port, uint32_t id)
 
 int16_t InputHandler::ProcessPointerDevice(uint32_t port, uint32_t index, uint32_t id)
 {
-    // COUNT is a property of the whole device, so it ignores the index — cores
+    // COUNT is a property of the whole device, so it ignores the index: cores
     // read it at index 0 and would otherwise see nothing for the others.
     if (id == RETRO_DEVICE_ID_POINTER_COUNT)
         return GetPointerCount(port);

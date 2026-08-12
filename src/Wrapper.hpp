@@ -70,7 +70,7 @@ public:
 
     void StartContent(godot::MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path);
     void StopContent();
-    /// Blocking stop for node teardown — joins and finishes teardown before
+    /// Blocking stop for node teardown. Joins and finishes teardown before
     /// returning, so handler DeInit still sees a live scene.
     void ShutdownForExit();
     /// m_node re-resolved through ObjectDB, or null if it has been freed.
@@ -90,18 +90,18 @@ public:
     /// Calls retro_set_controller_port_device and updates the local tracking map.
     void SetControllerPortDevice(uint32_t port, uint32_t device);
 
-    /// Light gun input forwarding — called from Libretro node on the main thread.
+    /// Light gun input forwarding. Called from the Libretro node on the main thread.
     void SetLightgunPosition(uint32_t port, int16_t x, int16_t y);
     void SetLightgunIsOffscreen(uint32_t port, bool offscreen);
     void SetLightgunButton(uint32_t port, int button_id, bool pressed);
 
-    /// Per-port joypad input — replaces the hardcoded port-0 path in _process for
+    /// Per-port joypad input. Replaces the hardcoded port-0 path in _process for
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
 
     /// Keyboard input: update the RETRO_DEVICE_KEYBOARD poll bitset AND fire
     /// the core's keyboard event callback (modifiers derived from held keys).
-    /// Keyboard state is global in practice — feed port 0.
+    /// Keyboard state is global in practice, so feed port 0.
     void SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t character);
 
     /// Translate a Godot key event to its RETROK_* code. Static and side-effect
@@ -112,12 +112,12 @@ public:
 
     /// Per-port mouse input (RETRO_DEVICE_MOUSE) for physical mouse objects.
     /// dx/dy are relative deltas ACCUMULATED until the core's next read;
-    /// buttons is a bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) — LEFT bit 2,
+    /// buttons is a bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*): LEFT bit 2,
     /// RIGHT bit 3, MIDDLE bit 6.
     void SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t buttons);
 
     /// Accelerometer feed (g units, at-rest flat ≈ (0,0,1)) for the libretro
-    /// sensor interface — a held handheld's physical tilt drives tilt carts.
+    /// sensor interface, so a held handheld's physical tilt drives tilt carts.
     void SetSensorAccel(uint32_t port, float x, float y, float z);
 
     /// Gyroscope feed (radians/second about the device's own axes) for the same
@@ -126,7 +126,7 @@ public:
 
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y normalized to
     /// [-0x7FFF, 0x7FFF] across the WHOLE video output (the composite
-    /// framebuffer for dual-screen cores — melonDS maps the bottom-screen
+    /// framebuffer for dual-screen cores; melonDS maps the bottom-screen
     /// region of it to DS touch).
     void SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed);
     void SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed);
@@ -144,7 +144,7 @@ public:
 
     /// Post the agreed inputs for one frame: flat array of 4 ports × 5 values
     /// {button_mask, analog_lx, analog_ly, analog_rx, analog_ry}.
-    /// Lockstep: releases the gate for `frame`. Rollback: confirms `frame` —
+    /// Lockstep: releases the gate for `frame`. Rollback: confirms `frame`, and
     /// a mismatch against what was executed triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& flat);
 
@@ -153,7 +153,7 @@ public:
     // predicted (hold-last-input). Each frame is savestated into a ring before
     // it runs. When confirmed inputs contradict a prediction the emulation
     // thread reloads the state at the mispredicted frame and silently replays
-    // (audio dropped, video skipped except the final frame) — so the local
+    // (audio dropped, video skipped except the final frame), so the local
     // player never feels the network.
 
     /// Enable rollback within netplay mode. local_mask ⊆ port_mask marks the
@@ -176,7 +176,7 @@ public:
 
     /// Set the .srm file backing this run. Call before StartContent; calling
     /// while running performs a hot-swap on the emulation thread (flush the
-    /// old file, load the new one into SAVE_RAM) — a real memory-card swap.
+    /// old file, load the new one into SAVE_RAM): a real memory-card swap.
     void SetSramPath(const godot::String& path);
 
     /// Netplay: inject SRAM content directly (applied at load instead of the
@@ -186,14 +186,12 @@ public:
     /// Declare that this machine's battery save lives on REMOVABLE media, so
     /// an unbacked run means "nothing is plugged in" rather than "don't save".
     /// With this set and no path or injected bytes, SAVE_RAM is blanked at load
-    /// instead of being left as the core initialised it.
+    /// instead of being left as the core initialized it. pcsx_rearmed hands back
+    /// a fully FORMATTED card when the frontend supplies nothing, so without
+    /// blanking a PSX with no card seated accepts a save and loses it at
+    /// power-off; blanking makes the game report an unformatted card instead.
     ///
-    /// pcsx_rearmed hands back a fully FORMATTED card when the frontend supplies
-    /// nothing, so a PSX with no card seated would otherwise accept a save,
-    /// report success, and lose it at power-off. Blanking makes the game report
-    /// an unformatted card, which is what the player needs to see.
-    ///
-    /// Opt-in on purpose: a fixed-storage core may initialise SAVE_RAM to 0xFF
+    /// Opt-in on purpose: a fixed-storage core may initialize SAVE_RAM to 0xFF
     /// (flash/EEPROM) and zeroing that would fake corrupt save data, and a
     /// netplay client legitimately runs with an empty path and empty bytes.
     void SetRemovableStorage(bool removable);
@@ -291,10 +289,9 @@ public:
 
     /// Descriptors handed over by RETRO_ENVIRONMENT_SET_MEMORY_MAPS, deep-copied.
     /// The core only guarantees the array and the addrspace strings for the
-    /// duration of that one callback — the `ptr` values inside stay valid for the
+    /// duration of that one callback; the `ptr` values inside stay valid for the
     /// session, which is what makes copying the rest worthwhile. rcheevos needs
-    /// this to translate a RetroAchievements address into a host pointer; without
-    /// it, only cores that expose a flat RETRO_MEMORY_SYSTEM_RAM can be supported.
+    /// this to translate a RetroAchievements address into a host pointer.
     void SetMemoryDescriptors(const retro_memory_map* memory_maps);
     /// A retro_memory_map view over the copies. Empty descriptors when the core
     /// never sent any, which rc_libretro_memory_init handles by falling back to
@@ -302,17 +299,16 @@ public:
     retro_memory_map GetMemoryMap() const;
     /// Whether the core declared achievement support via
     /// RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS. Cores that never call it are
-    /// assumed to support them — the callback exists to opt OUT.
+    /// assumed to support them; the callback exists to opt OUT.
     bool GetSupportsAchievements() const { return m_supports_achievements; }
     void SetSupportsAchievements(bool support) { m_supports_achievements = support; }
     /// retro_get_memory_data/size for a RETRO_MEMORY_* id, for callers that need
     /// the raw region rather than the CRC ComputeRamCrc returns. Emulation thread.
     void GetCoreMemory(uint32_t id, uint8_t*& out_data, size_t& out_size) const;
 
-    /// The core is handed this struct's address in retro_get_system_av_info, and at least
-    /// one core keeps that pointer and writes through it long afterwards — ScummVM revises
-    /// timing.fps from inside context_reset. It therefore has to outlive the call, and a
-    /// stack local is a use-after-scope waiting to corrupt whatever reuses the frame.
+    /// The core is handed this struct's address in retro_get_system_av_info and may write
+    /// through that pointer long afterwards (ScummVM revises timing.fps from inside
+    /// context_reset), so it must outlive the call and cannot be a stack local.
     /// Read it live at the point of use; do not copy the fields out and cache them, or a
     /// core that legitimately retimes is pinned to its opening declaration.
     retro_system_av_info m_system_av_info = {};
@@ -382,7 +378,7 @@ public:
     bool m_np_replay_mute_video = false;                    // skip video uploads for this replayed frame
 
     /// True while the emulation thread is silently replaying frames after a
-    /// rollback — audio/video callbacks drop their output. Emu thread only.
+    /// rollback; audio/video callbacks drop their output. Emu thread only.
     bool IsNetplayReplaying() const { return m_np_replaying; }
     bool IsNetplayReplayVideoMuted() const { return m_np_replaying && m_np_replay_mute_video; }
 
@@ -417,7 +413,7 @@ public:
 
     /// Signal the emulation thread to stop. blocking=true joins and tears down
     /// synchronously (StartContent restart, destructor). blocking=false returns
-    /// immediately — _process() joins and finishes the teardown once the thread
+    /// immediately; _process() joins and finishes the teardown once the thread
     /// has exited on its own, so stopping a core never hitches the main thread.
     /// Also the only safe form callable FROM the emulation thread (core-initiated
     /// RETRO_ENVIRONMENT_SHUTDOWN must not join itself).
