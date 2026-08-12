@@ -14,6 +14,14 @@ if ARGUMENTS.get("target", "template_debug") != "template_release":
 
 env = SConscript("../godot-cpp/SConstruct")
 
+# godot-cpp hardcodes C++17 (tools/common_compiler_flags.py) with no option to
+# override it, and its own sources build from this same env, so appending a
+# newer -std leaves both on every command line. MSVC then warns D9025 once per
+# translation unit; GCC and Clang just take the last one silently. Drop the
+# flag rather than stacking on it - the per-platform Append below sets ours.
+env["CXXFLAGS"] = [f for f in env["CXXFLAGS"]
+                   if not str(f).startswith(("/std:c++", "-std=c++"))]
+
 env.Append(CPPPATH=[
     "external/",
     "external/godot-cpp/",
