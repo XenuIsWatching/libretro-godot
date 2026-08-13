@@ -55,6 +55,12 @@ Core::Core(const std::string& path)
 
 bool Core::Load(CallbackTrampolines* trampolines)
 {
+    if (!trampolines || !trampolines->IsValid())
+    {
+        LogError("Cannot load core without executable callback trampolines");
+        return false;
+    }
+
     if (!std::filesystem::is_regular_file(m_path))
     {
         LogError("Core not found: " + m_path);

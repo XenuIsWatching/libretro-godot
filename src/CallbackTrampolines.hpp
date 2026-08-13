@@ -19,6 +19,8 @@ public:
     CallbackTrampolines(CallbackTrampolines&&) = delete;
     CallbackTrampolines& operator=(CallbackTrampolines&&) = delete;
 
+    bool IsValid() const { return m_code_page != nullptr; }
+
     retro_environment_t        GetEnvironmentCallback() const;
     retro_video_refresh_t      GetVideoRefreshCallback() const;
     retro_audio_sample_t       GetAudioSampleCallback() const;

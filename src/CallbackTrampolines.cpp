@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include <cerrno>
 #include <cstring>
 
 namespace Xenu
@@ -81,8 +82,17 @@ void CallbackTrampolines::GenerateTrampolines(Wrapper* wrapper)
     }
 
     DWORD old_protect;
-    VirtualProtect(m_code_page, m_code_size, PAGE_EXECUTE_READ, &old_protect);
-    FlushInstructionCache(GetCurrentProcess(), m_code_page, m_code_size);
+    if (!VirtualProtect(m_code_page, m_code_size, PAGE_EXECUTE_READ, &old_protect))
+    {
+        LogError("Failed to make callback trampolines executable: " + std::to_string(GetLastError()));
+        VirtualFree(m_code_page, 0, MEM_RELEASE);
+        m_code_page = nullptr;
+        for (void*& entry : m_entry_points)
+            entry = nullptr;
+        return;
+    }
+    if (!FlushInstructionCache(GetCurrentProcess(), m_code_page, m_code_size))
+        LogWarning("Failed to flush callback trampoline instruction cache: " + std::to_string(GetLastError()));
 
     Log("Created " + std::to_string(TRAMPOLINE_COUNT) + " callback trampolines");
 }
@@ -148,7 +158,7 @@ uint8_t* CallbackTrampolines::EmitTrampolineX64(uint8_t* cursor, void* wrapper_p
 }
 
 // ============================================================================
-// AArch64 Android implementation
+// AArch64 implementation
 // ============================================================================
 #elif defined(__aarch64__)
 
@@ -183,7 +193,16 @@ void CallbackTrampolines::GenerateTrampolines(Wrapper* wrapper)
         cursor = EmitTrampolineA64(cursor, wrapper, set_tls, k_handlers[i]);
     }
 
-    mprotect(m_code_page, m_code_size, PROT_READ | PROT_EXEC);
+    if (mprotect(m_code_page, m_code_size, PROT_READ | PROT_EXEC) != 0)
+    {
+        LogError("Failed to make callback trampolines executable: " + std::string(std::strerror(errno)));
+        munmap(m_code_page, m_code_size);
+        m_code_page = nullptr;
+        m_code_size = 0;
+        for (void*& entry : m_entry_points)
+            entry = nullptr;
+        return;
+    }
     __builtin___clear_cache(
         reinterpret_cast<char*>(m_code_page),
         reinterpret_cast<char*>(m_code_page) + m_code_size
@@ -278,7 +297,16 @@ void CallbackTrampolines::GenerateTrampolines(Wrapper* wrapper)
         cursor = reinterpret_cast<uint8_t*>((addr + 15) & ~uintptr_t(15));
     }
 
-    mprotect(m_code_page, m_code_size, PROT_READ | PROT_EXEC);
+    if (mprotect(m_code_page, m_code_size, PROT_READ | PROT_EXEC) != 0)
+    {
+        LogError("Failed to make callback trampolines executable: " + std::string(std::strerror(errno)));
+        munmap(m_code_page, m_code_size);
+        m_code_page = nullptr;
+        m_code_size = 0;
+        for (void*& entry : m_entry_points)
+            entry = nullptr;
+        return;
+    }
 
     Log("Created " + std::to_string(TRAMPOLINE_COUNT) + " callback trampolines");
 }
