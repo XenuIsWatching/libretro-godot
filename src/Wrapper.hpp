@@ -53,9 +53,9 @@ public:
     Wrapper(Wrapper&&) = delete;
     Wrapper& operator=(Wrapper&&) = delete;
 
-    /// Returns the Wrapper instance currently running on this thread (set at the
-    /// start of each emulation thread loop). Returns nullptr on the main thread
-    /// unless explicitly set via SetCurrentThreadWrapper.
+    /// Returns the Wrapper instance currently running on this thread. Per-wrapper
+    /// callback trampolines set this before dispatch, including on core-created
+    /// threads, so no process-global fallback is needed or safe.
     static Wrapper* GetCurrentThreadWrapper();
 
     /// Set or clear the current-thread Wrapper pointer. Called automatically by

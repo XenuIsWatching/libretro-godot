@@ -59,24 +59,14 @@ private:
 
 thread_local Wrapper* t_current_wrapper = nullptr;
 
-// Fallback for callbacks from threads spawned by cores (e.g. Dolphin's audio
-// thread).  When the thread-local is null, we try this atomic pointer instead.
-// This works correctly for single-instance and is best-effort for multi-instance.
-static std::atomic<Wrapper*> s_fallback_wrapper{ nullptr };
-
 Wrapper* Wrapper::GetCurrentThreadWrapper()
 {
-    Wrapper* w = t_current_wrapper;
-    if (!w)
-        w = s_fallback_wrapper.load(std::memory_order_acquire);
-    return w;
+    return t_current_wrapper;
 }
 
 void Wrapper::SetCurrentThreadWrapper(Wrapper* wrapper)
 {
     t_current_wrapper = wrapper;
-    if (wrapper)
-        s_fallback_wrapper.store(wrapper, std::memory_order_release);
 }
 
 // Godot reports both Shift/Ctrl/Alt/Super keys under one keycode, so the whole
@@ -1698,8 +1688,6 @@ void Wrapper::EmulationThreadLoop()
 
         m_running = false;
         t_current_wrapper = nullptr;
-        Wrapper* expected = this;
-        s_fallback_wrapper.compare_exchange_strong(expected, nullptr, std::memory_order_release);
         Log("Libretro thread stopped.");
     });
 
