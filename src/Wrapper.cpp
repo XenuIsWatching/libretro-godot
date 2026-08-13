@@ -362,6 +362,10 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
 
     StopEmulationThread();
 
+    // A cartridge run owns an in-memory ROM image. Do not retain or reuse it
+    // when this Wrapper is restarted with disc/full-path content.
+    std::vector<uint8_t>().swap(m_game_buffer);
+
     m_node = node;
     m_node_id = node ? node->get_instance_id() : 0;
 
@@ -1849,8 +1853,8 @@ void Wrapper::EmulationThreadLoop()
     {
         if (ra->HoldsSession(this))
             ra->BeginLoadGame(this, m_game_path,
-                m_game_buffer.empty() ? nullptr : m_game_buffer.data(),
-                m_game_buffer.size());
+                !m_core->GetNeedFullpath() && !m_game_buffer.empty() ? m_game_buffer.data() : nullptr,
+                !m_core->GetNeedFullpath() ? m_game_buffer.size() : 0);
     }
 
     double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;
