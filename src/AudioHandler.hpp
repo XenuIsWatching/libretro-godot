@@ -28,6 +28,7 @@ public:
     void Init(float buffer_capacity_sec, double sample_rate);
     void DeInit();
     void SetPlaying(bool playing);
+    void SetAudioStreamPlayer(godot::AudioStreamPlayer3D* player) { m_audio_stream_player = player; }
 
     bool SetAudioBufferStatusCallback(const retro_audio_buffer_status_callback* callback);
     bool SetMinimumAudioLatency(const uint32_t* minimum_audio_latency);

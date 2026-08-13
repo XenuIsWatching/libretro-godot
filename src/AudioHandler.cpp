@@ -318,7 +318,11 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
     m_audio_stream_generator->set_mix_rate(m_audio_sample_rate);
     m_audio_stream_generator->set_buffer_length(m_audio_buffer_capacity_sec);
 
-    m_audio_stream_player = Wrapper::GetCurrentThreadWrapper()->m_libretro_node->get_node<godot::AudioStreamPlayer3D>("AudioStreamPlayer3D");
+    if (!m_audio_stream_player)
+    {
+        LogError("AudioHandler: fallback AudioStreamPlayer3D is missing");
+        return;
+    }
     m_audio_stream_player->set_stream(m_audio_stream_generator);
     m_audio_stream_player->play();
 
@@ -344,11 +348,7 @@ void AudioHandler::DeInit()
     m_resampler_backend = nullptr;
 
     if (m_audio_stream_player)
-    {
         m_audio_stream_player->stop();
-        Wrapper::GetCurrentThreadWrapper()->m_libretro_node->remove_child(m_audio_stream_player);
-        m_audio_stream_player = nullptr;
-    }
 
     if (m_audio_stream_generator_playback.is_valid())
     {
@@ -358,6 +358,14 @@ void AudioHandler::DeInit()
 
     if (m_audio_stream_generator.is_valid())
         m_audio_stream_generator.unref();
+
+    if (m_audio_stream_player)
+    {
+        if (Node* parent = m_audio_stream_player->get_parent())
+            parent->remove_child(m_audio_stream_player);
+        memdelete(m_audio_stream_player);
+        m_audio_stream_player = nullptr;
+    }
 }
 
 void AudioHandler::SetPlaying(bool playing)

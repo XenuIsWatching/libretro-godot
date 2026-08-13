@@ -379,6 +379,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     m_environment_handler = std::make_unique<EnvironmentHandler>();
     m_video_handler = std::make_unique<VideoHandler>();
     m_audio_handler = std::make_unique<AudioHandler>();
+    m_audio_handler->SetAudioStreamPlayer(audio_stream_player);
     m_input_handler = std::make_unique<InputHandler>();
     m_options_handler = std::make_unique<OptionsHandler>();
     m_message_handler = std::make_unique<MessageHandler>();
