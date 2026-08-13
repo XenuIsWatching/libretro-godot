@@ -9,6 +9,12 @@ env = env.Clone()
 # on for every non-release target; an explicit debug_symbols=no still wins. Has to
 # happen before godot-cpp's SConstruct, which is where the option is read.
 from SCons.Script import ARGUMENTS
+if ARGUMENTS.get("platform") == "macos":
+    # Keep the supported baseline reproducible. Leaving this unset makes
+    # godot-cpp inherit the build host's SDK version (26.0 on the first machine
+    # used here), needlessly preventing the extension from loading on older
+    # supported Macs.
+    ARGUMENTS.setdefault("macos_deployment_target", "13.0")
 if ARGUMENTS.get("target", "template_debug") != "template_release":
     ARGUMENTS.setdefault("debug_symbols", "yes")
 
