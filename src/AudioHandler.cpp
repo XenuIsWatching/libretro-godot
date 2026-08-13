@@ -136,7 +136,11 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
 
 void AudioHandler::PushFrames(const float* interleaved, size_t frames)
 {
-    if (frames == 0)
+    if (frames == 0 || !m_accept_audio.load(std::memory_order_acquire))
+        return;
+
+    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    if (!m_accept_audio.load(std::memory_order_relaxed))
         return;
 
     if (m_use_sdk)
@@ -161,6 +165,12 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
 
 uint32_t AudioHandler::QueuedFrames() const
 {
+    if (!m_accept_audio.load(std::memory_order_acquire))
+        return 0;
+    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    if (!m_accept_audio.load(std::memory_order_relaxed))
+        return 0;
+
     if (m_use_sdk)
     {
         if (m_mx == nullptr || m_voice_l < 0)
@@ -178,6 +188,12 @@ uint32_t AudioHandler::QueuedFrames() const
 double AudioHandler::MsUntilSinkWantsFrames() const
 {
     if (m_mix_rate <= 0.0)
+        return 0.0;
+    if (!m_accept_audio.load(std::memory_order_acquire))
+        return 0.0;
+
+    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    if (!m_accept_audio.load(std::memory_order_relaxed))
         return 0.0;
 
     if (m_use_sdk)
@@ -229,6 +245,9 @@ uint32_t AudioHandler::EffectiveTotalFrames() const
 
 void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 {
+    m_accept_audio.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> sink_lock(m_sink_mutex);
+
     m_audio_buffer_capacity_sec = buffer_capacity_sec;
     m_audio_sample_rate = sample_rate;
     m_frames_produced.store(0, std::memory_order_relaxed);
@@ -310,6 +329,7 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
             Log("AudioHandler: Meta XR Audio, core " + std::to_string(static_cast<int>(m_audio_sample_rate))
                 + " Hz -> " + std::to_string(static_cast<int>(m_mix_rate)) + " Hz, voices "
                 + std::to_string(m_voice_l) + "/" + std::to_string(m_voice_r));
+            m_accept_audio.store(true, std::memory_order_release);
             return;
         }
     }
@@ -327,10 +347,14 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
     m_audio_stream_player->play();
 
     m_audio_stream_generator_playback = m_audio_stream_player->get_stream_playback();
+    m_accept_audio.store(true, std::memory_order_release);
 }
 
 void AudioHandler::DeInit()
 {
+    m_accept_audio.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> sink_lock(m_sink_mutex);
+
     if (m_use_sdk && m_mx)
     {
         if (m_voice_l >= 0)
@@ -370,6 +394,10 @@ void AudioHandler::DeInit()
 
 void AudioHandler::SetPlaying(bool playing)
 {
+    if (!playing)
+        m_accept_audio.store(false, std::memory_order_release);
+
+    std::lock_guard<std::mutex> lock(m_sink_mutex);
     if (m_use_sdk)
     {
         // Nothing to start or stop: a voice with an empty ring is silent. Only
@@ -380,6 +408,8 @@ void AudioHandler::SetPlaying(bool playing)
             if (m_voice_r >= 0)
                 m_mx->call("flush_voice", m_voice_r);
         }
+        if (playing && m_mx && m_voice_l >= 0)
+            m_accept_audio.store(true, std::memory_order_release);
         return;
     }
 
@@ -389,11 +419,11 @@ void AudioHandler::SetPlaying(bool playing)
     {
         m_audio_stream_player->play();
         m_audio_stream_generator_playback = m_audio_stream_player->get_stream_playback();
+        m_accept_audio.store(m_audio_stream_generator_playback.is_valid(), std::memory_order_release);
     }
     else
     {
         m_audio_stream_player->stop();
-        m_audio_stream_generator_playback.unref();
     }
 }
 

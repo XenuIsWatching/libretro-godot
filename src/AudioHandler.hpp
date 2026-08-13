@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,8 @@ private:
     godot::Ref<godot::AudioStreamGenerator> m_audio_stream_generator = nullptr;
     godot::Ref<godot::AudioStreamGeneratorPlayback> m_audio_stream_generator_playback = nullptr;
     godot::AudioStreamPlayer3D* m_audio_stream_player = nullptr;
+    mutable std::mutex m_sink_mutex;
+    std::atomic<bool> m_accept_audio{false};
 
     // --- Meta XR Audio path -------------------------------------------------
     godot::Object* m_mx = nullptr;          ///< the MetaXRAudio singleton, or null
