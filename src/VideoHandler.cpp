@@ -686,6 +686,14 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
         return false;
     }
 
+#ifdef __APPLE__
+    // The macOS build intentionally ships no SDL3 or Vulkan/MoltenVK runtime.
+    // Reject hardware contexts during negotiation so a core can fall back to
+    // its software renderer instead of accepting a callback we cannot service.
+    LogError("Hardware rendering is unavailable on macOS");
+    return false;
+#endif
+
     Log("Setting hardware render callback...");
 
     Log("Context type: " + std::to_string(hw_render_callback->context_type));
@@ -737,6 +745,10 @@ bool VideoHandler::GetPreferredHwRender(retro_hw_context_type* hw_context_type) 
 {
     if (!hw_context_type)
         return false;
+
+#ifdef __APPLE__
+    return false;
+#endif
 
     // Vulkan unless GDScript asked for something else. Cores that support the
     // answer select it; the rest fall back to their own order via SET_HW_RENDER.

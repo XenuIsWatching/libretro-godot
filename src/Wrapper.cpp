@@ -323,6 +323,8 @@ std::string Wrapper::ResolveCorePath(const std::string& root_directory, const st
         "_libretro_android.so", "_libretro.so",
 #elif defined(__linux__)
         "_libretro.so",
+#elif defined(__APPLE__)
+        "_libretro.dylib",
 #else
         "_libretro.dll",
 #endif
