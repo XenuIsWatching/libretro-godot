@@ -82,6 +82,16 @@ void EmuThreadCommandSetCoreOption::Execute(Wrapper& wrapper)
     wrapper.m_options_handler->SetVariable(m_key, m_value);
 }
 
+void EmuThreadCommandKeyboardEvent::Execute(Wrapper& wrapper)
+{
+    if (!wrapper.m_input_handler)
+        return;
+    wrapper.m_input_handler->SetKeyState(m_port, m_keycode, m_down);
+    wrapper.m_input_handler->CallKeyboardEventCallback(
+        m_down, m_keycode, m_character,
+        wrapper.m_input_handler->GetKeyModifiers(m_port));
+}
+
 void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
 {
     wrapper.ApplySramSwap(m_path);

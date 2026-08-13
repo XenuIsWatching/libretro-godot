@@ -465,7 +465,7 @@ godot::Array Wrapper::GetControllerInfo() const
     if (!m_input_handler)
         return result;
 
-    const auto& controllers = m_input_handler->GetControllers();
+    const auto controllers = m_input_handler->GetControllers();
     for (uint32_t port = 0; port < controllers.size(); ++port)
     {
         Array port_controllers;
@@ -612,9 +612,11 @@ void Wrapper::SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t c
     if (m_netplay_enabled.load(std::memory_order_acquire) &&
         (m_np_port_mask.load(std::memory_order_relaxed) & 1u))
         return;
-    m_input_handler->SetKeyState(port, keycode, down);
-    m_input_handler->CallKeyboardEventCallback(down, keycode, character,
-        m_input_handler->GetKeyModifiers(port));
+    if (!m_running.load(std::memory_order_acquire)
+        || m_stopping.load(std::memory_order_acquire))
+        return;
+    m_emu_thread_commands_queue.enqueue(
+        std::make_unique<EmuThreadCommandKeyboardEvent>(port, keycode, down, character));
 }
 
 void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)

@@ -8,6 +8,7 @@ namespace Xenu
 {
 InputHandler::NetplayState InputHandler::CaptureNetplayState() const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     NetplayState state;
     state.joypad_buttons = m_joypad_buttons;
     state.mouse_x = m_mouse_x;
@@ -36,6 +37,7 @@ InputHandler::NetplayState InputHandler::CaptureNetplayState() const
 
 void InputHandler::RestoreNetplayState(const NetplayState& state)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_joypad_buttons = state.joypad_buttons;
     m_mouse_x = state.mouse_x;
     m_mouse_y = state.mouse_y;
@@ -109,27 +111,35 @@ bool InputHandler::RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_eff
     InputHandler* self = instance->m_input_handler.get();
 
     bool changed = false;
-    if (effect == RETRO_RUMBLE_STRONG)
+    uint16_t weak = 0;
+    uint16_t strong = 0;
     {
-        auto it = self->m_rumble_strong.find(port);
-        if (it == self->m_rumble_strong.end() || it->second != strength)
+        std::lock_guard<std::recursive_mutex> lock(self->m_state_mutex);
+        if (effect == RETRO_RUMBLE_STRONG)
         {
-            self->m_rumble_strong[port] = strength;
-            changed = true;
+            auto it = self->m_rumble_strong.find(port);
+            if (it == self->m_rumble_strong.end() || it->second != strength)
+            {
+                self->m_rumble_strong[port] = strength;
+                changed = true;
+            }
         }
-    }
-    else if (effect == RETRO_RUMBLE_WEAK)
-    {
-        auto it = self->m_rumble_weak.find(port);
-        if (it == self->m_rumble_weak.end() || it->second != strength)
+        else if (effect == RETRO_RUMBLE_WEAK)
         {
-            self->m_rumble_weak[port] = strength;
-            changed = true;
+            auto it = self->m_rumble_weak.find(port);
+            if (it == self->m_rumble_weak.end() || it->second != strength)
+            {
+                self->m_rumble_weak[port] = strength;
+                changed = true;
+            }
         }
-    }
-    else
-    {
-        return false;
+        else
+        {
+            return false;
+        }
+
+        weak   = self->m_rumble_weak.count(port)   ? self->m_rumble_weak[port]   : 0;
+        strong = self->m_rumble_strong.count(port) ? self->m_rumble_strong[port] : 0;
     }
 
     if (!changed || instance->m_libretro_node == nullptr)
@@ -137,9 +147,6 @@ bool InputHandler::RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_eff
 
     // Always forward the combined state (both weak and strong) so GDScript
     // sees a single coherent view per port regardless of which effect changed.
-    uint16_t weak   = self->m_rumble_weak.count(port)   ? self->m_rumble_weak[port]   : 0;
-    uint16_t strong = self->m_rumble_strong.count(port) ? self->m_rumble_strong[port] : 0;
-
     instance->m_libretro_node->call_deferred(
         "emit_signal",
         "rumble_state_changed",
@@ -152,32 +159,39 @@ bool InputHandler::RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_eff
 
 void InputHandler::SetJoypadButtonStates(uint32_t port, uint16_t states)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_joypad_buttons[port] = states;
 }
 uint16_t InputHandler::GetJoypadButtonStates(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_joypad_buttons[port];
 }
 
 void InputHandler::SetMousePosition(uint32_t port, int16_t x, int16_t y)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_mouse_x[port] += x;
     m_mouse_y[port] += y;
 }
 void InputHandler::SetMouseButtons(uint32_t port, uint32_t buttons)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_mouse_buttons[port] = buttons;
 }
 uint16_t InputHandler::GetMouseX(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_mouse_x[port];
 }
 uint16_t InputHandler::GetMouseY(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_mouse_y[port];
 }
 uint32_t InputHandler::GetMouseButtons(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_mouse_buttons[port];
 }
 
@@ -185,16 +199,19 @@ void InputHandler::SetKeyState(uint32_t port, uint32_t keycode, bool down)
 {
     if (keycode >= RETROK_LAST)
         return;
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_key_state[port & 3].set(keycode, down);
 }
 
 bool InputHandler::GetKeyState(uint32_t port, uint32_t keycode) const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return keycode < RETROK_LAST && m_key_state[port & 3].test(keycode);
 }
 
 uint16_t InputHandler::GetKeyModifiers(uint32_t port) const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     const auto& ks = m_key_state[port & 3];
     uint16_t mods = 0;
     if (ks.test(RETROK_LSHIFT) || ks.test(RETROK_RSHIFT)) mods |= RETROKMOD_SHIFT;
@@ -208,42 +225,51 @@ uint16_t InputHandler::GetKeyModifiers(uint32_t port) const
 
 void InputHandler::SetLightgunPosition(uint32_t port, int16_t x, int16_t y)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_lightgun_x[port] = x;
     m_lightgun_y[port] = y;
 }
 void InputHandler::SetLightgunIsOffscreen(uint32_t port, int16_t is_offscreen)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_lightgun_is_offscreen[port] = is_offscreen;
 }
 void InputHandler::SetLightgunButtons(uint32_t port, uint32_t buttons)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_lightgun_buttons[port] = buttons;
 }
 int16_t InputHandler::GetLightgunX(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_lightgun_x[port];
 }
 int16_t InputHandler::GetLightgunY(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_lightgun_y[port];
 }
 int16_t InputHandler::GetLightgunIsOffscreen(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_lightgun_is_offscreen[port];
 }
 uint32_t InputHandler::GetLightgunButtons(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_lightgun_buttons[port];
 }
 
 void InputHandler::SetPointerPosition(uint32_t port, int16_t x, int16_t y)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     auto& p = m_pointers[port][0];
     p.x = x;
     p.y = y;
 }
 void InputHandler::SetPointerPressed(uint32_t port, int16_t pressed)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_pointers[port][0].pressed = pressed;
 }
 void InputHandler::SetPointerIndexState(uint32_t port, uint32_t index, int16_t x, int16_t y, bool pressed)
@@ -251,6 +277,7 @@ void InputHandler::SetPointerIndexState(uint32_t port, uint32_t index, int16_t x
     if (index >= MAX_POINTERS)
         return;
 
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     auto& p = m_pointers[port][index];
     p.x = x;
     p.y = y;
@@ -258,6 +285,7 @@ void InputHandler::SetPointerIndexState(uint32_t port, uint32_t index, int16_t x
 }
 void InputHandler::ClearPointersFrom(uint32_t port, uint32_t index)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     auto it = m_pointers.find(port);
     if (it == m_pointers.end())
         return;
@@ -267,18 +295,22 @@ void InputHandler::ClearPointersFrom(uint32_t port, uint32_t index)
 }
 int16_t InputHandler::GetPointerX(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_pointers[port][0].x;
 }
 int16_t InputHandler::GetPointerY(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_pointers[port][0].y;
 }
 int16_t InputHandler::GetPointerPressed(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_pointers[port][0].pressed;
 }
 int16_t InputHandler::GetPointerCount(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     int16_t count = 0;
     for (const auto& p : m_pointers[port])
         count += (p.pressed != 0) ? 1 : 0;
@@ -287,39 +319,51 @@ int16_t InputHandler::GetPointerCount(uint32_t port)
 
 void InputHandler::SetAnalogLeft(uint32_t port, int16_t x, int16_t y)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_analog_left_x[port] = x;
     m_analog_left_y[port] = y;
 }
 void InputHandler::SetAnalogRight(uint32_t port, int16_t x, int16_t y)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_analog_right_x[port] = x;
     m_analog_right_y[port] = y;
 }
 int16_t InputHandler::GetAnalogLeftX(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_analog_left_x[port];
 }
 int16_t InputHandler::GetAnalogLeftY(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_analog_left_y[port];
 }
 int16_t InputHandler::GetAnalogRightX(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_analog_right_x[port];
 }
 int16_t InputHandler::GetAnalogRightY(uint32_t port)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return m_analog_right_y[port];
 }
 
 void InputHandler::CallKeyboardEventCallback(bool down, uint32_t keycode, uint32_t character, uint16_t keyModifiers)
 {
-    if (m_keyboard_event)
-        m_keyboard_event(down, keycode, character, keyModifiers);
+    retro_keyboard_event_t callback = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+        callback = m_keyboard_event;
+    }
+    if (callback)
+        callback(down, keycode, character, keyModifiers);
 }
 
 bool InputHandler::SetInputDescriptors(const retro_input_descriptor* input_descriptors)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_devices.clear();
 
     if (!input_descriptors)
@@ -343,6 +387,7 @@ bool InputHandler::SetInputDescriptors(const retro_input_descriptor* input_descr
 
 bool InputHandler::SetControllerInfo(const retro_controller_info* controller_info)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_controllers.clear();
 
     if (!controller_info)
@@ -391,6 +436,7 @@ bool InputHandler::GetSensorInterface(retro_sensor_interface* sensor_interface)
 
 void InputHandler::SetSensorAccel(uint32_t port, float x, float y, float z)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_sensor_accel_x[port] = x;
     m_sensor_accel_y[port] = y;
     m_sensor_accel_z[port] = z;
@@ -399,9 +445,43 @@ void InputHandler::SetSensorAccel(uint32_t port, float x, float y, float z)
 /// Angular velocity in radians/second about the device's own axes.
 void InputHandler::SetSensorGyro(uint32_t port, float x, float y, float z)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_sensor_gyro_x[port] = x;
     m_sensor_gyro_y[port] = y;
     m_sensor_gyro_z[port] = z;
+}
+
+bool InputHandler::IsSensorEnabled(uint32_t port) const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+    auto it = m_sensor_accel_enabled.find(port);
+    return it != m_sensor_accel_enabled.end() && it->second;
+}
+
+bool InputHandler::IsGyroEnabled(uint32_t port) const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+    auto it = m_sensor_gyro_enabled.find(port);
+    return it != m_sensor_gyro_enabled.end() && it->second;
+}
+
+std::vector<std::vector<InputHandler::RetroController>> InputHandler::GetControllers() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+    return m_controllers;
+}
+
+void InputHandler::SetPortDevice(uint32_t port, uint32_t device)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+    m_port_devices[port] = device;
+}
+
+uint32_t InputHandler::GetPortDevice(uint32_t port) const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
+    auto it = m_port_devices.find(port);
+    return it != m_port_devices.end() ? it->second : RETRO_DEVICE_JOYPAD;
 }
 
 /// Emu thread (called by the core). Accelerometer and gyroscope are tracked
@@ -412,23 +492,25 @@ bool InputHandler::SensorSetStateCallback(unsigned port, retro_sensor_action act
     if (!instance || !instance->m_input_handler)
         return false;
 
+    InputHandler& handler = *instance->m_input_handler;
+    std::lock_guard<std::recursive_mutex> lock(handler.m_state_mutex);
     switch (action)
     {
     case RETRO_SENSOR_ACCELEROMETER_ENABLE:
-        instance->m_input_handler->m_sensor_accel_enabled[port] = true;
+        handler.m_sensor_accel_enabled[port] = true;
         Log("Sensor: accelerometer enabled on port " + std::to_string(port) +
             " rate=" + std::to_string(rate));
         return true;
     case RETRO_SENSOR_ACCELEROMETER_DISABLE:
-        instance->m_input_handler->m_sensor_accel_enabled[port] = false;
+        handler.m_sensor_accel_enabled[port] = false;
         return true;
     case RETRO_SENSOR_GYROSCOPE_ENABLE:
-        instance->m_input_handler->m_sensor_gyro_enabled[port] = true;
+        handler.m_sensor_gyro_enabled[port] = true;
         Log("Sensor: gyroscope enabled on port " + std::to_string(port) +
             " rate=" + std::to_string(rate));
         return true;
     case RETRO_SENSOR_GYROSCOPE_DISABLE:
-        instance->m_input_handler->m_sensor_gyro_enabled[port] = false;
+        handler.m_sensor_gyro_enabled[port] = false;
         return true;
     default:
         return false;
@@ -443,6 +525,7 @@ float InputHandler::SensorGetInputCallback(unsigned port, unsigned id)
         return 0.0f;
 
     auto& handler = *instance->m_input_handler;
+    std::lock_guard<std::recursive_mutex> lock(handler.m_state_mutex);
     switch (id)
     {
     case RETRO_SENSOR_ACCELEROMETER_X:
@@ -515,12 +598,14 @@ bool InputHandler::SetKeyboardEventCallback(const retro_keyboard_callback* keybo
         return false;
     }
 
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     m_keyboard_event = keyboard_callback->callback;
     return true;
 }
 
 int16_t InputHandler::ProcessJoypadDevice(uint32_t port, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK)
         return m_joypad_buttons[port];
     return m_joypad_buttons[port] & (1 << id);
@@ -528,6 +613,7 @@ int16_t InputHandler::ProcessJoypadDevice(uint32_t port, uint32_t id)
 
 int16_t InputHandler::ProcessMouseDevice(uint32_t port, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     switch (id)
     {
     case RETRO_DEVICE_ID_MOUSE_X:
@@ -551,11 +637,13 @@ int16_t InputHandler::ProcessMouseDevice(uint32_t port, uint32_t id)
 
 int16_t InputHandler::ProcessKeyboardDevice(uint32_t port, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     return GetKeyState(port, id) ? 1 : 0;
 }
 
 int16_t InputHandler::ProcessLightgunDevice(uint32_t port, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     switch (id)
     {
         case RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X:
@@ -571,6 +659,7 @@ int16_t InputHandler::ProcessLightgunDevice(uint32_t port, uint32_t id)
 
 int16_t InputHandler::ProcessPointerDevice(uint32_t port, uint32_t index, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     // COUNT is a property of the whole device, so it ignores the index: cores
     // read it at index 0 and would otherwise see nothing for the others.
     if (id == RETRO_DEVICE_ID_POINTER_COUNT)
@@ -595,6 +684,7 @@ int16_t InputHandler::ProcessPointerDevice(uint32_t port, uint32_t index, uint32
 
 int16_t InputHandler::ProcessAnalogDevice(uint32_t port, uint32_t index, uint32_t id)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
     switch (index)
     {
         case RETRO_DEVICE_INDEX_ANALOG_LEFT:

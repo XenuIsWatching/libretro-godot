@@ -84,6 +84,29 @@ private:
     std::string m_value;
 };
 
+/// Update keyboard poll state and invoke the core's event callback between
+/// frames. Calling the callback directly from Godot's main thread can re-enter
+/// a core while retro_run is active.
+class EmuThreadCommandKeyboardEvent : public EmuThreadCommand
+{
+public:
+    EmuThreadCommandKeyboardEvent(uint32_t port, uint32_t keycode, bool down, uint32_t character)
+        : m_port(port)
+        , m_keycode(keycode)
+        , m_down(down)
+        , m_character(character)
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    uint32_t m_port;
+    uint32_t m_keycode;
+    bool m_down;
+    uint32_t m_character;
+};
+
 /// Hot-swap the SRAM backing file mid-run (a physical memory-card swap):
 /// flush the old file, point at the new path, load its content into SAVE_RAM.
 class EmuThreadCommandSetSram : public EmuThreadCommand

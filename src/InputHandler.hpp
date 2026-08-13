@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <array>
 #include <bitset>
+#include <mutex>
 
 #include <libretro.h>
 
@@ -142,29 +143,22 @@ public:
     bool GetSensorInterface(retro_sensor_interface* sensor_interface);
     void SetSensorAccel(uint32_t port, float x, float y, float z);
     void SetSensorGyro(uint32_t port, float x, float y, float z);
-    bool IsSensorEnabled(uint32_t port) const
-    {
-        auto it = m_sensor_accel_enabled.find(port);
-        return it != m_sensor_accel_enabled.end() && it->second;
-    }
-    bool IsGyroEnabled(uint32_t port) const
-    {
-        auto it = m_sensor_gyro_enabled.find(port);
-        return it != m_sensor_gyro_enabled.end() && it->second;
-    }
+    bool IsSensorEnabled(uint32_t port) const;
+    bool IsGyroEnabled(uint32_t port) const;
 
-    const std::vector<std::vector<RetroController>>& GetControllers() const { return m_controllers; }
+    std::vector<std::vector<RetroController>> GetControllers() const;
     /// Track which device type is active on each port (defaults to RETRO_DEVICE_JOYPAD).
-    void SetPortDevice(uint32_t port, uint32_t device) { m_port_devices[port] = device; }
-    uint32_t GetPortDevice(uint32_t port) const
-    {
-        auto it = m_port_devices.find(port);
-        return it != m_port_devices.end() ? it->second : RETRO_DEVICE_JOYPAD;
-    }
+    void SetPortDevice(uint32_t port, uint32_t device);
+    uint32_t GetPortDevice(uint32_t port) const;
     bool GetInputDeviceCapabilities(uint32_t* capabilities);
     bool GetInputBitmasks(bool* available);
 
 private:
+    // Main-thread device updates, emulation-thread polling, rollback restores,
+    // and callbacks from core-created threads all share this state. Recursive
+    // locking lets Process* helpers reuse the public getters safely.
+    mutable std::recursive_mutex m_state_mutex;
+
     std::unordered_map<uint32_t, uint16_t> m_joypad_buttons;
 
     std::unordered_map<uint32_t, int16_t> m_mouse_x;
