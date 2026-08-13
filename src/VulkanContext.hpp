@@ -174,6 +174,9 @@ private:
     void* m_mediandk       = nullptr;  // libmediandk.so handle
     void* m_android_reader = nullptr;  // AImageReader* backing m_surface
 #endif
+#ifdef __APPLE__
+    void* m_metal_layer = nullptr;  // retained CAMetalLayer backing m_surface
+#endif
 
     std::mutex m_queue_mutex;
 

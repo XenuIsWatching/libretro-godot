@@ -65,7 +65,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 
     PackedByteArray pixel_data;
 
-#if defined(_WIN32) || defined(__ANDROID__) || defined(__linux__)
+#if defined(_WIN32) || defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__)
     if (data == RETRO_HW_FRAME_BUFFER_VALID)
     {
         pixel_data.resize((int64_t)width * height * 4);
@@ -91,6 +91,10 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 #endif
         else
         {
+#ifdef __APPLE__
+            LogError("Hardware frame arrived without a Vulkan context on macOS.");
+            return;
+#else
             // OpenGL path: read pixels from the current framebuffer.
             //
             // Deliberately NOT followed by a buffer swap. get_current_framebuffer()
@@ -102,6 +106,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             // rectangles, so its picture would alternate between two half-stale
             // images.
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
+#endif
         }
 
         // Vulkan/D3D images are top-down; GL framebuffers are bottom-up.
@@ -761,14 +766,6 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
         return false;
     }
 
-#ifdef __APPLE__
-    // The macOS build intentionally ships no SDL3 or Vulkan/MoltenVK runtime.
-    // Reject hardware contexts during negotiation so a core can fall back to
-    // its software renderer instead of accepting a callback we cannot service.
-    LogError("Hardware rendering is unavailable on macOS");
-    return false;
-#endif
-
     Log("Setting hardware render callback...");
 
     Log("Context type: " + std::to_string(hw_render_callback->context_type));
@@ -776,11 +773,11 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
     bool supported = false;
     switch (hw_render_callback->context_type)
     {
-#ifdef __ANDROID__
+#if defined(__ANDROID__)
     case RETRO_HW_CONTEXT_OPENGLES2:
     case RETRO_HW_CONTEXT_OPENGLES3:
     case RETRO_HW_CONTEXT_OPENGLES_VERSION:
-#else
+#elif defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     case RETRO_HW_CONTEXT_OPENGL:
     case RETRO_HW_CONTEXT_OPENGL_CORE:
 #endif
@@ -822,7 +819,11 @@ bool VideoHandler::GetPreferredHwRender(retro_hw_context_type* hw_context_type) 
         return false;
 
 #ifdef __APPLE__
-    return false;
+    // Metal is not a libretro context type. MoltenVK is the native macOS
+    // hardware path, so never advertise a preference that this build cannot
+    // create even if another platform left a process-wide override behind.
+    *hw_context_type = RETRO_HW_CONTEXT_VULKAN;
+    return true;
 #endif
 
     // Vulkan unless GDScript asked for something else. Cores that support the

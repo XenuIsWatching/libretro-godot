@@ -20,6 +20,11 @@
 #include "DynLib.hpp"
 #endif
 
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#include "MacMetalLayer.hpp"
+#endif
+
 // Flip this to 1 and rebuild to opt back into Vulkan validation. Off by
 // default: the editor process is always debug-tagged, so OS::is_debug_build()
 // below cannot tell "editor Play" apart from "real debug testing", and gating
@@ -145,10 +150,70 @@ void VulkanContext::s_SetSignalSemaphore(void* handle, VkSemaphore semaphore)
 // Instance/device creation wrappers (passed to core's negotiation interface)
 // ---------------------------------------------------------------------------
 
+static bool s_NamePresent(const std::vector<const char*>& names, const char* wanted)
+{
+    for (const char* name : names)
+        if (name && std::strcmp(name, wanted) == 0)
+            return true;
+    return false;
+}
+
+static void s_AppendNameUnique(std::vector<const char*>& names, const char* name)
+{
+    if (!s_NamePresent(names, name))
+        names.push_back(name);
+}
+
+static bool s_InstanceSupportsExtension(const char* extension)
+{
+    uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
+        return false;
+
+    std::vector<VkExtensionProperties> props(count);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data()) != VK_SUCCESS)
+        return false;
+    for (const VkExtensionProperties& p : props)
+        if (std::strcmp(p.extensionName, extension) == 0)
+            return true;
+    return false;
+}
+
 static VkInstance s_CreateInstanceWrapper(void* /*opaque*/, const VkInstanceCreateInfo* ci)
 {
     VkInstance inst = VK_NULL_HANDLE;
+    if (!ci)
+        return inst;
+
+#ifdef __APPLE__
+    // MoltenVK exposes a portability implementation rather than a conformant
+    // native Vulkan device. A v2 core controls VkInstance creation, so patch its
+    // request here as well as the frontend-created path below; otherwise the
+    // instance succeeds but enumerates no physical devices.
+    std::vector<const char*> exts;
+    if (ci->ppEnabledExtensionNames)
+        exts.assign(ci->ppEnabledExtensionNames,
+                    ci->ppEnabledExtensionNames + ci->enabledExtensionCount);
+
+    auto add_if_supported = [&exts](const char* name) {
+        if (s_InstanceSupportsExtension(name))
+            s_AppendNameUnique(exts, name);
+    };
+    add_if_supported(VK_KHR_SURFACE_EXTENSION_NAME);
+    add_if_supported(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+
+    VkInstanceCreateInfo patched = *ci;
+    if (s_InstanceSupportsExtension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
+    {
+        s_AppendNameUnique(exts, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        patched.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+    patched.enabledExtensionCount = static_cast<uint32_t>(exts.size());
+    patched.ppEnabledExtensionNames = exts.data();
+    vkCreateInstance(&patched, nullptr, &inst);
+#else
     vkCreateInstance(ci, nullptr, &inst);
+#endif
     return inst;
 }
 
@@ -184,14 +249,28 @@ static bool s_DeviceSupportsFault(VkPhysicalDevice gpu)
 static VkDevice s_CreateDeviceWrapper(VkPhysicalDevice gpu, void* /*opaque*/, const VkDeviceCreateInfo* ci)
 {
     VkDevice dev = VK_NULL_HANDLE;
+    if (!ci)
+        return dev;
 
-    if (s_DeviceSupportsFault(gpu))
+    std::vector<const char*> exts;
+    if (ci->ppEnabledExtensionNames)
+        exts.assign(ci->ppEnabledExtensionNames,
+                    ci->ppEnabledExtensionNames + ci->enabledExtensionCount);
+
+#ifdef __APPLE__
+    // The portability subset must be enabled when the selected device exposes
+    // it; omitting an advertised portability subset makes device creation
+    // non-conformant.
+    constexpr const char* portability_subset = "VK_KHR_portability_subset";
+    if (s_DeviceSupportsExtension(gpu, portability_subset))
+        s_AppendNameUnique(exts, portability_subset);
+#endif
+
+    const bool inject_fault = s_DeviceSupportsFault(gpu)
+        && !s_NamePresent(exts, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    if (inject_fault)
     {
-        std::vector<const char*> exts;
-        if (ci->ppEnabledExtensionNames)
-            exts.assign(ci->ppEnabledExtensionNames,
-                        ci->ppEnabledExtensionNames + ci->enabledExtensionCount);
-        exts.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        s_AppendNameUnique(exts, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 
         // The extension does nothing unless the feature is enabled too.
         VkPhysicalDeviceFaultFeaturesEXT fault{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
@@ -211,9 +290,20 @@ static VkDevice s_CreateDeviceWrapper(VkPhysicalDevice gpu, void* /*opaque*/, co
         LogWarning("VulkanContext: device creation with VK_EXT_device_fault failed; "
                    "retrying without it.");
         dev = VK_NULL_HANDLE;
+        for (auto it = exts.begin(); it != exts.end(); ++it)
+        {
+            if (std::strcmp(*it, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0)
+            {
+                exts.erase(it);
+                break;
+            }
+        }
     }
 
-    vkCreateDevice(gpu, ci, nullptr, &dev);
+    VkDeviceCreateInfo patched = *ci;
+    patched.enabledExtensionCount = static_cast<uint32_t>(exts.size());
+    patched.ppEnabledExtensionNames = exts.data();
+    vkCreateDevice(gpu, &patched, nullptr, &dev);
     return dev;
 }
 
@@ -319,6 +409,14 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
 #endif
 #ifdef __ANDROID__
         want(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME, true);
+#endif
+#ifdef __APPLE__
+        want(VK_EXT_METAL_SURFACE_EXTENSION_NAME, true);
+        if (supported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
+        {
+            want(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, true);
+            ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
 #endif
         want("VK_KHR_get_physical_device_properties2", false);
         want("VK_KHR_get_surface_capabilities2", false);
@@ -555,6 +653,42 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             }
         }
     }
+#elif defined(__APPLE__)
+    {
+        m_metal_layer = CreateMacMetalLayer(m_frame_w, m_frame_h);
+        if (!m_metal_layer)
+        {
+            LogWarning("VulkanContext: could not create a CAMetalLayer; no VkSurfaceKHR.");
+        }
+        else
+        {
+            auto createSurface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(
+                vkGetInstanceProcAddr(m_instance, "vkCreateMetalSurfaceEXT"));
+            if (!createSurface)
+            {
+                LogWarning("VulkanContext: vkCreateMetalSurfaceEXT unavailable.");
+            }
+            else
+            {
+                VkMetalSurfaceCreateInfoEXT sci{ VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT };
+                sci.pLayer = static_cast<const CAMetalLayer*>(m_metal_layer);
+                VkResult r = createSurface(m_instance, &sci, nullptr, &m_surface);
+                if (r != VK_SUCCESS)
+                    LogWarning("VulkanContext: vkCreateMetalSurfaceEXT failed: "
+                               + std::to_string(r));
+                else
+                {
+                    LogOK("VulkanContext: Metal VkSurfaceKHR created at "
+                        + std::to_string(m_frame_w) + "x" + std::to_string(m_frame_h) + ".");
+                    VkSurfaceCapabilitiesKHR caps{};
+                    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_gpu, m_surface, &caps) == VK_SUCCESS)
+                        Log("VulkanContext: surface extent "
+                            + std::to_string(caps.currentExtent.width) + "x"
+                            + std::to_string(caps.currentExtent.height));
+                }
+            }
+        }
+    }
 #endif
 
     // ---- Create logical device ----
@@ -580,6 +714,12 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
             // RetroArch always passes a zeroed struct plus VK_KHR_swapchain, so
             // match that exactly.
             std::vector<const char*> device_extensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+#ifdef __APPLE__
+            constexpr const char* portability_subset = "VK_KHR_portability_subset";
+            if (s_DeviceSupportsExtension(m_gpu, portability_subset))
+                device_extensions.push_back(portability_subset);
+#endif
 
             // VK_EXT_device_fault, so a lost device can say what killed it. This
             // list is the only way in on the v1 path: the core builds its own
@@ -636,6 +776,12 @@ bool VulkanContext::Init(retro_hw_render_context_negotiation_interface_vulkan* n
     else
     {
         std::vector<const char*> fallback_extensions;
+
+#ifdef __APPLE__
+        constexpr const char* portability_subset = "VK_KHR_portability_subset";
+        if (s_DeviceSupportsExtension(m_gpu, portability_subset))
+            fallback_extensions.push_back(portability_subset);
+#endif
 
         if (m_surface != VK_NULL_HANDLE)
         {
@@ -849,6 +995,16 @@ void VulkanContext::Destroy()
     {
         DynLib_Close(m_mediandk);
         m_mediandk = nullptr;
+    }
+#endif
+
+#ifdef __APPLE__
+    // Strictly after vkDestroySurfaceKHR: MoltenVK retains the layer through
+    // the surface and may still refer to it while destroying the surface.
+    if (m_metal_layer)
+    {
+        DestroyMacMetalLayer(m_metal_layer);
+        m_metal_layer = nullptr;
     }
 #endif
 

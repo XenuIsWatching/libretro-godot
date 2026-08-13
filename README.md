@@ -7,7 +7,8 @@ Originally forked from [Skurdt/SK.Libretro.Godot](https://github.com/Skurdt/SK.L
 ## Prerequisites
 
 - **SCons**: build system
-- **MSVC** (Windows), **GCC/Clang** (Linux), or **Android NDK r27d+** (Android/Quest)
+- **MSVC** (Windows), **GCC/Clang** (Linux), **Xcode command-line tools** (macOS),
+  or **Android NDK r27d+** (Android/Quest)
 - **Python 3**: required by SCons
 - **Vulkan loader, SDL3, OpenGL** (Linux): linked by soname at build time
   (`libvulkan.so.1`, `libSDL3.so.0`, `libGL.so.1`); these ship with the distro's Vulkan
@@ -72,6 +73,21 @@ Hz: scalar 33.5 µs/batch, `HAVE_NEON` alone 33.1 µs (i.e. unchanged), both def
 
 Do **not** define `HAVE_ARM_NEON_ASM_OPTIMIZATIONS`. That selects
 `sinc_resampler_neon.S`, which is ARMv7 assembly and cannot assemble for arm64.
+
+### macOS (arm64 or x86_64)
+
+```bash
+scons platform=macos arch=arm64 target=template_debug macos_deployment_target=13.0
+scons platform=macos arch=x86_64 target=template_release macos_deployment_target=13.0
+```
+
+Vulkan hardware rendering runs through the MoltenVK copy already embedded in
+Godot's macOS executable. The extension creates a fixed-size `CAMetalLayer` for
+cores that require a surface and uses the same Vulkan image readback path as the
+other platforms. The pinned official universal MoltenVK dylib is retained in
+`external/MoltenVK/` for provenance and standalone diagnostics, but is not loaded
+into Godot: loading a second MoltenVK runtime duplicates Objective-C classes and
+can crash the process.
 
 ### Output
 
@@ -165,6 +181,7 @@ covers **hardware**-render support:
 | Windows | x86_64 | MSVC (C++latest) | Vulkan + OpenGL (SDL3) |
 | Linux | x86_64 | GCC/Clang (C++20) | Vulkan + OpenGL (SDL3) |
 | Android | arm64 | Clang/NDK (C++20) | Vulkan + OpenGL ES 3.0 (EGL) |
+| macOS | arm64 / x86_64 | Apple Clang (C++20) | Vulkan (MoltenVK/Metal) |
 
 ## Dependencies
 
@@ -172,6 +189,8 @@ All dependencies are included in `external/` or as submodules:
 
 - **godot-cpp** (submodule, 4.5 branch): Godot C++ bindings
 - **SDL3**: DLL loading and HW render context on Windows
+- **MoltenVK**: Vulkan-on-Metal runtime embedded by Godot on macOS; the pinned
+  upstream universal dylib and Apache-2.0 licence are under `external/MoltenVK/`
 - **libretro-common**: VFS, audio conversion, pixel format conversion, and the sinc
   audio resampler (core rate → device mix rate)
 - **moodycamel::ReaderWriterQueue**: Lock-free SPSC queue for cross-thread communication
@@ -183,6 +202,7 @@ and (c) 2025 Skurdt for the SK.Libretro.Godot code this was forked from, whose n
 is retained as the license requires.
 
 Bundled dependencies keep their own licenses: SDL3 (zlib, `external/SDL3/LICENSE.txt`),
+MoltenVK (Apache-2.0, `external/MoltenVK/LICENSE`),
 godot-cpp (MIT), vulkan-headers (Apache-2.0 OR MIT, see its `LICENSES/`), and
 libretro-common, which carries no top-level license file; each source file states its
 own terms in its header (MIT, "The following license statement only applies to this

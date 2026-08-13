@@ -111,20 +111,23 @@ if is_linux:
     env.Append(LIBPATH=["external/SDL3/lib/linux-x64"])
 
 if is_macos:
-    # macOS currently supports the software-frame path. Vulkan would require a
-    # packaged MoltenVK loader and OpenGL would require a packaged SDL3 runtime;
-    # neither is vendored, so do not advertise either hardware path here.
     env.Append(CXXFLAGS=["-std=c++20"])
+    # Godot's macOS executable already embeds MoltenVK and exports its Vulkan
+    # entry points. Loading a second dylib copy into that process duplicates
+    # MoltenVK's Objective-C classes, which Apple's runtime explicitly warns can
+    # cause spurious casts and crashes. Bind the Vulkan calls to the host at load
+    # time instead. The official dylib remains vendored for provenance and
+    # standalone diagnostics, but is deliberately not a GDExtension dependency.
+    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup",
+                          "-framework", "Metal", "-framework", "QuartzCore"])
 
 # Vulkan headers (bundled submodule, used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])
 
 sources = Glob("src/*.cpp")
 if is_macos:
-    # There is no bundled Vulkan/MoltenVK loader or SDL3 runtime on macOS yet.
-    # Keep the software-frame frontend usable without leaving unresolved Vulkan
-    # symbols in the dylib; hardware contexts fail cleanly through this stub.
-    sources.remove(File("src/VulkanContext.cpp"))
+    sources.extend(Glob("src/*.mm"))
+    sources.remove(File("src/VulkanContextStub.cpp"))
 sources.extend(Glob("external/libretro-common/compat/*.c"))
 sources.remove(File("external/libretro-common/compat/compat_ifaddrs.c"))
 sources.extend(Glob("external/libretro-common/encodings/*.c"))
