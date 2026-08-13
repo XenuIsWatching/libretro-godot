@@ -57,6 +57,9 @@ public:
 private:
     std::string m_name;
     std::string m_path;
+    // Empty until the installed core has been copied successfully. Unload must
+    // never remove m_path while it still names the user's installed core.
+    std::string m_temporary_path;
     void* m_handle = nullptr;
     bool m_supports_no_game = false;
     bool m_need_fullpath = false;

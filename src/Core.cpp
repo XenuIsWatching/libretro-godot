@@ -86,11 +86,16 @@ bool Core::Load(CallbackTrampolines* trampolines)
     if (!std::filesystem::copy_file(m_path, temp_path, std::filesystem::copy_options::overwrite_existing, copy_ec) || copy_ec)
     {
         LogError("Failed to copy core file: " + m_path + " to " + temp_path.string() + " - " + copy_ec.message());
+        // copy_file is permitted to leave a partial destination on failure.
+        std::error_code remove_ec;
+        std::filesystem::remove(temp_path, remove_ec);
         return false;
     }
 
-    m_path = temp_path.string();
+    m_temporary_path = temp_path.string();
+    m_path = m_temporary_path;
     std::replace(m_path.begin(), m_path.end(), '\\', '/');
+    m_temporary_path = m_path;
 
     if (!LoadHandle())
         return false;
@@ -151,9 +156,13 @@ void Core::Unload()
         m_handle = nullptr;
     }
 
-    if (std::filesystem::is_regular_file(m_path))
-        if (!std::filesystem::remove(m_path))
-            LogError("Core file not found for removal: " + m_path);
+    if (!m_temporary_path.empty())
+    {
+        std::error_code remove_ec;
+        if (!std::filesystem::remove(m_temporary_path, remove_ec) && remove_ec)
+            LogError("Failed to remove temporary core file: " + m_temporary_path + " - " + remove_ec.message());
+        m_temporary_path.clear();
+    }
 }
 
 const std::string& Core::GetName() const
