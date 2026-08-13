@@ -337,13 +337,18 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
                 + " Hz -> " + std::to_string(static_cast<int>(m_mix_rate)) + " Hz, voices "
                 + std::to_string(m_voice_l) + "/" + std::to_string(m_voice_r));
             m_sink_ready.store(true, std::memory_order_release);
-            m_accept_audio.store(m_playing.load(std::memory_order_relaxed), std::memory_order_release);
+            m_accept_audio.store(
+                m_playing.load(std::memory_order_relaxed) && m_audio_sample_rate > 0.0,
+                std::memory_order_release);
             return;
         }
     }
 
     m_audio_stream_generator.instantiate();
-    m_audio_stream_generator->set_mix_rate(m_audio_sample_rate);
+    // Silent cores such as 2048 legitimately declare 0 Hz. Give the dormant
+    // generator a valid rate so a later SET_SYSTEM_AV_INFO can enable it.
+    m_audio_stream_generator->set_mix_rate(
+        m_audio_sample_rate > 0.0 ? m_audio_sample_rate : m_mix_rate);
     m_audio_stream_generator->set_buffer_length(m_audio_buffer_capacity_sec);
 
     if (!m_audio_stream_player)
@@ -363,9 +368,10 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
     }
     m_sink_ready.store(true, std::memory_order_release);
     const bool playing = m_playing.load(std::memory_order_relaxed);
-    if (!playing)
+    if (!playing || m_audio_sample_rate <= 0.0)
         m_audio_stream_player->stop();
-    m_accept_audio.store(playing, std::memory_order_release);
+    m_accept_audio.store(playing && m_audio_sample_rate > 0.0,
+                         std::memory_order_release);
 }
 
 bool AudioHandler::ReinitSampleRate(double sample_rate)
@@ -375,6 +381,31 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
 
     if (!m_sink_ready.load(std::memory_order_relaxed))
         return false;
+
+    if (sample_rate == 0.0)
+    {
+        // No-audio mode is valid libretro timing (the official 2048 core uses
+        // it). Preserve the configured backend for a later nonzero rate, but
+        // stop/flush it so stale samples cannot pace or sound after the change.
+        if (m_use_sdk && m_mx && m_voice_l >= 0)
+        {
+            m_mx->call("flush_voice", m_voice_l);
+            if (m_voice_r >= 0)
+                m_mx->call("flush_voice", m_voice_r);
+        }
+        else if (m_audio_stream_player)
+        {
+            m_audio_stream_player->stop();
+        }
+        m_audio_sample_rate = 0.0;
+        m_frames_produced.store(0, std::memory_order_relaxed);
+        m_audio_buffer_occupancy.store(0, std::memory_order_relaxed);
+        m_last_brake_ms.store(0.0, std::memory_order_relaxed);
+        m_audio_buffer_total_frames = 0;
+        m_in_float.clear();
+        m_out_float.clear();
+        return true;
+    }
 
     if (m_use_sdk)
     {
@@ -458,7 +489,7 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
     m_audio_buffer_total_frames = 0;
     m_in_float.clear();
     m_out_float.clear();
-    m_accept_audio.store(m_playing.load(std::memory_order_relaxed),
+    m_accept_audio.store(m_playing.load(std::memory_order_relaxed) && sample_rate > 0.0,
                          std::memory_order_release);
     return true;
 }
@@ -524,7 +555,8 @@ void AudioHandler::SetPlaying(bool playing)
             if (m_voice_r >= 0)
                 m_mx->call("flush_voice", m_voice_r);
         }
-        if (playing && m_sink_ready.load(std::memory_order_relaxed) &&
+        if (playing && m_audio_sample_rate > 0.0 &&
+            m_sink_ready.load(std::memory_order_relaxed) &&
             m_mx && m_voice_l >= 0)
             m_accept_audio.store(true, std::memory_order_release);
         return;
@@ -532,6 +564,11 @@ void AudioHandler::SetPlaying(bool playing)
 
     if (!m_audio_stream_player)
         return;
+    if (playing && m_audio_sample_rate <= 0.0)
+    {
+        m_audio_stream_player->stop();
+        return;
+    }
     if (playing)
     {
         m_audio_stream_player->play();

@@ -1485,7 +1485,7 @@ bool Wrapper::SetSystemAvInfo(const retro_system_av_info* av_info)
             geometry.max_height <= max_dimension &&
             std::isfinite(geometry.aspect_ratio) && geometry.aspect_ratio >= 0.0f &&
             std::isfinite(timing.fps) && timing.fps > 0.0 &&
-            std::isfinite(timing.sample_rate) && timing.sample_rate > 0.0;
+            std::isfinite(timing.sample_rate) && timing.sample_rate >= 0.0;
     };
     if (!valid_av_info(requested))
     {
