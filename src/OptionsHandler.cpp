@@ -9,6 +9,25 @@ using namespace godot;
 
 namespace Xenu
 {
+void OptionsHandler::SetPersistencePath(const std::string& path, bool create_if_missing)
+{
+    m_persistence_path = path;
+    m_create_persistence_if_missing = create_if_missing;
+}
+
+std::string OptionsHandler::ResolvePersistencePath() const
+{
+    if (!m_persistence_path.empty())
+        return m_persistence_path;
+
+    auto* wrapper = Wrapper::GetCurrentThreadWrapper();
+    if (!wrapper || !wrapper->m_core)
+        return {};
+
+    return (std::filesystem::path(wrapper->GetRootDirectory()) / "core_options"
+        / (wrapper->m_core->GetName() + ".opt")).string();
+}
+
 bool OptionsHandler::GetCoreOptionsVersion(uint32_t* version)
 {
     if (!version)
@@ -221,23 +240,13 @@ void OptionsHandler::SerializeToFile()
 {
     Log("SerializeToFile: start");
 
-    auto* wrapper = Wrapper::GetCurrentThreadWrapper();
-    if (!wrapper)
+    const std::string resolved_path = ResolvePersistencePath();
+    if (resolved_path.empty())
     {
-        LogError("SerializeToFile: GetCurrentThreadWrapper() returned null, cannot serialize");
+        LogError("SerializeToFile: no options persistence path");
         return;
     }
-    Log("SerializeToFile: got wrapper, fetching root_directory");
-    const auto& root_directory = wrapper->GetRootDirectory();
-
-    Log("SerializeToFile: root_directory=" + root_directory + ", fetching core_name");
-    if (!wrapper->m_core)
-    {
-        LogError("SerializeToFile: wrapper->m_core is null");
-        return;
-    }
-    const auto& core_name = wrapper->m_core->GetName();
-    std::filesystem::path file_path = std::filesystem::path(root_directory) / "core_options" / (core_name + ".opt");
+    std::filesystem::path file_path(resolved_path);
     
     if (!std::filesystem::is_regular_file(file_path))
     {
@@ -266,19 +275,18 @@ void OptionsHandler::SerializeToFile()
 
 void OptionsHandler::DeserializeFromFile()
 {
-    auto* wrapper = Wrapper::GetCurrentThreadWrapper();
-    if (!wrapper || !wrapper->m_core)
+    const std::string resolved_path = ResolvePersistencePath();
+    if (resolved_path.empty())
     {
-        LogError("DeserializeFromFile: null wrapper or core");
+        LogError("DeserializeFromFile: no options persistence path");
         return;
     }
-    const auto& root_directory = wrapper->GetRootDirectory();
-    const auto& core_name = wrapper->m_core->GetName();
-    std::filesystem::path file_path = std::filesystem::path(root_directory) / "core_options" / (core_name + ".opt");
+    std::filesystem::path file_path(resolved_path);
 
     if (!std::filesystem::is_regular_file(file_path))
     {
-        SerializeToFile();
+        if (m_create_persistence_if_missing)
+            SerializeToFile();
         return;
     }
 

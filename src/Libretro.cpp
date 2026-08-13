@@ -5,6 +5,8 @@
 #include "CoreOptionsPeek.hpp"
 #include "RetroAchievements.hpp"
 
+#include <filesystem>
+
 using namespace godot;
 
 namespace Xenu
@@ -314,6 +316,12 @@ Dictionary Libretro::PeekCoreOptions(const String& root_directory, const String&
 
     // Qualified: the member function name would otherwise hide the free one.
     OptionsHandler options;
+    const std::filesystem::path options_path = std::filesystem::path(
+        std::string(root_directory.utf8().get_data())) / "core_options"
+        / (std::string(core_name.utf8().get_data()) + ".opt");
+    // Peeking may read this core's saved choices, but merely opening the menu
+    // must not create a defaults file or touch another running instance.
+    options.SetPersistencePath(options_path.string(), false);
     if (!Xenu::PeekCoreOptions(core_path, options))
         return result;
 

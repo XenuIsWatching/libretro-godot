@@ -50,6 +50,7 @@ public:
     const std::unordered_map<std::string, OptionDefinition>& GetDefinitions() const { return m_definitions; }
     const std::unordered_map<std::string, std::string>& GetValues() const { return m_variables; }
     void SetVariable(const std::string& key, const std::string& value);
+    void SetPersistencePath(const std::string& path, bool create_if_missing = true);
 
 private:
     static const uint32_t SUPPORTED_CORE_OPTIONS_VERSION = 2;
@@ -60,8 +61,11 @@ private:
     std::unordered_map<std::string, std::string> m_variables = {};
     bool m_variable_update = false;
     retro_core_options_update_display_callback_t m_core_options_update_display_callback = nullptr;
+    std::string m_persistence_path;
+    bool m_create_persistence_if_missing = true;
 
     void SerializeToFile();
     void DeserializeFromFile();
+    std::string ResolvePersistencePath() const;
 };
 }
