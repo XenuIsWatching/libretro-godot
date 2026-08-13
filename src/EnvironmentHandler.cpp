@@ -441,15 +441,8 @@ bool EnvironmentHandler::GetPerfInterface(retro_perf_callback* callback)
 
 bool EnvironmentHandler::SetSystemAvInfo(const retro_system_av_info* av_info)
 {
-    if (!av_info)
-        return true;
-
-    Log("System AV Info: " + std::to_string(av_info->geometry.base_width) + "x" + std::to_string(av_info->geometry.base_height) +
-        " @ " + std::to_string(av_info->geometry.max_width) + "x" + std::to_string(av_info->geometry.max_height) +
-        " (aspect ratio: " + std::to_string(av_info->geometry.aspect_ratio) + ")" +
-        "FPS: " + std::to_string(av_info->timing.fps) + " Sample Rate: " + std::to_string(av_info->timing.sample_rate));
-
-    return true;
+    Wrapper* wrapper = Wrapper::GetCurrentThreadWrapper();
+    return wrapper && wrapper->SetSystemAvInfo(av_info);
 }
 
 bool EnvironmentHandler::SetSubsystemInfo(const retro_subsystem_info* subsystem_info)

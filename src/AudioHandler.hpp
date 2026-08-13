@@ -28,8 +28,12 @@ public:
 
     void Init(float buffer_capacity_sec, double sample_rate);
     void DeInit();
+    /// Change the core rate without replacing the player node or Meta XR voice
+    /// ids. Transactional: failure leaves the previous backend running.
+    bool ReinitSampleRate(double sample_rate);
     void SetPlaying(bool playing);
     void SetAudioStreamPlayer(godot::AudioStreamPlayer3D* player) { m_audio_stream_player = player; }
+    bool IsReady() const { return m_sink_ready.load(std::memory_order_acquire); }
 
     bool SetAudioBufferStatusCallback(const retro_audio_buffer_status_callback* callback);
     bool SetMinimumAudioLatency(const uint32_t* minimum_audio_latency);
@@ -91,8 +95,12 @@ private:
     godot::Ref<godot::AudioStreamGenerator> m_audio_stream_generator = nullptr;
     godot::Ref<godot::AudioStreamGeneratorPlayback> m_audio_stream_generator_playback = nullptr;
     godot::AudioStreamPlayer3D* m_audio_stream_player = nullptr;
-    mutable std::mutex m_sink_mutex;
+    // Audio can arrive from a core-created worker while the main thread changes
+    // the backend. Recursive because batch processing calls the sink helpers.
+    mutable std::recursive_mutex m_sink_mutex;
     std::atomic<bool> m_accept_audio{false};
+    std::atomic<bool> m_sink_ready{false};
+    std::atomic<bool> m_playing{true};
 
     // --- Meta XR Audio path -------------------------------------------------
     godot::Object* m_mx = nullptr;          ///< the MetaXRAudio singleton, or null

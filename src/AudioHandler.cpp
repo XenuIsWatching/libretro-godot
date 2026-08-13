@@ -66,6 +66,9 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
         return frames;
 
     // Emulated-time clock, counted at the core's rate, so before resampling.
+    std::lock_guard<std::recursive_mutex> processing_lock(self->m_sink_mutex);
+    if (!self->m_accept_audio.load(std::memory_order_relaxed))
+        return frames;
     self->m_frames_produced.fetch_add(frames, std::memory_order_relaxed);
 
     // Sink depth drives both the occupancy the core is told about and the rate trim
@@ -139,7 +142,7 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
     if (frames == 0 || !m_accept_audio.load(std::memory_order_acquire))
         return;
 
-    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sink_mutex);
     if (!m_accept_audio.load(std::memory_order_relaxed))
         return;
 
@@ -167,7 +170,7 @@ uint32_t AudioHandler::QueuedFrames() const
 {
     if (!m_accept_audio.load(std::memory_order_acquire))
         return 0;
-    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sink_mutex);
     if (!m_accept_audio.load(std::memory_order_relaxed))
         return 0;
 
@@ -192,7 +195,7 @@ double AudioHandler::MsUntilSinkWantsFrames() const
     if (!m_accept_audio.load(std::memory_order_acquire))
         return 0.0;
 
-    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sink_mutex);
     if (!m_accept_audio.load(std::memory_order_relaxed))
         return 0.0;
 
@@ -246,11 +249,15 @@ uint32_t AudioHandler::EffectiveTotalFrames() const
 void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 {
     m_accept_audio.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> sink_lock(m_sink_mutex);
+    m_sink_ready.store(false, std::memory_order_release);
+    std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
 
     m_audio_buffer_capacity_sec = buffer_capacity_sec;
     m_audio_sample_rate = sample_rate;
     m_frames_produced.store(0, std::memory_order_relaxed);
+    m_audio_buffer_occupancy.store(0, std::memory_order_relaxed);
+    m_last_brake_ms.store(0.0, std::memory_order_relaxed);
+    m_audio_buffer_total_frames = 0;
 
     AudioServer* audio = AudioServer::get_singleton();
     m_mix_rate = audio ? audio->get_mix_rate() : 48000.0;
@@ -329,7 +336,8 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
             Log("AudioHandler: Meta XR Audio, core " + std::to_string(static_cast<int>(m_audio_sample_rate))
                 + " Hz -> " + std::to_string(static_cast<int>(m_mix_rate)) + " Hz, voices "
                 + std::to_string(m_voice_l) + "/" + std::to_string(m_voice_r));
-            m_accept_audio.store(true, std::memory_order_release);
+            m_sink_ready.store(true, std::memory_order_release);
+            m_accept_audio.store(m_playing.load(std::memory_order_relaxed), std::memory_order_release);
             return;
         }
     }
@@ -347,13 +355,120 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
     m_audio_stream_player->play();
 
     m_audio_stream_generator_playback = m_audio_stream_player->get_stream_playback();
-    m_accept_audio.store(true, std::memory_order_release);
+    if (m_audio_stream_generator_playback.is_null())
+    {
+        LogError("AudioHandler: failed to start fallback audio stream");
+        m_audio_stream_player->stop();
+        return;
+    }
+    m_sink_ready.store(true, std::memory_order_release);
+    const bool playing = m_playing.load(std::memory_order_relaxed);
+    if (!playing)
+        m_audio_stream_player->stop();
+    m_accept_audio.store(playing, std::memory_order_release);
+}
+
+bool AudioHandler::ReinitSampleRate(double sample_rate)
+{
+    m_accept_audio.store(false, std::memory_order_release);
+    std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
+
+    if (!m_sink_ready.load(std::memory_order_relaxed))
+        return false;
+
+    if (m_use_sdk)
+    {
+        void* replacement_resampler = nullptr;
+        const struct retro_resampler* replacement_backend = nullptr;
+        const double replacement_ratio = m_mix_rate / sample_rate;
+        const bool rates_differ = static_cast<int>(sample_rate) != static_cast<int>(m_mix_rate);
+        if (!retro_resampler_realloc(&replacement_resampler, &replacement_backend, "sinc",
+                                     RESAMPLER_QUALITY_NORMAL, replacement_ratio))
+        {
+            replacement_resampler = nullptr;
+            replacement_backend = nullptr;
+            if (rates_differ)
+            {
+                m_accept_audio.store(m_playing.load(std::memory_order_relaxed),
+                                     std::memory_order_release);
+                return false;
+            }
+            LogWarning("AudioHandler: resampler reinit failed at 1:1, running without rate control.");
+        }
+
+        if (m_resampler && m_resampler_backend)
+            m_resampler_backend->free(m_resampler);
+        m_resampler = replacement_resampler;
+        m_resampler_backend = replacement_backend;
+        m_resample_ratio = replacement_ratio;
+    }
+    else
+    {
+        if (!m_audio_stream_player)
+        {
+            m_sink_ready.store(false, std::memory_order_release);
+            return false;
+        }
+
+        Ref<AudioStreamGenerator> replacement;
+        replacement.instantiate();
+        replacement->set_mix_rate(sample_rate);
+        replacement->set_buffer_length(m_audio_buffer_capacity_sec);
+
+        const Ref<AudioStreamGenerator> previous_generator = m_audio_stream_generator;
+        const Ref<AudioStreamGeneratorPlayback> previous_playback =
+            m_audio_stream_generator_playback;
+        m_audio_stream_player->stop();
+        m_audio_stream_player->set_stream(replacement);
+        m_audio_stream_player->play();
+        Ref<AudioStreamGeneratorPlayback> replacement_playback =
+            m_audio_stream_player->get_stream_playback();
+        if (replacement_playback.is_null())
+        {
+            m_audio_stream_player->stop();
+            m_audio_stream_player->set_stream(previous_generator);
+            m_audio_stream_generator = previous_generator;
+            m_audio_stream_generator_playback = previous_playback;
+            bool restored = previous_generator.is_valid() && previous_playback.is_valid();
+            if (m_playing.load(std::memory_order_relaxed))
+            {
+                m_audio_stream_player->play();
+                m_audio_stream_generator_playback =
+                    m_audio_stream_player->get_stream_playback();
+                restored = m_audio_stream_generator_playback.is_valid();
+            }
+            m_sink_ready.store(restored, std::memory_order_release);
+            m_accept_audio.store(m_playing.load(std::memory_order_relaxed) && restored,
+                                 std::memory_order_release);
+            if (!restored)
+                LogError("AudioHandler: failed to restore the previous fallback stream");
+            return false;
+        }
+
+        m_audio_stream_generator = replacement;
+        m_audio_stream_generator_playback = replacement_playback;
+        if (!m_playing.load(std::memory_order_relaxed))
+            m_audio_stream_player->stop();
+    }
+
+    m_audio_sample_rate = sample_rate;
+    m_frames_produced.store(0, std::memory_order_relaxed);
+    m_audio_buffer_occupancy.store(0, std::memory_order_relaxed);
+    m_last_brake_ms.store(0.0, std::memory_order_relaxed);
+    m_audio_buffer_total_frames = 0;
+    m_in_float.clear();
+    m_out_float.clear();
+    m_accept_audio.store(m_playing.load(std::memory_order_relaxed),
+                         std::memory_order_release);
+    return true;
 }
 
 void AudioHandler::DeInit()
 {
     m_accept_audio.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> sink_lock(m_sink_mutex);
+    m_sink_ready.store(false, std::memory_order_release);
+    m_playing.store(false, std::memory_order_release);
+    std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
 
     if (m_use_sdk && m_mx)
     {
@@ -394,10 +509,11 @@ void AudioHandler::DeInit()
 
 void AudioHandler::SetPlaying(bool playing)
 {
+    m_playing.store(playing, std::memory_order_release);
     if (!playing)
         m_accept_audio.store(false, std::memory_order_release);
 
-    std::lock_guard<std::mutex> lock(m_sink_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sink_mutex);
     if (m_use_sdk)
     {
         // Nothing to start or stop: a voice with an empty ring is silent. Only
@@ -408,7 +524,8 @@ void AudioHandler::SetPlaying(bool playing)
             if (m_voice_r >= 0)
                 m_mx->call("flush_voice", m_voice_r);
         }
-        if (playing && m_mx && m_voice_l >= 0)
+        if (playing && m_sink_ready.load(std::memory_order_relaxed) &&
+            m_mx && m_voice_l >= 0)
             m_accept_audio.store(true, std::memory_order_release);
         return;
     }

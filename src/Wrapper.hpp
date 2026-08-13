@@ -251,9 +251,8 @@ public:
     /// How many rewind+replay corrections have happened (diagnostics/HUD).
     int64_t GetNetplayRollbackCount() const { return m_np_rollback_count.load(std::memory_order_relaxed); }
 
-    /// What the core declared its machine runs at, snapshotted at the moment the
-    /// emulation thread read av_info, never re-read: some cores revise timing
-    /// afterwards (see the note on m_system_av_info). 0 until content is running.
+    /// What the core currently declares its machine runs at. Updated when a
+    /// running core successfully changes its AV info. 0 until content is running.
     double GetDeclaredFps() const { return m_declared_fps.load(std::memory_order_relaxed); }
     double GetDeclaredSampleRate() const { return m_declared_sample_rate.load(std::memory_order_relaxed); }
 
@@ -337,6 +336,10 @@ public:
     /// the raw region rather than the CRC ComputeRamCrc returns. Emulation thread.
     void GetCoreMemory(uint32_t id, uint8_t*& out_data, size_t& out_size) const;
 
+    /// Apply RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO synchronously while the core
+    /// is inside retro_run. Reinitializes affected drivers before returning.
+    bool SetSystemAvInfo(const retro_system_av_info* av_info);
+
     /// The core is handed this struct's address in retro_get_system_av_info and may write
     /// through that pointer long afterwards (ScummVM revises timing.fps from inside
     /// context_reset), so it must outlive the call and cannot be a stack local.
@@ -358,6 +361,8 @@ public:
     moodycamel::ReaderWriterQueue<std::unique_ptr<ThreadCommand>> m_main_thread_commands_queue;
     std::mutex m_mutex;
     bool m_mutex_done = false;
+    bool m_audio_reinit_success = false;
+    bool m_audio_reinit_restore_failed = false;
     std::condition_variable m_condition_variable;
     std::atomic<bool> m_running = false;
     std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
@@ -388,6 +393,7 @@ public:
     // because nothing else is ordered against them.
     std::atomic<double> m_declared_fps{0.0};
     std::atomic<double> m_declared_sample_rate{0.0};
+    std::atomic<uint64_t> m_timing_revision{0};
     std::atomic<int64_t> m_dropped_frames{0};
     std::atomic<uint32_t> m_np_port_mask = 0x1;
     std::mutex m_np_mutex;
@@ -413,6 +419,7 @@ public:
     int64_t m_np_verified = -1;                             // highest frame verified/corrected against confirmations
     bool m_np_replaying = false;                            // true while re-running frames after a rewind
     bool m_np_replay_mute_video = false;                    // skip video uploads for this replayed frame
+    bool m_handling_av_info = false;                        // reject recursive driver reinitialization
 
     /// True while the emulation thread is silently replaying frames after a
     /// rollback; audio/video callbacks drop their output. Emu thread only.

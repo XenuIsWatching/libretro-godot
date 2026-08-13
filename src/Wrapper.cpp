@@ -18,6 +18,7 @@
 #include <chrono>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -25,6 +26,7 @@
 #include "Libretro.hpp"
 #include "Debug.hpp"
 #include "ThreadCommandInitAudio.hpp"
+#include "ThreadCommandReinitAudio.hpp"
 #include "ThreadCommandCreateTexture.hpp"
 #include "ThreadCommandUpdateTexture.hpp"
 #include "ThreadCommandEmitSignal.hpp"
@@ -1456,6 +1458,179 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
         std::make_unique<EmuThreadCommandSetCoreOption>(key, value));
 }
 
+bool Wrapper::SetSystemAvInfo(const retro_system_av_info* av_info)
+{
+    if (!av_info || !m_running.load(std::memory_order_acquire) ||
+        m_stopping.load(std::memory_order_acquire) || m_handling_av_info)
+    {
+        LogError("SET_SYSTEM_AV_INFO is unavailable outside a running frame");
+        return false;
+    }
+
+    // The core owns the callback argument. Copy it before context_destroy or a
+    // main-thread wait can invalidate the storage behind that pointer.
+    const retro_system_av_info requested = *av_info;
+    const auto valid_av_info = [](const retro_system_av_info& info)
+    {
+        const retro_game_geometry& geometry = info.geometry;
+        const retro_system_timing& timing = info.timing;
+        const unsigned max_dimension =
+            static_cast<unsigned>(std::numeric_limits<int32_t>::max());
+        return geometry.base_width > 0 && geometry.base_height > 0 &&
+            geometry.max_width >= geometry.base_width &&
+            geometry.max_height >= geometry.base_height &&
+            geometry.base_width <= max_dimension &&
+            geometry.base_height <= max_dimension &&
+            geometry.max_width <= max_dimension &&
+            geometry.max_height <= max_dimension &&
+            std::isfinite(geometry.aspect_ratio) && geometry.aspect_ratio >= 0.0f &&
+            std::isfinite(timing.fps) && timing.fps > 0.0 &&
+            std::isfinite(timing.sample_rate) && timing.sample_rate > 0.0;
+    };
+    if (!valid_av_info(requested))
+    {
+        LogError("Core supplied invalid system AV info");
+        return false;
+    }
+
+    m_handling_av_info = true;
+    ScopeExit finish([this]() { m_handling_av_info = false; });
+
+    const retro_system_av_info previous = m_system_av_info;
+    const auto hw_max_dimensions_changed = [&](const retro_system_av_info& info)
+    {
+        return m_video_handler->UsesHardwareRendering() &&
+            (info.geometry.max_width != previous.geometry.max_width ||
+             info.geometry.max_height != previous.geometry.max_height);
+    };
+    if (hw_max_dimensions_changed(requested))
+    {
+        // These backends expose a surface at the base dimensions. Accepting a
+        // larger maximum would promise SET_GEOMETRY can grow into capacity that
+        // does not exist, while sizing the surface to max distorts base frames.
+        LogError("Changing maximum video dimensions is unsupported for hardware rendering");
+        return false;
+    }
+
+    bool video_reinitialized = false;
+    const auto restore_video = [&]()
+    {
+        m_system_av_info = previous;
+        if (video_reinitialized && !m_stop_requested.load() &&
+            !m_video_handler->ReinitHwRenderContext(
+                static_cast<int32_t>(previous.geometry.base_width),
+                static_cast<int32_t>(previous.geometry.base_height)))
+        {
+            LogError("Failed to restore the previous hardware render context");
+            StopEmulationThread(false);
+        }
+        // A context_reset may write through the persistent pointer. A failed
+        // SET_SYSTEM_AV_INFO is transactional, so retain the pre-call values.
+        m_system_av_info = previous;
+    };
+
+    // Some cores retain the retro_get_system_av_info destination and revise it
+    // from context_reset. Stage the request there before invoking that callback,
+    // then treat its post-reset values as the final declaration.
+    m_system_av_info = requested;
+    if (requested.geometry.base_width != previous.geometry.base_width ||
+        requested.geometry.base_height != previous.geometry.base_height)
+    {
+        video_reinitialized = true;
+        if (!m_video_handler->ReinitHwRenderContext(
+                static_cast<int32_t>(requested.geometry.base_width),
+                static_cast<int32_t>(requested.geometry.base_height)))
+        {
+            restore_video();
+            return false;
+        }
+
+        if (!valid_av_info(m_system_av_info))
+        {
+            LogError("Core supplied invalid system AV info from context_reset");
+            restore_video();
+            return false;
+        }
+
+        if (hw_max_dimensions_changed(m_system_av_info))
+        {
+            LogError("context_reset changed unsupported maximum video dimensions");
+            restore_video();
+            return false;
+        }
+
+        // If context_reset revised the base geometry, rebuild once more at the
+        // dimensions it actually settled on. Reject an unstable second change.
+        const unsigned reset_width = m_system_av_info.geometry.base_width;
+        const unsigned reset_height = m_system_av_info.geometry.base_height;
+        if (reset_width != requested.geometry.base_width ||
+            reset_height != requested.geometry.base_height)
+        {
+            if (!m_video_handler->ReinitHwRenderContext(
+                    static_cast<int32_t>(reset_width),
+                    static_cast<int32_t>(reset_height)) ||
+                !valid_av_info(m_system_av_info) ||
+                hw_max_dimensions_changed(m_system_av_info) ||
+                m_system_av_info.geometry.base_width != reset_width ||
+                m_system_av_info.geometry.base_height != reset_height)
+            {
+                LogError("Core supplied unstable geometry from context_reset");
+                restore_video();
+                return false;
+            }
+        }
+    }
+
+    if (!valid_av_info(m_system_av_info))
+    {
+        restore_video();
+        return false;
+    }
+
+    if (m_system_av_info.timing.sample_rate != previous.timing.sample_rate)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_mutex_done = false;
+        m_audio_reinit_success = false;
+        m_audio_reinit_restore_failed = false;
+        m_main_thread_commands_queue.enqueue(std::make_unique<ThreadCommandReinitAudio>(
+            this, m_system_av_info.timing.sample_rate));
+        m_condition_variable.wait(lock, [&]
+            { return m_mutex_done || m_stop_requested.load(); });
+
+        if (!m_mutex_done || !m_audio_reinit_success || m_stop_requested.load())
+        {
+            const bool restore_failed = m_audio_reinit_restore_failed;
+            lock.unlock();
+            restore_video();
+            if (restore_failed)
+            {
+                LogError("Previous audio backend could not be restored; stopping the core");
+                StopEmulationThread(false);
+            }
+            LogError("Failed to apply the core's new audio sample rate");
+            return false;
+        }
+    }
+
+    m_video_handler->SetGeometry(&m_system_av_info.geometry);
+    const retro_game_geometry& applied_geometry = m_system_av_info.geometry;
+    const retro_system_timing& applied_timing = m_system_av_info.timing;
+    m_declared_fps.store(applied_timing.fps, std::memory_order_relaxed);
+    m_declared_sample_rate.store(applied_timing.sample_rate, std::memory_order_relaxed);
+    if (applied_timing.fps != previous.timing.fps)
+        m_timing_revision.fetch_add(1, std::memory_order_release);
+
+    Log("System AV Info: " + std::to_string(applied_geometry.base_width) + "x" +
+        std::to_string(applied_geometry.base_height) + " @ " +
+        std::to_string(applied_geometry.max_width) + "x" +
+        std::to_string(applied_geometry.max_height) + " (aspect ratio: " +
+        std::to_string(applied_geometry.aspect_ratio) + ") FPS: " +
+        std::to_string(applied_timing.fps) + " Sample Rate: " +
+        std::to_string(applied_timing.sample_rate));
+    return true;
+}
+
 void Wrapper::_process(double delta)
 {
     // Deferred stop: once the emulation thread has fully exited on its own,
@@ -1858,6 +2033,8 @@ void Wrapper::EmulationThreadLoop()
     }
 
     double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;
+    m_timing_revision.store(0, std::memory_order_relaxed);
+    uint64_t timing_revision = 0;
 
     // Publish what the core declared, from the one read the pacing loop itself
     // trusts. A later read is not the same value: a core may revise timing behind
@@ -1937,6 +2114,21 @@ void Wrapper::EmulationThreadLoop()
             std::unique_ptr<EmuThreadCommand> emu_command;
             while (m_emu_thread_commands_queue.try_dequeue(emu_command))
                 emu_command->Execute(*this);
+        }
+
+        const uint64_t current_timing_revision =
+            m_timing_revision.load(std::memory_order_acquire);
+        if (current_timing_revision != timing_revision)
+        {
+            timing_revision = current_timing_revision;
+            frame_duration_ms = 1000.0 /
+                m_declared_fps.load(std::memory_order_relaxed);
+            accumulator = std::min(accumulator, frame_duration_ms * 4.0);
+            const auto timing_now = std::chrono::steady_clock::now();
+            last_time = timing_now;
+            next_call_due = timing_now +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double, std::milli>(frame_duration_ms));
         }
 
         // Battery save: dirty-check flush roughly every 10 seconds of frames.

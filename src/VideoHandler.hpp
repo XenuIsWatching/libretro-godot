@@ -39,6 +39,11 @@ public:
     void SetMesh(godot::MeshInstance3D* old_mesh, godot::MeshInstance3D* new_mesh);
 
     bool InitHwRenderContext(int32_t width, int32_t height);
+    /// Replace an active hardware context for SET_SYSTEM_AV_INFO. The caller
+    /// owns transaction rollback because it must stage the matching AV-info
+    /// object before each context_reset callback.
+    bool ReinitHwRenderContext(int32_t width, int32_t height);
+    bool UsesHardwareRendering() const { return m_context_reset != nullptr; }
     void SetImageFormat(godot::Image::Format format);
     void CreateTexture(int32_t width, int32_t height, godot::Image::Format image_format, godot::PackedByteArray pixel_data, bool flip_y);
     void UpdateTexture(godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);
@@ -54,7 +59,7 @@ public:
     /// Invoke the core's context_destroy callback. Must run on the emulation
     /// thread before retro_unload_game (RetroArch's ordering), since Vulkan cores
     /// like paraLLEl-RDP free all their VkDevice objects only in this callback.
-    void NotifyContextDestroy();
+    void NotifyContextDestroy(bool preserve_callback = false);
 
     void SetNegotiationInterface(retro_hw_render_context_negotiation_interface_vulkan* iface)
     {
@@ -118,6 +123,7 @@ private:
     retro_pixel_format m_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
     retro_hw_context_reset_t m_context_destroy = nullptr;
     retro_hw_context_type m_hw_context_type = RETRO_HW_CONTEXT_NONE;
+    bool m_context_active = false;
 
     // Last geometry seen by SetGeometry, so a core that re-reports the SAME
     // geometry (azahar does this on some inputs) doesn't spam an identical log.
@@ -127,5 +133,6 @@ private:
 
     void QueueFrame(Wrapper* wrapper, godot::PackedByteArray pixel_data,
                     uint32_t width, uint32_t height, bool flip_y);
+    void DestroyHwRenderContext();
 };
 }

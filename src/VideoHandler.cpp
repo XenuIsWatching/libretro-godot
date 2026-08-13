@@ -355,6 +355,11 @@ void VideoHandler::DeInit()
     if (m_image.is_valid())
         m_image.unref();
 
+    DestroyHwRenderContext();
+}
+
+void VideoHandler::DestroyHwRenderContext()
+{
     // Destroy Vulkan context before platform-specific GL teardown.
     if (m_vulkan_ctx)
     {
@@ -388,9 +393,6 @@ void VideoHandler::DeInit()
         m_sdl_window = nullptr;
     }
 #elif defined(__ANDROID__)
-    if (m_context_destroy)
-        m_context_destroy();
-
     if (m_egl_display != EGL_NO_DISPLAY)
     {
         eglMakeCurrent(m_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -413,16 +415,27 @@ void VideoHandler::DeInit()
 #endif
 }
 
-void VideoHandler::NotifyContextDestroy()
+void VideoHandler::NotifyContextDestroy(bool preserve_callback)
 {
     // Runs on the emulation thread, before retro_unload_game/retro_deinit,
     // while the GL/Vulkan context is still current on this thread. Matches
     // RetroArch's teardown order so cores can free API objects they own.
-    if (m_context_destroy)
-    {
+    if (m_context_active && m_context_destroy)
         m_context_destroy();
+    m_context_active = false;
+    if (!preserve_callback)
         m_context_destroy = nullptr;
-    }
+}
+
+bool VideoHandler::ReinitHwRenderContext(int32_t width, int32_t height)
+{
+    // Software-rendered cores have no frontend context to rebuild.
+    if (!m_context_reset)
+        return true;
+
+    NotifyContextDestroy(true);
+    DestroyHwRenderContext();
+    return InitHwRenderContext(width, height);
 }
 
 bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
@@ -444,6 +457,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
             return false;
         }
         m_context_reset();
+        m_context_active = true;
         return true;
     }
 
@@ -460,6 +474,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
             return false;
         }
         m_context_reset();
+        m_context_active = true;
         return true;
     }
 #endif
@@ -485,6 +500,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
         }
         LogOK("Vulkan context created successfully.");
         m_context_reset();
+        m_context_active = true;
         return true;
     }
 
@@ -509,6 +525,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
     {
         LogError("Failed to create SDL OpenGL context: " + std::string(SDL_GetError()));
         SDL_DestroyWindow(m_sdl_window);
+        m_sdl_window = nullptr;
         return false;
     }
 
@@ -521,6 +538,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
     }
 
     m_context_reset();
+    m_context_active = true;
 
     return true;
 #elif defined(__ANDROID__)
@@ -632,6 +650,7 @@ bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
     }
 
     m_context_reset();
+    m_context_active = true;
 
     return true;
 #else
