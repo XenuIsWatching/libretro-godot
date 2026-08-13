@@ -78,7 +78,7 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
         uint32_t occupancy = static_cast<uint32_t>(100.0f * static_cast<float>(queued) / static_cast<float>(total));
         if (occupancy > 100)
             occupancy = 100;
-        self->m_audio_buffer_occupancy = occupancy;
+        self->m_audio_buffer_occupancy.store(occupancy, std::memory_order_relaxed);
         if (total > self->m_audio_buffer_total_frames)
             self->m_audio_buffer_total_frames = total;
     }
@@ -417,6 +417,9 @@ bool AudioHandler::SetMinimumAudioLatency(const uint32_t* minimum_audio_latency)
 void AudioHandler::CallAudioBufferStatusCallback()
 {
     if (m_audio_buffer_status_callback)
-        m_audio_buffer_status_callback(true, m_audio_buffer_occupancy, m_audio_buffer_occupancy <= 10);
+    {
+        const uint32_t occupancy = m_audio_buffer_occupancy.load(std::memory_order_relaxed);
+        m_audio_buffer_status_callback(true, occupancy, occupancy <= 10);
+    }
 }
 }

@@ -251,6 +251,23 @@ public:
     /// How many rewind+replay corrections have happened (diagnostics/HUD).
     int64_t GetNetplayRollbackCount() const { return m_np_rollback_count.load(std::memory_order_relaxed); }
 
+    /// What the core declared its machine runs at, snapshotted at the moment the
+    /// emulation thread read av_info, never re-read: some cores revise timing
+    /// afterwards (see the note on m_system_av_info). 0 until content is running.
+    double GetDeclaredFps() const { return m_declared_fps.load(std::memory_order_relaxed); }
+    double GetDeclaredSampleRate() const { return m_declared_sample_rate.load(std::memory_order_relaxed); }
+
+    /// Frame uploads discarded because a newer one superseded them before the main
+    /// thread drained the queue — i.e. emulated frames that were never displayed.
+    /// Reset with each content run.
+    int64_t GetDroppedFrameCount() const { return m_dropped_frames.load(std::memory_order_relaxed); }
+
+    /// Audio sink fill 0-100, and the pacing brake in ms. Both forward to the audio
+    /// handler, which may not exist yet; defined out of line because it is only
+    /// forward declared here.
+    uint32_t GetAudioBufferOccupancy() const;
+    double GetAudioBrakeMs() const;
+
     /// Queue a signal emission on the owning Libretro node (main thread).
     /// Callable from the emulation thread.
     void EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args);
@@ -366,6 +383,12 @@ public:
     moodycamel::ReaderWriterQueue<std::unique_ptr<EmuThreadCommand>> m_emu_thread_commands_queue;
     std::atomic<bool> m_netplay_enabled = false;
     std::atomic<int64_t> m_frame_counter = 0;
+    // Diagnostics published to the main thread (see the getters above). Written on
+    // the emulation thread, read from _process; relaxed is enough for all three
+    // because nothing else is ordered against them.
+    std::atomic<double> m_declared_fps{0.0};
+    std::atomic<double> m_declared_sample_rate{0.0};
+    std::atomic<int64_t> m_dropped_frames{0};
     std::atomic<uint32_t> m_np_port_mask = 0x1;
     std::mutex m_np_mutex;
     std::condition_variable m_np_cv;

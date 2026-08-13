@@ -243,6 +243,22 @@ public:
     /// Rewind+replay corrections performed so far (rollback diagnostics).
     int64_t GetNetplayRollbackCount() const;
 
+    /// Performance HUD readings. Every one is a relaxed atomic load, so they are
+    /// safe to poll from _process on any number of instances at once — each node
+    /// answers only for its own core.
+    ///
+    /// The core's declared timing, and how far behind the picture is:
+    double GetDeclaredFps() const;
+    double GetDeclaredSampleRate() const;
+    /// Frames produced but never shown, because a newer one replaced them before
+    /// the main thread drained the queue. Resets with each content run.
+    int64_t GetDroppedFrameCount() const;
+    /// Audio sink fill 0-100 (<= 10 is what the core is told is an underrun), and
+    /// how long the pacing loop is holding the core back. A brake pinned at 0 with
+    /// a low fill is a core that cannot keep up.
+    int64_t GetAudioBufferOccupancy() const;
+    double GetAudioBrakeMs() const;
+
     void ConnectOptionsReady(const godot::Callable& callable, uint32_t flags = 0u);
 
     void _exit_tree() override;

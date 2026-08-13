@@ -225,6 +225,31 @@ int64_t Libretro::GetNetplayRollbackCount() const
     return m_wrapper->GetNetplayRollbackCount();
 }
 
+double Libretro::GetDeclaredFps() const
+{
+    return m_wrapper->GetDeclaredFps();
+}
+
+double Libretro::GetDeclaredSampleRate() const
+{
+    return m_wrapper->GetDeclaredSampleRate();
+}
+
+int64_t Libretro::GetDroppedFrameCount() const
+{
+    return m_wrapper->GetDroppedFrameCount();
+}
+
+int64_t Libretro::GetAudioBufferOccupancy() const
+{
+    return static_cast<int64_t>(m_wrapper->GetAudioBufferOccupancy());
+}
+
+double Libretro::GetAudioBrakeMs() const
+{
+    return m_wrapper->GetAudioBrakeMs();
+}
+
 void Libretro::_exit_tree()
 {
     // Blocking, unlike StopContent(): leaving the tree means this node can be
@@ -377,6 +402,11 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);
+    ClassDB::bind_method(D_METHOD("GetDeclaredFps"), &Libretro::GetDeclaredFps);
+    ClassDB::bind_method(D_METHOD("GetDeclaredSampleRate"), &Libretro::GetDeclaredSampleRate);
+    ClassDB::bind_method(D_METHOD("GetDroppedFrameCount"), &Libretro::GetDroppedFrameCount);
+    ClassDB::bind_method(D_METHOD("GetAudioBufferOccupancy"), &Libretro::GetAudioBufferOccupancy);
+    ClassDB::bind_method(D_METHOD("GetAudioBrakeMs"), &Libretro::GetAudioBrakeMs);
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
     ClassDB::bind_method(D_METHOD("SetRemovableStorage", "removable"), &Libretro::SetRemovableStorage);

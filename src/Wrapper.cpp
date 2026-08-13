@@ -509,6 +509,16 @@ void Wrapper::SetLightgunButton(uint32_t port, int button_id, bool pressed)
     m_input_handler->SetLightgunButtons(port, buttons);
 }
 
+uint32_t Wrapper::GetAudioBufferOccupancy() const
+{
+    return m_audio_handler ? m_audio_handler->BufferOccupancy() : 0;
+}
+
+double Wrapper::GetAudioBrakeMs() const
+{
+    return m_audio_handler ? m_audio_handler->LastBrakeMs() : 0.0;
+}
+
 bool Wrapper::IsNetplayPortManaged(uint32_t port) const
 {
     return port < 4 &&
@@ -1464,6 +1474,11 @@ void Wrapper::_process(double delta)
     {
         if (command->IsFrameUpload())
         {
+            // Count what this supersedes. These are frames the core produced and
+            // nobody ever saw, which is the one number that separates "the core is
+            // slow" from "the room is too busy to show what the core produced".
+            if (newest_upload)
+                m_dropped_frames.fetch_add(1, std::memory_order_relaxed);
             newest_upload = std::move(command);
             continue;
         }
@@ -1792,6 +1807,15 @@ void Wrapper::EmulationThreadLoop()
     }
 
     double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;
+
+    // Publish what the core declared, from the one read the pacing loop itself
+    // trusts. A later read is not the same value: a core may revise timing behind
+    // the frontend's back, and the HUD compares measured against DECLARED, so it
+    // has to be the figure this loop is actually pacing to.
+    m_declared_fps.store(m_system_av_info.timing.fps, std::memory_order_relaxed);
+    m_declared_sample_rate.store(m_system_av_info.timing.sample_rate, std::memory_order_relaxed);
+    m_dropped_frames.store(0, std::memory_order_relaxed);
+
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;
 
@@ -1899,6 +1923,7 @@ void Wrapper::EmulationThreadLoop()
             double brake_ms = m_audio_handler->MsUntilSinkWantsFrames();
             if (brake_ms > MAX_BRAKE_WAIT_MS)
                 brake_ms = MAX_BRAKE_WAIT_MS;
+            m_audio_handler->SetLastBrakeMs(brake_ms);
             if (brake_ms <= SLEEP_MARGIN_MS)
             {
                 // The sink wants audio: it is draining, so it is still a clock.

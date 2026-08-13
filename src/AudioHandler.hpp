@@ -57,6 +57,21 @@ public:
     /// can never brake emulation to a halt.
     double MsUntilSinkWantsFrames() const;
 
+    /// How full the sink is, 0-100, as a percentage of EffectiveTotalFrames.
+    ///
+    /// This is the same figure the core is handed every frame through the buffer
+    /// status callback, where anything at or below 10 is reported as an underrun.
+    /// Read from the main thread for the HUD, written on the emulation thread.
+    uint32_t BufferOccupancy() const { return m_audio_buffer_occupancy.load(std::memory_order_relaxed); }
+
+    /// The brake the pacing loop last acted on, in milliseconds.
+    ///
+    /// Published by the loop rather than recomputed on demand: MsUntilSinkWantsFrames
+    /// calls into the sink, which belongs to the emulation thread. A value that sits
+    /// at 0 means the core is never being held back, i.e. it cannot keep up.
+    double LastBrakeMs() const { return m_last_brake_ms.load(std::memory_order_relaxed); }
+    void SetLastBrakeMs(double ms) { m_last_brake_ms.store(ms, std::memory_order_relaxed); }
+
     /// The Meta XR Audio voice ids this core is being spatialized through, or
     /// empty when running on the fallback AudioStreamPlayer3D. GDScript
     /// positions these; it does not own their lifetime.
@@ -98,7 +113,11 @@ private:
     float    m_audio_buffer_capacity_sec = 0;
     double   m_audio_sample_rate = 0.0;
     uint32_t m_audio_buffer_total_frames = 0;
-    uint32_t m_audio_buffer_occupancy = 0;
+    /// Written by the audio callback (emulation thread) and read both there and by
+    /// the main thread's HUD; atomic for the same reason m_frames_produced is.
+    std::atomic<uint32_t> m_audio_buffer_occupancy{0};
+    /// Last brake the pacing loop computed. See LastBrakeMs.
+    std::atomic<double> m_last_brake_ms{0.0};
     /// The sink's own target fill, cached at Init so the brake does not pay a
     /// cross-extension call for a constant on every pass of the pacing loop.
     uint32_t m_sink_target_frames = 0;
