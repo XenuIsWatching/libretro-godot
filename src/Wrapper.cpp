@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 #include "Libretro.hpp"
 #include "Debug.hpp"
@@ -32,6 +33,30 @@ using namespace godot;
 
 namespace Xenu
 {
+namespace
+{
+template<typename Callback>
+class ScopeExit
+{
+public:
+    explicit ScopeExit(Callback callback)
+    : m_callback(std::move(callback))
+    {
+    }
+
+    ~ScopeExit()
+    {
+        m_callback();
+    }
+
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+
+private:
+    Callback m_callback;
+};
+}
+
 thread_local Wrapper* t_current_wrapper = nullptr;
 
 // Fallback for callbacks from threads spawned by cores (e.g. Dolphin's audio
@@ -1651,8 +1676,36 @@ void Wrapper::EmulationThreadLoop()
     t_current_wrapper = this;
     Log("Libretro Thread starting...");
 
+    bool core_initialized = false;
+    bool game_loaded = false;
+    bool context_initialized = false;
+    bool sram_active = false;
+    ScopeExit lifecycle_cleanup([&]()
+    {
+        // Every successful libretro lifecycle call has a matching teardown,
+        // including failures before the frame loop begins.
+        if (game_loaded)
+        {
+            if (sram_active)
+                FlushSramIfDirty(true);
+            m_sram_pending = godot::PackedByteArray();
+            if (context_initialized)
+                m_video_handler->NotifyContextDestroy();
+            m_core->retro_unload_game();
+        }
+        if (core_initialized)
+            m_core->retro_deinit();
+
+        m_running = false;
+        t_current_wrapper = nullptr;
+        Wrapper* expected = this;
+        s_fallback_wrapper.compare_exchange_strong(expected, nullptr, std::memory_order_release);
+        Log("Libretro thread stopped.");
+    });
+
     if (!m_core->Load(m_trampolines.get()))
         return;
+    core_initialized = true;
 
     if (m_game_path.empty())
     {
@@ -1669,6 +1722,7 @@ void Wrapper::EmulationThreadLoop()
             LogError("Failed to load game");
             return;
         }
+        game_loaded = true;
     }
     else
     {
@@ -1731,6 +1785,7 @@ void Wrapper::EmulationThreadLoop()
             LogError("Failed to load game");
             return;
         }
+        game_loaded = true;
     }
 
     // Apply device selections made before the core started (controller/mouse
@@ -1780,6 +1835,7 @@ void Wrapper::EmulationThreadLoop()
         LogError("Failed to initialize video");
         return;
     }
+    context_initialized = true;
 
     if (m_stop_requested)
         return;
@@ -1860,6 +1916,7 @@ void Wrapper::EmulationThreadLoop()
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
     LoadSramFromSource();
+    sram_active = true;
     m_sram_flush_counter = m_frame_counter.load(std::memory_order_relaxed);
 
     // Fresh rollback bookkeeping for this content run (these members are
@@ -2011,20 +2068,6 @@ void Wrapper::EmulationThreadLoop()
         if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
             EmitNetplayCrc(frame_done);
     }
-    // Final battery-save flush while the core memory is still valid. Injected
-    // netplay SRAM is one-shot; clear it so a later offline run loads its own.
-    FlushSramIfDirty(true);
-    m_sram_pending = godot::PackedByteArray();
-
-    m_video_handler->NotifyContextDestroy();
-    m_core->retro_unload_game();
-    m_core->retro_deinit();
-
-    m_running = false;
-    t_current_wrapper = nullptr;
-    Wrapper* expected = this;
-    s_fallback_wrapper.compare_exchange_strong(expected, nullptr, std::memory_order_release);
-    Log("Libretro thread stopped.");
 }
 
 void Wrapper::CreateTexture(Image::Format image_format, PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y)
