@@ -112,7 +112,9 @@ private:
 
     uint32_t m_rotation = 0;
     retro_hw_context_reset_t m_context_reset = nullptr;
-    retro_pixel_format m_pixel_format = RETRO_PIXEL_FORMAT_UNKNOWN;
+    // Libretro specifies 0RGB1555 until a core explicitly negotiates another
+    // format. Cores are not required to call SET_PIXEL_FORMAT.
+    retro_pixel_format m_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
     retro_hw_context_reset_t m_context_destroy = nullptr;
     retro_hw_context_type m_hw_context_type = RETRO_HW_CONTEXT_NONE;
 

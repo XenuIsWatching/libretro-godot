@@ -165,10 +165,23 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
     {
         pixel_data.resize(width * height * 4);
 
-        const uint16_t* src = static_cast<const uint16_t*>(data);
+        const uint8_t* src = static_cast<const uint8_t*>(data);
         uint8_t* dst = pixel_data.ptrw();
-
-        conv_0rgb1555_argb8888(dst, src, width, height, width * 4, pitch);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            const uint16_t* row = reinterpret_cast<const uint16_t*>(src + y * pitch);
+            for (uint32_t x = 0; x < width; ++x)
+            {
+                const uint16_t pixel = row[x];
+                const uint8_t r5 = static_cast<uint8_t>((pixel >> 10) & 0x1f);
+                const uint8_t g5 = static_cast<uint8_t>((pixel >> 5) & 0x1f);
+                const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
+                *dst++ = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+                *dst++ = static_cast<uint8_t>((g5 << 3) | (g5 >> 2));
+                *dst++ = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+                *dst++ = 0xff;
+            }
+        }
 
         if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
         {
@@ -644,6 +657,7 @@ bool VideoHandler::SetPixelFormat(const retro_pixel_format* pixel_format)
         Log("Using RETRO_PIXEL_FORMAT_RGB565");
         break;
     case RETRO_PIXEL_FORMAT_UNKNOWN:
+    default:
         LogError("Unhandled pixel format: " + std::to_string(pf));
         return false;
     }
