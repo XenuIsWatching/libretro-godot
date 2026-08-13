@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <utility>
 
 using namespace godot;
 
@@ -103,19 +104,9 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
         }
 
-        if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
-        {
-            instance->m_video_handler->m_last_width  = width;
-            instance->m_video_handler->m_last_height = height;
-            // Vulkan images are top-to-bottom; GL framebuffers are bottom-to-top.
-            const bool flip = instance->m_video_handler->HwFrameNeedsFlip();
-            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, flip);
-        }
-        else
-        {
-            const bool flip = instance->m_video_handler->HwFrameNeedsFlip();
-            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, flip);
-        }
+        // Vulkan/D3D images are top-down; GL framebuffers are bottom-up.
+        instance->m_video_handler->QueueFrame(instance, pixel_data, width, height,
+            instance->m_video_handler->HwFrameNeedsFlip());
 
         return;
     }
@@ -132,14 +123,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 
         conv_argb8888_abgr8888(dst, src, width, height, width * 4, pitch);
 
-        if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
-        {
-            instance->m_video_handler->m_last_width  = width;
-            instance->m_video_handler->m_last_height = height;
-            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
-        }
-        else
-            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
+        instance->m_video_handler->QueueFrame(instance, pixel_data, width, height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_RGB565:
@@ -151,14 +135,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
 
         conv_rgb565_abgr8888(dst, src, width, height, width * 4, pitch);
 
-        if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
-        {
-            instance->m_video_handler->m_last_width  = width;
-            instance->m_video_handler->m_last_height = height;
-            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
-        }
-        else
-            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
+        instance->m_video_handler->QueueFrame(instance, pixel_data, width, height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_0RGB1555:
@@ -183,14 +160,7 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             }
         }
 
-        if (instance->m_video_handler->m_image.is_null() || instance->m_video_handler->m_image_format != Image::FORMAT_RGBA8 || width != instance->m_video_handler->m_last_width || height != instance->m_video_handler->m_last_height)
-        {
-            instance->m_video_handler->m_last_width  = width;
-            instance->m_video_handler->m_last_height = height;
-            instance->CreateTexture(Image::FORMAT_RGBA8, pixel_data, (int32_t)width, (int32_t)height, false);
-        }
-        else
-            instance->UpdateTexture(pixel_data, (int32_t)width, (int32_t)height, false);
+        instance->m_video_handler->QueueFrame(instance, pixel_data, width, height, false);
     }
     break;
     case RETRO_PIXEL_FORMAT_UNKNOWN:
@@ -209,6 +179,73 @@ bool VideoHandler::HwFrameNeedsFlip() const
         return false;
 #endif
     return true;
+}
+
+void VideoHandler::QueueFrame(Wrapper* wrapper, PackedByteArray pixel_data,
+                              uint32_t width, uint32_t height, bool flip_y)
+{
+    const uint32_t rotation = m_rotation & 3u;
+    uint32_t output_width = (rotation & 1u) ? height : width;
+    uint32_t output_height = (rotation & 1u) ? width : height;
+
+    if (flip_y || rotation != 0)
+    {
+        PackedByteArray transformed;
+        transformed.resize(static_cast<int64_t>(output_width) * output_height * 4);
+        const uint8_t* src = pixel_data.ptr();
+        uint8_t* dst = transformed.ptrw();
+
+        for (uint32_t y = 0; y < output_height; ++y)
+        {
+            for (uint32_t x = 0; x < output_width; ++x)
+            {
+                uint32_t src_x = x;
+                uint32_t src_y = y;
+                switch (rotation)
+                {
+                case 1: // 90 degrees counter-clockwise in libretro coordinates
+                    src_x = width - 1 - y;
+                    src_y = x;
+                    break;
+                case 2:
+                    src_x = width - 1 - x;
+                    src_y = height - 1 - y;
+                    break;
+                case 3:
+                    src_x = y;
+                    src_y = height - 1 - x;
+                    break;
+                default:
+                    break;
+                }
+                if (flip_y)
+                    src_y = height - 1 - src_y;
+
+                const uint8_t* source = src + (static_cast<size_t>(src_y) * width + src_x) * 4;
+                uint8_t* target = dst + (static_cast<size_t>(y) * output_width + x) * 4;
+                target[0] = source[0];
+                target[1] = source[1];
+                target[2] = source[2];
+                target[3] = source[3];
+            }
+        }
+        pixel_data = std::move(transformed);
+    }
+
+    // These dimensions are emulation-thread-owned. Avoid consulting m_image or
+    // m_image_format here: both Godot Refs are created on the main thread.
+    if (output_width != m_last_width || output_height != m_last_height)
+    {
+        m_last_width = output_width;
+        m_last_height = output_height;
+        wrapper->CreateTexture(Image::FORMAT_RGBA8, pixel_data,
+            static_cast<int32_t>(output_width), static_cast<int32_t>(output_height), false);
+    }
+    else
+    {
+        wrapper->UpdateTexture(pixel_data,
+            static_cast<int32_t>(output_width), static_cast<int32_t>(output_height), false);
+    }
 }
 
 const retro_hw_render_interface* VideoHandler::GetHwRenderInterface() const
@@ -610,6 +647,11 @@ void VideoHandler::SetImageFormat(Image::Format format)
 
 bool VideoHandler::SetRotation(uint32_t rotation)
 {
+    if (rotation > 3)
+    {
+        LogError("Invalid libretro rotation: " + std::to_string(rotation));
+        return false;
+    }
     m_rotation = rotation;
     return true;
 }

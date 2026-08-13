@@ -18,6 +18,7 @@
 
 namespace Xenu
 {
+class Wrapper;
 // Held by pointer only, so <d3d11.h>/<d3d12.h> stay out of this header, along
 // with the windows.h macros they drag in (one of which renames GetSystemDirectory).
 class D3D11Context;
@@ -123,5 +124,8 @@ private:
     unsigned m_last_geom_w = 0;
     unsigned m_last_geom_h = 0;
     float    m_last_geom_aspect = 0.0f;
+
+    void QueueFrame(Wrapper* wrapper, godot::PackedByteArray pixel_data,
+                    uint32_t width, uint32_t height, bool flip_y);
 };
 }
