@@ -1443,19 +1443,15 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
 {
     Log("SetCoreOption: key=" + key + " value=" + value);
 
-    if (!m_options_handler)
+    if (!m_options_handler || !m_running.load(std::memory_order_acquire)
+        || m_stopping.load(std::memory_order_acquire))
     {
-        Log("SetCoreOption: m_options_handler is null, skipping");
+        Log("SetCoreOption: core is not running, skipping");
         return;
     }
 
-    // SerializeToFile (called by SetVariable) uses GetCurrentThreadWrapper() to
-    // resolve the root directory and core name. SetCoreOption runs on the main
-    // thread where the thread-local pointer is null, so set it here.
-    SetCurrentThreadWrapper(this);
-    m_options_handler->SetVariable(key, value);
-    SetCurrentThreadWrapper(nullptr);
-    Log("SetCoreOption: done");
+    m_emu_thread_commands_queue.enqueue(
+        std::make_unique<EmuThreadCommandSetCoreOption>(key, value));
 }
 
 void Wrapper::_process(double delta)
@@ -1656,6 +1652,8 @@ void Wrapper::FinishTeardown()
     // against the next content run's handlers.
     std::unique_ptr<ThreadCommand> stale;
     while (m_main_thread_commands_queue.try_dequeue(stale)) {}
+    std::unique_ptr<EmuThreadCommand> stale_emu;
+    while (m_emu_thread_commands_queue.try_dequeue(stale_emu)) {}
 }
 
 void Wrapper::EmulationThreadLoop()

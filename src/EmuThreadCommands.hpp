@@ -65,6 +65,25 @@ private:
     uint32_t m_device;
 };
 
+/// Change and persist a core option between retro_run calls. The core may hold
+/// the returned value pointer until its next query, so the options map must
+/// never be mutated concurrently from the main thread.
+class EmuThreadCommandSetCoreOption : public EmuThreadCommand
+{
+public:
+    EmuThreadCommandSetCoreOption(std::string key, std::string value)
+        : m_key(std::move(key))
+        , m_value(std::move(value))
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    std::string m_key;
+    std::string m_value;
+};
+
 /// Hot-swap the SRAM backing file mid-run (a physical memory-card swap):
 /// flush the old file, point at the new path, load its content into SAVE_RAM.
 class EmuThreadCommandSetSram : public EmuThreadCommand

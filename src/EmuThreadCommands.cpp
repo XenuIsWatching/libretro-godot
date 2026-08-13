@@ -75,6 +75,13 @@ void EmuThreadCommandSetPortDevice::Execute(Wrapper& wrapper)
     wrapper.m_core->retro_set_controller_port_device(m_port, m_device);
 }
 
+void EmuThreadCommandSetCoreOption::Execute(Wrapper& wrapper)
+{
+    if (!wrapper.m_options_handler)
+        return;
+    wrapper.m_options_handler->SetVariable(m_key, m_value);
+}
+
 void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
 {
     wrapper.ApplySramSwap(m_path);
