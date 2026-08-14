@@ -6,11 +6,15 @@
 #include <godot_cpp/variant/string.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 
+#include <rc_api_runtime.h>
+#include <rc_api_user.h>
 #include <rc_client.h>
+#include <rc_hash.h>
 #include <rc_libretro.h>
 
 namespace Xenu
@@ -73,6 +77,20 @@ public:
     godot::Dictionary GetGameInfo() const;
     godot::Array GetAchievements() const;
     godot::String GetRichPresence() const;
+
+    /// Look a game's achievements up WITHOUT running it, for a menu that wants to
+    /// show them for a ROM sitting in the library.
+    ///
+    /// Three requests, none of which touches rc_client: resolve the file's hash to
+    /// a game, fetch that game's set, then fetch which of them this player has
+    /// unlocked. `startsession` is a separate call rc_client makes when it loads a
+    /// game — this never makes it, so browsing cannot claim "currently playing"
+    /// from a machine that is actually running something, and cannot disturb a
+    /// session in progress.
+    ///
+    /// Returns a handle to match against `ra_lookup_result`, or 0 when the lookup
+    /// could not even be started (no client, not signed in, unhashable file).
+    int LookupAchievements(int console_id, const godot::String& rom_path);
 
     /// Called ~1/s from Libretro::_process so the pending queue drains and the
     /// session stays alive while no game is running.
@@ -154,5 +172,40 @@ private:
     };
     std::unordered_map<int, PendingRequest> m_pending;
     int m_next_request_id = 1;
+
+    // ── Browse-only achievement lookup ──────────────────────────────────────
+    //
+    // The steps ride the SAME request plumbing rc_client uses: each is an
+    // rc_client_server_callback_t whose callback_data is the Lookup below, so
+    // HttpResponse needs to know nothing about them.
+
+    /// One lookup in flight. Owned by m_lookups so a shutdown mid-request frees
+    /// it rather than leaking whatever step never came back.
+    struct Lookup
+    {
+        int handle = 0;
+        std::string hash;
+        std::string username;
+        std::string token;
+        uint32_t game_id = 0;
+        godot::String title;
+        godot::String badge_url;
+        /// id -> its entry in `achievements`, for marking unlocks in one pass.
+        std::unordered_map<uint32_t, int> index_by_id;
+        godot::Array achievements;
+    };
+
+    static void RC_CCONV LookupHashResponse(const rc_api_server_response_t* response, void* userdata);
+    static void RC_CCONV LookupGameDataResponse(const rc_api_server_response_t* response, void* userdata);
+    static void RC_CCONV LookupUnlocksResponse(const rc_api_server_response_t* response, void* userdata);
+
+    /// Send one built request through the HTTP bridge, with `step` to receive it.
+    void DispatchLookup(const rc_api_request_t& request,
+                        rc_client_server_callback_t step, Lookup* state);
+    /// Emit the result and drop the lookup. `error` empty means it worked.
+    void FinishLookup(Lookup* state, const godot::String& error);
+
+    std::unordered_map<int, std::unique_ptr<Lookup>> m_lookups;
+    int m_next_lookup_handle = 1;
 };
 }

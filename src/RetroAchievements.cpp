@@ -82,6 +82,9 @@ void RetroAchievements::SetEnabled(bool enabled)
         }
         m_session_owner = nullptr;
         m_pending.clear();
+        // Dropping the requests strands whatever step was going to receive them,
+        // and the state each was carrying is ours to free.
+        m_lookups.clear();
         Log("RetroAchievements: disabled");
         return;
     }
@@ -634,6 +637,221 @@ Array RetroAchievements::GetAchievements() const
     return result;
 }
 
+// ── Browse-only achievement lookup ──────────────────────────────────────────
+
+int RetroAchievements::LookupAchievements(int console_id, const String& rom_path)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (m_client == nullptr || !m_enabled || console_id <= 0 || rom_path.is_empty())
+        return 0;
+
+    // The set is public, but which of it the player has earned is not: both the
+    // game data and the unlocks calls are made as them.
+    const rc_client_user_t* user = rc_client_get_user_info(m_client);
+    if (user == nullptr || user->token == nullptr)
+        return 0;
+
+    // The hash is the console's own rule, not a plain md5 of the file — an iNES
+    // header off the front here, a copier header there, a disc's boot executable
+    // somewhere else. rhash is the only thing that knows them all, which is why
+    // this lives in C++ and not in the menu that asks for it.
+    const CharString path_utf8 = rom_path.utf8();
+    rc_hash_iterator_t iterator = {};
+    rc_hash_initialize_iterator(&iterator, path_utf8.get_data(), nullptr, 0);
+    char hash[33] = {};
+    const int hashed = rc_hash_generate(hash, static_cast<uint32_t>(console_id), &iterator);
+    rc_hash_destroy_iterator(&iterator);
+    if (!hashed)
+    {
+        LogWarning(std::string("RA lookup: cannot hash ") + path_utf8.get_data());
+        return 0;
+    }
+
+    auto state = std::make_unique<Lookup>();
+    Lookup* raw = state.get();
+    raw->handle = m_next_lookup_handle++;
+    raw->hash = hash;
+    raw->username = user->username != nullptr ? user->username : "";
+    raw->token = user->token;
+    m_lookups[raw->handle] = std::move(state);
+
+    rc_api_resolve_hash_request_t params = {};
+    params.game_hash = raw->hash.c_str();
+    rc_api_request_t request = {};
+    if (rc_api_init_resolve_hash_request(&request, &params) != RC_OK)
+    {
+        m_lookups.erase(raw->handle);
+        return 0;
+    }
+    DispatchLookup(request, LookupHashResponse, raw);
+    rc_api_destroy_request(&request);
+    return raw->handle;
+}
+
+void RetroAchievements::DispatchLookup(const rc_api_request_t& request,
+                                       rc_client_server_callback_t step, Lookup* state)
+{
+    int id = 0;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        id = m_next_request_id++;
+        m_pending[id] = PendingRequest{ step, state };
+    }
+    EmitDeferred("ra_http_request", Array::make(
+        id,
+        ToGodot(request.url),
+        ToGodot(request.post_data),
+        ToGodot(request.content_type)));
+}
+
+void RetroAchievements::FinishLookup(Lookup* state, const String& error)
+{
+    if (state == nullptr)
+        return;
+    EmitDeferred("ra_lookup_result", Array::make(
+        state->handle,
+        error.is_empty(),
+        static_cast<int64_t>(state->game_id),
+        state->title,
+        state->badge_url,
+        state->achievements,
+        error));
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_lookups.erase(state->handle);
+}
+
+void RetroAchievements::LookupHashResponse(const rc_api_server_response_t* response, void* userdata)
+{
+    RetroAchievements* self = GetSingleton();
+    Lookup* state = static_cast<Lookup*>(userdata);
+    if (self == nullptr || state == nullptr)
+        return;
+
+    rc_api_resolve_hash_response_t parsed = {};
+    const int result = rc_api_process_resolve_hash_server_response(&parsed, response);
+    const uint32_t game_id = parsed.game_id;
+    const String error = result == RC_OK && parsed.response.succeeded
+        ? String()
+        : String::utf8(parsed.response.error_message != nullptr
+            ? parsed.response.error_message : "Could not reach RetroAchievements.");
+    rc_api_destroy_resolve_hash_response(&parsed);
+
+    if (!error.is_empty())
+    {
+        self->FinishLookup(state, error);
+        return;
+    }
+    if (game_id == 0)
+    {
+        // Not an error: plenty of ROMs are simply not in RA's database, and a
+        // menu wants to say so rather than say something went wrong.
+        state->game_id = 0;
+        self->FinishLookup(state, String());
+        return;
+    }
+
+    state->game_id = game_id;
+    rc_api_fetch_game_data_request_t params = {};
+    params.username = state->username.c_str();
+    params.api_token = state->token.c_str();
+    params.game_id = game_id;
+    rc_api_request_t request = {};
+    if (rc_api_init_fetch_game_data_request(&request, &params) != RC_OK)
+    {
+        self->FinishLookup(state, String::utf8("Could not ask for this game's achievements."));
+        return;
+    }
+    self->DispatchLookup(request, LookupGameDataResponse, state);
+    rc_api_destroy_request(&request);
+}
+
+void RetroAchievements::LookupGameDataResponse(const rc_api_server_response_t* response, void* userdata)
+{
+    RetroAchievements* self = GetSingleton();
+    Lookup* state = static_cast<Lookup*>(userdata);
+    if (self == nullptr || state == nullptr)
+        return;
+
+    rc_api_fetch_game_data_response_t parsed = {};
+    const int result = rc_api_process_fetch_game_data_server_response(&parsed, response);
+    if (result != RC_OK || !parsed.response.succeeded)
+    {
+        const String error = String::utf8(parsed.response.error_message != nullptr
+            ? parsed.response.error_message : "Could not read this game's achievements.");
+        rc_api_destroy_fetch_game_data_response(&parsed);
+        self->FinishLookup(state, error);
+        return;
+    }
+
+    state->title = ToGodot(parsed.title);
+    state->badge_url = ToGodot(parsed.image_url);
+    for (uint32_t i = 0; i < parsed.num_achievements; ++i)
+    {
+        const rc_api_achievement_definition_t& def = parsed.achievements[i];
+        // Core only, matching what rc_client shows while a game runs: unofficial
+        // achievements are ones RA has not approved, and a list that includes
+        // them would not agree with the one you see playing.
+        if (def.category != RC_ACHIEVEMENT_CATEGORY_CORE)
+            continue;
+        Dictionary entry;
+        entry["id"]          = static_cast<int64_t>(def.id);
+        entry["title"]       = ToGodot(def.title);
+        entry["description"] = ToGodot(def.description);
+        entry["points"]      = static_cast<int64_t>(def.points);
+        entry["type"]        = static_cast<int64_t>(def.type);
+        entry["rarity"]      = static_cast<double>(def.rarity);
+        entry["badge_url"]        = ToGodot(def.badge_url);
+        entry["badge_locked_url"] = ToGodot(def.badge_locked_url);
+        entry["unlocked"]    = false;
+        state->index_by_id[def.id] = static_cast<int>(state->achievements.size());
+        state->achievements.push_back(entry);
+    }
+    rc_api_destroy_fetch_game_data_response(&parsed);
+
+    rc_api_fetch_user_unlocks_request_t params = {};
+    params.username = state->username.c_str();
+    params.api_token = state->token.c_str();
+    params.game_id = state->game_id;
+    params.hardcore = rc_client_get_hardcore_enabled(self->m_client);
+    rc_api_request_t request = {};
+    if (rc_api_init_fetch_user_unlocks_request(&request, &params) != RC_OK)
+    {
+        // The set is worth showing even if which ones are earned is not known.
+        self->FinishLookup(state, String());
+        return;
+    }
+    self->DispatchLookup(request, LookupUnlocksResponse, state);
+    rc_api_destroy_request(&request);
+}
+
+void RetroAchievements::LookupUnlocksResponse(const rc_api_server_response_t* response, void* userdata)
+{
+    RetroAchievements* self = GetSingleton();
+    Lookup* state = static_cast<Lookup*>(userdata);
+    if (self == nullptr || state == nullptr)
+        return;
+
+    rc_api_fetch_user_unlocks_response_t parsed = {};
+    const int result = rc_api_process_fetch_user_unlocks_server_response(&parsed, response);
+    if (result == RC_OK && parsed.response.succeeded)
+    {
+        for (uint32_t i = 0; i < parsed.num_achievement_ids; ++i)
+        {
+            auto it = state->index_by_id.find(parsed.achievement_ids[i]);
+            if (it == state->index_by_id.end())
+                continue;
+            Dictionary entry = state->achievements[it->second];
+            entry["unlocked"] = true;
+            state->achievements[it->second] = entry;
+        }
+    }
+    rc_api_destroy_fetch_user_unlocks_response(&parsed);
+
+    // A failed unlocks call still leaves a usable list, all showing locked.
+    self->FinishLookup(state, String());
+}
+
 String RetroAchievements::GetRichPresence() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -674,6 +892,19 @@ void RetroAchievements::_bind_methods()
     ClassDB::bind_method(D_METHOD("GetGameInfo"), &RetroAchievements::GetGameInfo);
     ClassDB::bind_method(D_METHOD("GetAchievements"), &RetroAchievements::GetAchievements);
     ClassDB::bind_method(D_METHOD("GetRichPresence"), &RetroAchievements::GetRichPresence);
+    ClassDB::bind_method(D_METHOD("LookupAchievements", "console_id", "rom_path"),
+                         &RetroAchievements::LookupAchievements);
+
+    /// The answer to one LookupAchievements. `ok` false carries a reason in
+    /// `error`; ok with game_id 0 means RA simply does not know this ROM.
+    ADD_SIGNAL(MethodInfo("ra_lookup_result",
+        PropertyInfo(Variant::INT,    "handle"),
+        PropertyInfo(Variant::BOOL,   "ok"),
+        PropertyInfo(Variant::INT,    "game_id"),
+        PropertyInfo(Variant::STRING, "title"),
+        PropertyInfo(Variant::STRING, "badge_url"),
+        PropertyInfo(Variant::ARRAY,  "achievements"),
+        PropertyInfo(Variant::STRING, "error")));
 
     /// A request rcheevos wants made. Reply with HttpResponse(id, status, body).
     ADD_SIGNAL(MethodInfo("ra_http_request",
