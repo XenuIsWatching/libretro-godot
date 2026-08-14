@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <thread>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -443,11 +444,48 @@ void Wrapper::StopContent()
     StopEmulationThread(false);
 }
 
-void Wrapper::ShutdownForExit()
+bool Wrapper::ShutdownForExit(uint32_t budget_ms)
 {
     if (m_audio_handler)
         m_audio_handler->SilenceForTeardown();
-    StopEmulationThread(true);
+    return StopEmulationThreadBounded(budget_ms);
+}
+
+bool Wrapper::StopEmulationThreadBounded(uint32_t budget_ms)
+{
+    if (!m_core)
+        return true;
+
+    m_stop_requested = true;
+    m_running = false;
+    m_condition_variable.notify_all();
+    m_np_cv.notify_all();
+    m_stopping = true;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+    while (!m_thread_exited.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (!m_thread_exited.load(std::memory_order_acquire))
+        return false;
+
+    if (m_thread.joinable())
+        m_thread.join();
+    FinishTeardown();
+    return true;
+}
+
+void Wrapper::AbandonThread()
+{
+    if (m_audio_handler)
+        m_audio_handler->SilenceForTeardown();
+    // Deliberately no FinishTeardown: the handlers and the core are still in use
+    // by the thread we are walking away from.
+    if (m_thread.joinable())
+        m_thread.detach();
 }
 
 Libretro* Wrapper::LiveLibretroNode() const

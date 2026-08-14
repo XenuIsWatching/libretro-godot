@@ -11,6 +11,22 @@ using namespace godot;
 
 namespace Xenu
 {
+namespace
+{
+/// How long a restart or a teardown waits for a core to leave retro_run before
+/// giving up on it. Long enough for any core that unwinds at all; short enough
+/// that a wedged one costs a hitch rather than the application.
+constexpr uint32_t kStopBudgetMs = 2000;
+
+/// Never freed, deliberately: each entry still has a live emulation thread
+/// inside it.
+std::vector<std::unique_ptr<Wrapper>>& AbandonedWrappers()
+{
+    static auto* graveyard = new std::vector<std::unique_ptr<Wrapper>>();
+    return *graveyard;
+}
+}
+
 Libretro::Libretro()
 {
     m_wrapper = std::make_unique<Wrapper>();
@@ -19,6 +35,17 @@ Libretro::Libretro()
 
 Libretro::~Libretro() = default;
 
+void Libretro::AbandonWrapper()
+{
+    LogError("Core did not stop within " + std::to_string(kStopBudgetMs) +
+             " ms; abandoning it. Its memory, its RetroAchievements session and "
+             "its Meta XR voices stay claimed until the application exits.");
+    m_wrapper->AbandonThread();
+    AbandonedWrappers().push_back(std::move(m_wrapper));
+    m_wrapper = std::make_unique<Wrapper>();
+    m_wrapper->m_libretro_node_id = static_cast<uint64_t>(get_instance_id());
+}
+
 void Libretro::ConnectOptionsReady(const godot::Callable& callable, uint32_t flags)
 {
     connect("options_ready", callable, flags);
@@ -26,6 +53,11 @@ void Libretro::ConnectOptionsReady(const godot::Callable& callable, uint32_t fla
 
 void Libretro::StartContent(MeshInstance3D* node, String root_directory, String core_name, String game_path)
 {
+    // The previous run has to be gone before this one starts: it owns the handlers
+    // the new core would reuse. Bounded, because a core that will not unwind would
+    // otherwise hang the caller (a reset, a netplay restart) forever.
+    if (!m_wrapper->StopEmulationThreadBounded(kStopBudgetMs))
+        AbandonWrapper();
     m_wrapper->StartContent(node, root_directory.utf8().get_data(), core_name.utf8().get_data(), game_path.utf8().get_data());
 }
 
@@ -259,13 +291,16 @@ double Libretro::GetAudioBrakeMs() const
 
 void Libretro::_exit_tree()
 {
-    // Blocking, unlike StopContent(): leaving the tree means this node can be
-    // freed at any point after this returns, and the scene being torn down owns
-    // the screen mesh VideoHandler::DeInit restores its material on. Deferring
-    // the join to _process() (which will never run again) leaves that teardown
-    // to ~Wrapper, by which time the mesh may already be gone. The frame hitch
-    // this costs does not matter on the way out.
-    m_wrapper->ShutdownForExit();
+    // Synchronous, unlike StopContent(): leaving the tree means this node can be
+    // freed at any point after this returns, and deferring the join to _process()
+    // (which will never run again) would leave the teardown to ~Wrapper. The frame
+    // hitch does not matter on the way out.
+    //
+    // Bounded, though. A core that never leaves retro_run cannot be joined, and
+    // waiting for it here is what turned a wedged Dolphin into an application
+    // that could not even quit itself.
+    if (!m_wrapper->ShutdownForExit(kStopBudgetMs))
+        AbandonWrapper();
 }
 
 bool Libretro::RaClaimSession(int console_id)

@@ -284,6 +284,12 @@ public:
     godot::Dictionary PeekCoreOptions(const godot::String& root_directory, const godot::String& core_name);
 
 private:
+    /// Hand a Wrapper whose core will not stop to a store that outlives this node,
+    /// and take a fresh one. The abandoned thread is still running inside it, so it
+    /// can be neither joined nor destroyed; leaking it is the only way out that is
+    /// not a hang or a use-after-free.
+    void AbandonWrapper();
+
     std::unique_ptr<Wrapper> m_wrapper;
 
     /// Seconds since the last rc_client_idle. Every node runs this, so the tick

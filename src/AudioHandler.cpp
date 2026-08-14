@@ -148,14 +148,15 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
 
     if (m_use_sdk)
     {
-        if (m_mx == nullptr || m_voice_l < 0)
+        Object* mx = LiveMx();
+        if (mx == nullptr || m_voice_l < 0)
             return;
         if (static_cast<size_t>(m_push_buf.size()) != frames)
             m_push_buf.resize(static_cast<int64_t>(frames));
         Vector2* dst = m_push_buf.ptrw();
         for (size_t i = 0; i < frames; ++i)
             dst[i] = Vector2(interleaved[i * 2], interleaved[i * 2 + 1]);
-        m_mx->call("push_stereo_frames", m_voice_l, m_voice_r, m_push_buf,
+        mx->call("push_stereo_frames", m_voice_l, m_voice_r, m_push_buf,
                    m_channel_mode.load(std::memory_order_relaxed));
         return;
     }
@@ -176,9 +177,10 @@ uint32_t AudioHandler::QueuedFrames() const
 
     if (m_use_sdk)
     {
-        if (m_mx == nullptr || m_voice_l < 0)
+        Object* mx = LiveMx();
+        if (mx == nullptr || m_voice_l < 0)
             return 0;
-        const int q = static_cast<int>(m_mx->call("voice_frames_available", m_voice_l));
+        const int q = static_cast<int>(mx->call("voice_frames_available", m_voice_l));
         return q > 0 ? static_cast<uint32_t>(q) : 0;
     }
     if (m_audio_stream_generator_playback.is_null())
@@ -201,14 +203,15 @@ double AudioHandler::MsUntilSinkWantsFrames() const
 
     if (m_use_sdk)
     {
-        if (m_mx == nullptr || m_voice_l < 0)
+        Object* mx = LiveMx();
+        if (mx == nullptr || m_voice_l < 0)
             return 0.0;
         // The voice reports what it still wants against its own target fill, so the
         // target lives in one place rather than being restated here.
-        if (static_cast<int>(m_mx->call("voice_frames_wanted", m_voice_l)) > 0)
+        if (static_cast<int>(mx->call("voice_frames_wanted", m_voice_l)) > 0)
             return 0.0;
 
-        const int queued = static_cast<int>(m_mx->call("voice_frames_available", m_voice_l));
+        const int queued = static_cast<int>(mx->call("voice_frames_available", m_voice_l));
         const double over = static_cast<double>(queued) - static_cast<double>(m_sink_target_frames);
         return over > 0.0 ? 1000.0 * over / m_mix_rate : 0.0;
     }
@@ -264,7 +267,7 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
 
     // Prefer Meta XR Audio; fall through silently when the extension or its
     // native library is absent, which is the point of having a fallback.
-    m_mx = nullptr;
+    m_mx_id = 0;
     m_use_sdk = false;
     Engine* engine = Engine::get_singleton();
     if (engine && engine->has_singleton("MetaXRAudio"))
@@ -278,7 +281,7 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
             const int r = (l >= 0) ? static_cast<int>(mx->call("create_voice")) : -1;
             if (l >= 0)
             {
-                m_mx = mx;
+                m_mx_id = static_cast<uint64_t>(mx->get_instance_id());
                 m_voice_l = l;
                 m_voice_r = r;
                 m_use_sdk = true;
@@ -287,9 +290,9 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
     }
 
     m_sink_target_frames = 0;
-    if (m_use_sdk && m_mx)
+    if (Object* mx = m_use_sdk ? LiveMx() : nullptr)
     {
-        const double target_ms = static_cast<double>(m_mx->call("get_target_latency_ms"));
+        const double target_ms = static_cast<double>(mx->call("get_target_latency_ms"));
         m_sink_target_frames = static_cast<uint32_t>(target_ms * m_mix_rate / 1000.0);
     }
 
@@ -316,11 +319,14 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
                     // Mismatched rates cannot be pushed straight through, so the SDK
                     // path has to be given up entirely, as it always was.
                     LogWarning("AudioHandler: resampler init failed, using Godot panning instead.");
-                    m_mx->call("destroy_voice", m_voice_l);
-                    if (m_voice_r >= 0)
-                        m_mx->call("destroy_voice", m_voice_r);
+                    if (Object* mx = LiveMx())
+                    {
+                        mx->call("destroy_voice", m_voice_l);
+                        if (m_voice_r >= 0)
+                            mx->call("destroy_voice", m_voice_r);
+                    }
                     m_voice_l = m_voice_r = -1;
-                    m_mx = nullptr;
+                    m_mx_id = 0;
                     m_use_sdk = false;
                 }
                 else
@@ -388,11 +394,12 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
         // No-audio mode is valid libretro timing (the official 2048 core uses
         // it). Preserve the configured backend for a later nonzero rate, but
         // stop/flush it so stale samples cannot pace or sound after the change.
-        if (m_use_sdk && m_mx && m_voice_l >= 0)
+        Object* mx = m_use_sdk ? LiveMx() : nullptr;
+        if (mx && m_voice_l >= 0)
         {
-            m_mx->call("flush_voice", m_voice_l);
+            mx->call("flush_voice", m_voice_l);
             if (m_voice_r >= 0)
-                m_mx->call("flush_voice", m_voice_r);
+                mx->call("flush_voice", m_voice_r);
         }
         else if (AudioStreamPlayer3D* player = LivePlayer())
         {
@@ -496,6 +503,13 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
     return true;
 }
 
+Object* AudioHandler::LiveMx() const
+{
+    if (m_mx_id == 0)
+        return nullptr;
+    return ObjectDB::get_instance(m_mx_id);
+}
+
 AudioStreamPlayer3D* AudioHandler::LivePlayer() const
 {
     if (m_audio_stream_player_id == 0)
@@ -508,11 +522,12 @@ void AudioHandler::SilenceForTeardown()
     m_accept_audio.store(false, std::memory_order_release);
     m_playing.store(false, std::memory_order_release);
     std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
-    if (m_use_sdk && m_mx && m_voice_l >= 0)
+    Object* mx = m_use_sdk ? LiveMx() : nullptr;
+    if (mx && m_voice_l >= 0)
     {
-        m_mx->call("flush_voice", m_voice_l);
+        mx->call("flush_voice", m_voice_l);
         if (m_voice_r >= 0)
-            m_mx->call("flush_voice", m_voice_r);
+            mx->call("flush_voice", m_voice_r);
     }
 }
 
@@ -523,15 +538,15 @@ void AudioHandler::DeInit()
     m_playing.store(false, std::memory_order_release);
     std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
 
-    if (m_use_sdk && m_mx)
+    if (Object* mx = m_use_sdk ? LiveMx() : nullptr)
     {
         if (m_voice_l >= 0)
-            m_mx->call("destroy_voice", m_voice_l);
+            mx->call("destroy_voice", m_voice_l);
         if (m_voice_r >= 0)
-            m_mx->call("destroy_voice", m_voice_r);
+            mx->call("destroy_voice", m_voice_r);
     }
     m_voice_l = m_voice_r = -1;
-    m_mx = nullptr;
+    m_mx_id = 0;
     m_use_sdk = false;
 
     if (m_resampler && m_resampler_backend)
@@ -574,15 +589,16 @@ void AudioHandler::SetPlaying(bool playing)
     {
         // Nothing to start or stop: a voice with an empty ring is silent. Only
         // flush, so a stale tail cannot replay when the core resumes.
-        if (!playing && m_mx && m_voice_l >= 0)
+        Object* mx = LiveMx();
+        if (!playing && mx && m_voice_l >= 0)
         {
-            m_mx->call("flush_voice", m_voice_l);
+            mx->call("flush_voice", m_voice_l);
             if (m_voice_r >= 0)
-                m_mx->call("flush_voice", m_voice_r);
+                mx->call("flush_voice", m_voice_r);
         }
         if (playing && m_audio_sample_rate > 0.0 &&
             m_sink_ready.load(std::memory_order_relaxed) &&
-            m_mx && m_voice_l >= 0)
+            mx && m_voice_l >= 0)
             m_accept_audio.store(true, std::memory_order_release);
         return;
     }

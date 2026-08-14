@@ -117,7 +117,12 @@ private:
     std::atomic<bool> m_playing{true};
 
     // --- Meta XR Audio path -------------------------------------------------
-    godot::Object* m_mx = nullptr;          ///< the MetaXRAudio singleton, or null
+    /// The MetaXRAudio singleton belongs to another GDExtension, which memdeletes
+    /// it when that extension deinitialises. Extension teardown order is not ours
+    /// to choose, so hold it by id: once it is gone this resolves to null instead
+    /// of calling into freed memory.
+    godot::Object* LiveMx() const;
+    uint64_t m_mx_id = 0;
     int    m_voice_l = -1;
     int    m_voice_r = -1;
     bool   m_use_sdk = false;

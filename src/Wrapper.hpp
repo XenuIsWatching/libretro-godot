@@ -70,9 +70,20 @@ public:
 
     void StartContent(godot::MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path);
     void StopContent();
-    /// Blocking stop for node teardown. Joins and finishes teardown before
-    /// returning, so handler DeInit still sees a live scene.
-    void ShutdownForExit();
+    /// Silence, then stop the emulation thread, waiting at most `budget_ms` for it
+    /// to leave the core. True when it exited and teardown finished. False means
+    /// the core never unwound (Dolphin has managed this): the thread is still
+    /// running inside this Wrapper, so the caller must Abandon it rather than
+    /// destroy it.
+    bool ShutdownForExit(uint32_t budget_ms);
+
+    /// Same bounded stop without the silencing, for a restart.
+    bool StopEmulationThreadBounded(uint32_t budget_ms);
+
+    /// Give up on a thread that will not stop: silence it and detach it, leaving
+    /// every handler it is still inside alive. A Wrapper this has been called on
+    /// must never be destroyed.
+    void AbandonThread();
     /// m_node re-resolved through ObjectDB, or null if it has been freed.
     godot::MeshInstance3D* LiveNode() const;
     void SetScreenMesh(godot::MeshInstance3D* node);
