@@ -503,6 +503,19 @@ AudioStreamPlayer3D* AudioHandler::LivePlayer() const
     return Object::cast_to<AudioStreamPlayer3D>(ObjectDB::get_instance(m_audio_stream_player_id));
 }
 
+void AudioHandler::SilenceForTeardown()
+{
+    m_accept_audio.store(false, std::memory_order_release);
+    m_playing.store(false, std::memory_order_release);
+    std::lock_guard<std::recursive_mutex> sink_lock(m_sink_mutex);
+    if (m_use_sdk && m_mx && m_voice_l >= 0)
+    {
+        m_mx->call("flush_voice", m_voice_l);
+        if (m_voice_r >= 0)
+            m_mx->call("flush_voice", m_voice_r);
+    }
+}
+
 void AudioHandler::DeInit()
 {
     m_accept_audio.store(false, std::memory_order_release);
@@ -526,8 +539,9 @@ void AudioHandler::DeInit()
     m_resampler = nullptr;
     m_resampler_backend = nullptr;
 
-    if (AudioStreamPlayer3D* player = LivePlayer())
-        player->stop();
+    // No stop() here: the player is being freed either way, and ObjectDB still
+    // reports a node as alive while its own destructor runs, so the call lands in
+    // an already-destroyed Vector<Ref<AudioStreamPlayback>>.
 
     if (m_audio_stream_generator_playback.is_valid())
     {

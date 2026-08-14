@@ -32,6 +32,12 @@ public:
     /// ids. Transactional: failure leaves the previous backend running.
     bool ReinitSampleRate(double sample_rate);
     void SetPlaying(bool playing);
+
+    /// Silence without touching the player node. ObjectDB still reports a node as
+    /// alive while its own destructor runs, so a stop() during teardown walks an
+    /// already-destroyed Vector<Ref<AudioStreamPlayback>> inside Godot. Nothing
+    /// needs stopping on the way out — the node is being freed regardless.
+    void SilenceForTeardown();
     void SetAudioStreamPlayer(godot::AudioStreamPlayer3D* player)
     {
         m_audio_stream_player_id = player ? static_cast<uint64_t>(player->get_instance_id()) : 0;

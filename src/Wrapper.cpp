@@ -446,7 +446,7 @@ void Wrapper::StopContent()
 void Wrapper::ShutdownForExit()
 {
     if (m_audio_handler)
-        m_audio_handler->SetPlaying(false);
+        m_audio_handler->SilenceForTeardown();
     StopEmulationThread(true);
 }
 
