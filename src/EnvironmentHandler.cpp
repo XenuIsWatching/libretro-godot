@@ -274,7 +274,7 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
         return true;
     }
     case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:                            return EnvironmentNotImplemented(cmd);
-    case RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT:                               return EnvironmentNotImplemented(cmd);
+    case RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT:                               return instance->m_video_handler->SetSharedContext();
     case RETRO_ENVIRONMENT_GET_VFS_INTERFACE:                                   return instance->m_environment_handler->GetVfsInterface(static_cast<retro_vfs_interface_info*>(data));
     case RETRO_ENVIRONMENT_GET_LED_INTERFACE:                                   return instance->m_environment_handler->GetLedInterface(static_cast<retro_led_interface*>(data));
     case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:                              return instance->m_environment_handler->GetAudioVideoEnable(static_cast<retro_av_enable_flags*>(data));

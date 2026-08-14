@@ -56,6 +56,13 @@ public:
     bool SetHwRender(retro_hw_render_callback* hw_render_callback);
     bool GetPreferredHwRender(retro_hw_context_type* hw_context_type) const;
 
+    /// The core wants to create further contexts that share objects with ours —
+    /// Dolphin's async shader compiler does, and refusing costs it the compiler
+    /// worker thread entirely. Only answered for the GL context types, where a
+    /// context is a legal share parent; a shared Vulkan context means something
+    /// else and is not offered. Asked after SetHwRender, so the type is known.
+    bool SetSharedContext() const;
+
     /// Invoke the core's context_destroy callback. Must run on the emulation
     /// thread before retro_unload_game (RetroArch's ordering), since Vulkan cores
     /// like paraLLEl-RDP free all their VkDevice objects only in this callback.

@@ -85,7 +85,24 @@ bool Core::Load(CallbackTrampolines* trampolines)
     m_name = name;
 
     std::string extension = std::filesystem::path(m_path).extension().string();
-    std::filesystem::path temp_path = std::filesystem::path(Wrapper::GetCurrentThreadWrapper()->GetTempDirectory()) / (name + GenerateHex(10) + extension);
+    const std::filesystem::path temp_dir = Wrapper::GetCurrentThreadWrapper()->GetTempDirectory();
+
+    // Unload() removes this run's copy, but a process that dies with a core loaded
+    // (a wedged core, a force-stop) leaves it behind for good — 246 MB a time for
+    // Dolphin, which has filled a Quest to 100% and then failed the next load with
+    // nothing but a silent refusal. Sweep the strays before adding another: a copy
+    // still in use by a live instance survives, because Windows will not delete a
+    // mapped DLL and unlinking a mapped .so leaves that mapping intact.
+    std::error_code sweep_ec;
+    for (const auto& entry : std::filesystem::directory_iterator(temp_dir, sweep_ec))
+    {
+        if (!entry.is_regular_file() || entry.path().extension() != extension)
+            continue;
+        std::error_code rm_ec;
+        std::filesystem::remove(entry.path(), rm_ec);
+    }
+
+    std::filesystem::path temp_path = temp_dir / (name + GenerateHex(10) + extension);
     // error_code overload: the throwing overload would abort the emulation thread
     // (no try/catch around the raw std::thread) on any copy failure.
     std::error_code copy_ec;

@@ -813,6 +813,22 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
     return true;
 }
 
+bool VideoHandler::SetSharedContext() const
+{
+    switch (m_hw_context_type)
+    {
+    case RETRO_HW_CONTEXT_OPENGL:
+    case RETRO_HW_CONTEXT_OPENGL_CORE:
+    case RETRO_HW_CONTEXT_OPENGLES2:
+    case RETRO_HW_CONTEXT_OPENGLES3:
+    case RETRO_HW_CONTEXT_OPENGLES_VERSION:
+        Log("Shared context granted for context type: " + std::to_string(m_hw_context_type));
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool VideoHandler::GetPreferredHwRender(retro_hw_context_type* hw_context_type) const
 {
     if (!hw_context_type)
