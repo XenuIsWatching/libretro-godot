@@ -46,6 +46,16 @@ private:
     int64_t m_frame;
 };
 
+/// retro_reset on the emulation thread: the front-panel reset switch. The core
+/// stays loaded and its thread keeps running, so nothing is torn down and
+/// nothing is joined — a core that owns internal threads (Dolphin) cannot wedge
+/// the caller the way a stop/start restart does.
+class EmuThreadCommandReset : public EmuThreadCommand
+{
+public:
+    void Execute(Wrapper& wrapper) override;
+};
+
 /// retro_set_controller_port_device on the emulation thread: a live plug/
 /// unplug while the core runs must not call into the core from the main
 /// thread mid-retro_run.

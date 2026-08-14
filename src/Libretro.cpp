@@ -196,6 +196,11 @@ void Libretro::RequestSramFlush()
     m_wrapper->RequestSramFlush();
 }
 
+void Libretro::RequestReset()
+{
+    m_wrapper->RequestReset();
+}
+
 void Libretro::RequestDiskInfo()
 {
     m_wrapper->RequestDiskInfo();
@@ -419,6 +424,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
     ClassDB::bind_method(D_METHOD("SetRemovableStorage", "removable"), &Libretro::SetRemovableStorage);
     ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);
+    ClassDB::bind_method(D_METHOD("RequestReset"), &Libretro::RequestReset);
     ClassDB::bind_method(D_METHOD("RequestDiskInfo"), &Libretro::RequestDiskInfo);
     ClassDB::bind_method(D_METHOD("SetDiskEjectState", "ejected"), &Libretro::SetDiskEjectState);
     ClassDB::bind_method(D_METHOD("ReplaceDiskImage", "index", "path"), &Libretro::ReplaceDiskImage);

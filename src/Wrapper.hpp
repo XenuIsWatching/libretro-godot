@@ -208,6 +208,11 @@ public:
     void FlushSramIfDirty(bool final_flush = false);
     void ApplySramSwap(const std::string& new_path);
 
+    /// Front-panel reset: retro_reset on the emulation thread, between frames.
+    /// Nothing is unloaded and no thread is joined, so this cannot block the
+    /// caller however the core manages its own threads.
+    void RequestReset();
+
     /// Serialize the core on the emulation thread; result arrives via the
     /// savestate_ready(data, frame) signal (empty data on failure).
     void RequestSaveState();

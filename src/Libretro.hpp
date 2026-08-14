@@ -224,6 +224,9 @@ public:
     void SetRemovableStorage(bool removable);
     /// Force a dirty-check flush of SRAM to its backing file now.
     void RequestSramFlush();
+    /// Front-panel reset (retro_reset), applied between frames. The core stays
+    /// loaded, so the screen, audio voices and port bindings all survive.
+    void RequestReset();
     // ── Disk control (multi-disc games) ──────────────────────────────────────
     /// Query the core's disk-control state → disk_control_ready(has_control,
     /// count, current_index, ejected). Emits has_control=false when the core

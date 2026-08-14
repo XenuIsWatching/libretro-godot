@@ -892,6 +892,12 @@ void Wrapper::RequestSramFlush()
         m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandFlushSram>());
 }
 
+void Wrapper::RequestReset()
+{
+    if (m_core && m_running)
+        m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandReset>());
+}
+
 /// Emu thread: fill SAVE_RAM from the pending bytes (netplay) or the backing
 /// file, then snapshot the shadow copy used for dirty checks.
 void Wrapper::LoadSramFromSource()

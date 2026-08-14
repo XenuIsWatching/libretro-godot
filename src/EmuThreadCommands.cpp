@@ -65,6 +65,14 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
     wrapper.EmitSignalOnMainThread("savestate_loaded", args);
 }
 
+void EmuThreadCommandReset::Execute(Wrapper& wrapper)
+{
+    if (wrapper.m_core && wrapper.m_core->retro_reset)
+        wrapper.m_core->retro_reset();
+    else
+        LogWarning("Reset failed (no core running?)");
+}
+
 void EmuThreadCommandSetPortDevice::Execute(Wrapper& wrapper)
 {
     if (!wrapper.m_core || !wrapper.m_input_handler)
