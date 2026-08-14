@@ -458,7 +458,12 @@ public:
     bool m_supports_achievements = true;
 
     /// The Libretro node that owns this Wrapper (set by Libretro constructor).
-    Libretro* m_libretro_node = nullptr;
+    /// Held by id, not by pointer: the emulation thread signals back through this
+    /// node, and it can be freed while that thread is still running (a scene change,
+    /// or a core that will not unwind). Resolved per use, so a dead node is a
+    /// no-op instead of a dangling call.
+    Libretro* LiveLibretroNode() const;
+    uint64_t m_libretro_node_id = 0;
 
     /// Signal the emulation thread to stop. blocking=true joins and tears down
     /// synchronously (StartContent restart, destructor). blocking=false returns

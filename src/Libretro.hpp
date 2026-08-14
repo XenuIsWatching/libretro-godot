@@ -267,7 +267,7 @@ public:
     void _exit_tree() override;
     void _process(double delta) override;
 
-    /// Called from the emulation thread (via Wrapper::m_libretro_node) when options are ready.
+    /// Called from the emulation thread (via Wrapper::LiveLibretroNode) when options are ready.
     void NotifyOptionsReady();
 
     /// Called from the emulation thread after SAVE_RAM was actually written to

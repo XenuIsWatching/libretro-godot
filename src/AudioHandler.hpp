@@ -32,7 +32,10 @@ public:
     /// ids. Transactional: failure leaves the previous backend running.
     bool ReinitSampleRate(double sample_rate);
     void SetPlaying(bool playing);
-    void SetAudioStreamPlayer(godot::AudioStreamPlayer3D* player) { m_audio_stream_player = player; }
+    void SetAudioStreamPlayer(godot::AudioStreamPlayer3D* player)
+    {
+        m_audio_stream_player_id = player ? static_cast<uint64_t>(player->get_instance_id()) : 0;
+    }
     bool IsReady() const { return m_sink_ready.load(std::memory_order_acquire); }
 
     bool SetAudioBufferStatusCallback(const retro_audio_buffer_status_callback* callback);
@@ -94,7 +97,12 @@ private:
     // --- fallback: Godot's own 3D panning -----------------------------------
     godot::Ref<godot::AudioStreamGenerator> m_audio_stream_generator = nullptr;
     godot::Ref<godot::AudioStreamGeneratorPlayback> m_audio_stream_generator_playback = nullptr;
-    godot::AudioStreamPlayer3D* m_audio_stream_player = nullptr;
+    /// The player is a child of the Libretro node, so the SceneTree owns it and is
+    /// free to destroy it before this handler tears down — at which point a raw
+    /// pointer is a use-after-free, intermittently, depending on teardown order.
+    /// Held by id and resolved per use, the way Wrapper holds the screen mesh.
+    godot::AudioStreamPlayer3D* LivePlayer() const;
+    uint64_t m_audio_stream_player_id = 0;
     // Audio can arrive from a core-created worker while the main thread changes
     // the backend. Recursive because batch processing calls the sink helpers.
     mutable std::recursive_mutex m_sink_mutex;

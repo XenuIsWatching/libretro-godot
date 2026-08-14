@@ -351,25 +351,26 @@ void AudioHandler::Init(float buffer_capacity_sec, double sample_rate)
         m_audio_sample_rate > 0.0 ? m_audio_sample_rate : m_mix_rate);
     m_audio_stream_generator->set_buffer_length(m_audio_buffer_capacity_sec);
 
-    if (!m_audio_stream_player)
+    AudioStreamPlayer3D* player = LivePlayer();
+    if (!player)
     {
         LogError("AudioHandler: fallback AudioStreamPlayer3D is missing");
         return;
     }
-    m_audio_stream_player->set_stream(m_audio_stream_generator);
-    m_audio_stream_player->play();
+    player->set_stream(m_audio_stream_generator);
+    player->play();
 
-    m_audio_stream_generator_playback = m_audio_stream_player->get_stream_playback();
+    m_audio_stream_generator_playback = player->get_stream_playback();
     if (m_audio_stream_generator_playback.is_null())
     {
         LogError("AudioHandler: failed to start fallback audio stream");
-        m_audio_stream_player->stop();
+        player->stop();
         return;
     }
     m_sink_ready.store(true, std::memory_order_release);
     const bool playing = m_playing.load(std::memory_order_relaxed);
     if (!playing || m_audio_sample_rate <= 0.0)
-        m_audio_stream_player->stop();
+        player->stop();
     m_accept_audio.store(playing && m_audio_sample_rate > 0.0,
                          std::memory_order_release);
 }
@@ -393,9 +394,9 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
             if (m_voice_r >= 0)
                 m_mx->call("flush_voice", m_voice_r);
         }
-        else if (m_audio_stream_player)
+        else if (AudioStreamPlayer3D* player = LivePlayer())
         {
-            m_audio_stream_player->stop();
+            player->stop();
         }
         m_audio_sample_rate = 0.0;
         m_frames_produced.store(0, std::memory_order_relaxed);
@@ -435,7 +436,8 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
     }
     else
     {
-        if (!m_audio_stream_player)
+        AudioStreamPlayer3D* player = LivePlayer();
+        if (!player)
         {
             m_sink_ready.store(false, std::memory_order_release);
             return false;
@@ -449,23 +451,23 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
         const Ref<AudioStreamGenerator> previous_generator = m_audio_stream_generator;
         const Ref<AudioStreamGeneratorPlayback> previous_playback =
             m_audio_stream_generator_playback;
-        m_audio_stream_player->stop();
-        m_audio_stream_player->set_stream(replacement);
-        m_audio_stream_player->play();
+        player->stop();
+        player->set_stream(replacement);
+        player->play();
         Ref<AudioStreamGeneratorPlayback> replacement_playback =
-            m_audio_stream_player->get_stream_playback();
+            player->get_stream_playback();
         if (replacement_playback.is_null())
         {
-            m_audio_stream_player->stop();
-            m_audio_stream_player->set_stream(previous_generator);
+            player->stop();
+            player->set_stream(previous_generator);
             m_audio_stream_generator = previous_generator;
             m_audio_stream_generator_playback = previous_playback;
             bool restored = previous_generator.is_valid() && previous_playback.is_valid();
             if (m_playing.load(std::memory_order_relaxed))
             {
-                m_audio_stream_player->play();
+                player->play();
                 m_audio_stream_generator_playback =
-                    m_audio_stream_player->get_stream_playback();
+                    player->get_stream_playback();
                 restored = m_audio_stream_generator_playback.is_valid();
             }
             m_sink_ready.store(restored, std::memory_order_release);
@@ -479,7 +481,7 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
         m_audio_stream_generator = replacement;
         m_audio_stream_generator_playback = replacement_playback;
         if (!m_playing.load(std::memory_order_relaxed))
-            m_audio_stream_player->stop();
+            player->stop();
     }
 
     m_audio_sample_rate = sample_rate;
@@ -492,6 +494,13 @@ bool AudioHandler::ReinitSampleRate(double sample_rate)
     m_accept_audio.store(m_playing.load(std::memory_order_relaxed) && sample_rate > 0.0,
                          std::memory_order_release);
     return true;
+}
+
+AudioStreamPlayer3D* AudioHandler::LivePlayer() const
+{
+    if (m_audio_stream_player_id == 0)
+        return nullptr;
+    return Object::cast_to<AudioStreamPlayer3D>(ObjectDB::get_instance(m_audio_stream_player_id));
 }
 
 void AudioHandler::DeInit()
@@ -517,8 +526,8 @@ void AudioHandler::DeInit()
     m_resampler = nullptr;
     m_resampler_backend = nullptr;
 
-    if (m_audio_stream_player)
-        m_audio_stream_player->stop();
+    if (AudioStreamPlayer3D* player = LivePlayer())
+        player->stop();
 
     if (m_audio_stream_generator_playback.is_valid())
     {
@@ -529,13 +538,15 @@ void AudioHandler::DeInit()
     if (m_audio_stream_generator.is_valid())
         m_audio_stream_generator.unref();
 
-    if (m_audio_stream_player)
+    // Only free it if it is still there: at application exit the SceneTree may have
+    // destroyed this child already, and freeing it twice crashes on the way out.
+    if (AudioStreamPlayer3D* player = LivePlayer())
     {
-        if (Node* parent = m_audio_stream_player->get_parent())
-            parent->remove_child(m_audio_stream_player);
-        memdelete(m_audio_stream_player);
-        m_audio_stream_player = nullptr;
+        if (Node* parent = player->get_parent())
+            parent->remove_child(player);
+        memdelete(player);
     }
+    m_audio_stream_player_id = 0;
 }
 
 void AudioHandler::SetPlaying(bool playing)
@@ -562,22 +573,23 @@ void AudioHandler::SetPlaying(bool playing)
         return;
     }
 
-    if (!m_audio_stream_player)
+    AudioStreamPlayer3D* player = LivePlayer();
+    if (!player)
         return;
     if (playing && m_audio_sample_rate <= 0.0)
     {
-        m_audio_stream_player->stop();
+        player->stop();
         return;
     }
     if (playing)
     {
-        m_audio_stream_player->play();
-        m_audio_stream_generator_playback = m_audio_stream_player->get_stream_playback();
+        player->play();
+        m_audio_stream_generator_playback = player->get_stream_playback();
         m_accept_audio.store(m_audio_stream_generator_playback.is_valid(), std::memory_order_release);
     }
     else
     {
-        m_audio_stream_player->stop();
+        player->stop();
     }
 }
 

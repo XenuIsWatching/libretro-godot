@@ -14,7 +14,7 @@ namespace Xenu
 Libretro::Libretro()
 {
     m_wrapper = std::make_unique<Wrapper>();
-    m_wrapper->m_libretro_node = this;
+    m_wrapper->m_libretro_node_id = static_cast<uint64_t>(get_instance_id());
 }
 
 Libretro::~Libretro() = default;

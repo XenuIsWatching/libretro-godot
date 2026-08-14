@@ -142,12 +142,13 @@ bool InputHandler::RumbleInterfaceSetRumbleState(uint32_t port, retro_rumble_eff
         strong = self->m_rumble_strong.count(port) ? self->m_rumble_strong[port] : 0;
     }
 
-    if (!changed || instance->m_libretro_node == nullptr)
+    Libretro* node = instance->LiveLibretroNode();
+    if (!changed || node == nullptr)
         return true;
 
     // Always forward the combined state (both weak and strong) so GDScript
     // sees a single coherent view per port regardless of which effect changed.
-    instance->m_libretro_node->call_deferred(
+    node->call_deferred(
         "emit_signal",
         "rumble_state_changed",
         static_cast<int>(port),

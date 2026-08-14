@@ -376,7 +376,14 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     audio_stream_player->set_attenuation_model(AudioStreamPlayer3D::ATTENUATION_INVERSE_DISTANCE);
     audio_stream_player->set_panning_strength(1.0f);
     audio_stream_player->set_max_db(0.0f);
-    m_libretro_node->add_child(audio_stream_player);
+    Libretro* owner = LiveLibretroNode();
+    if (!owner)
+    {
+        memdelete(audio_stream_player);
+        LogError("StartContent: the Libretro node is gone");
+        return;
+    }
+    owner->add_child(audio_stream_player);
 
     std::filesystem::path core_path = ResolveCorePath(root_directory, core_name);
 
@@ -441,6 +448,13 @@ void Wrapper::ShutdownForExit()
     if (m_audio_handler)
         m_audio_handler->SetPlaying(false);
     StopEmulationThread(true);
+}
+
+Libretro* Wrapper::LiveLibretroNode() const
+{
+    if (m_libretro_node_id == 0)
+        return nullptr;
+    return Object::cast_to<Libretro>(ObjectDB::get_instance(m_libretro_node_id));
 }
 
 MeshInstance3D* Wrapper::LiveNode() const
@@ -737,8 +751,8 @@ void Wrapper::RequestSaveState()
 {
     if (!m_core || !m_running)
     {
-        if (m_libretro_node)
-            m_libretro_node->call_deferred("emit_signal", "savestate_ready",
+        if (Libretro* node = LiveLibretroNode())
+            node->call_deferred("emit_signal", "savestate_ready",
                 godot::PackedByteArray(), static_cast<int64_t>(-1));
         return;
     }
@@ -749,8 +763,8 @@ void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame
 {
     if (!m_core || !m_running)
     {
-        if (m_libretro_node)
-            m_libretro_node->call_deferred("emit_signal", "savestate_loaded", false);
+        if (Libretro* node = LiveLibretroNode())
+            node->call_deferred("emit_signal", "savestate_loaded", false);
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandLoadState>(data, frame));
@@ -762,8 +776,8 @@ void Wrapper::RequestDiskInfo()
 {
     if (!m_core || !m_running)
     {
-        if (m_libretro_node)
-            m_libretro_node->call_deferred("emit_signal", "disk_control_ready",
+        if (Libretro* node = LiveLibretroNode())
+            node->call_deferred("emit_signal", "disk_control_ready",
                 false, static_cast<int64_t>(0), static_cast<int64_t>(0), false);
         return;
     }
@@ -971,8 +985,8 @@ void Wrapper::FlushSramIfDirty(bool final_flush)
 
     // Closed above so the file is complete on disk before anyone is told about
     // it; a listener that uploads must never read a half-written save.
-    if (m_libretro_node)
-        m_libretro_node->NotifySramFlushed(
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifySramFlushed(
             godot::String(m_sram_path.c_str()), static_cast<int64_t>(size), final_flush);
 }
 
@@ -1175,8 +1189,8 @@ bool Wrapper::SaveRollbackState(int64_t frame)
 void Wrapper::FailNetplayRollback(const std::string& reason)
 {
     LogError("Rollback cannot recover safely: " + reason);
-    if (m_libretro_node)
-        m_libretro_node->call_deferred("emit_signal", "netplay_error",
+    if (Libretro* node = LiveLibretroNode())
+        node->call_deferred("emit_signal", "netplay_error",
             godot::String(reason.c_str()));
     // Continuing from a timeline that failed to rewind would silently desync.
     // Use the same deferred-stop path as RETRO_ENVIRONMENT_SHUTDOWN so teardown
@@ -2106,8 +2120,8 @@ void Wrapper::EmulationThreadLoop()
     m_np_replay_mute_video = false;
     m_np_rollback_count.store(0, std::memory_order_relaxed);
 
-    if (m_libretro_node)
-        m_libretro_node->NotifyOptionsReady();
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifyOptionsReady();
 
     while (m_running)
     {
