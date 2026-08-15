@@ -3,6 +3,7 @@
 #include <godot_cpp/classes/node3d.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
+#include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -124,6 +125,12 @@ public:
     /// True while this node's core is the one being tracked.
     bool RaHoldsSession() const;
     void SetScreenMesh(godot::MeshInstance3D* node);
+
+    /// The running core's picture, for a display that samples it rather than being
+    /// painted into — the television reads this to put the machine on its glass.
+    /// Null before the first frame, and a NEW object whenever the core changes
+    /// resolution, so read it per frame instead of caching it.
+    godot::Ref<godot::ImageTexture> GetVideoTexture() const;
     void SetCoreOption(const godot::String& key, const godot::String& value);
     void SetInputEnabled(bool enabled);
 

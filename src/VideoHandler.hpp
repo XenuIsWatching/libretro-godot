@@ -44,6 +44,16 @@ public:
     /// object before each context_reset callback.
     bool ReinitHwRenderContext(int32_t width, int32_t height);
     bool UsesHardwareRendering() const { return m_context_reset != nullptr; }
+    /// The core's picture, for a display that SAMPLES it instead of being painted
+    /// into. Null until the first frame has produced a texture.
+    ///
+    /// Main-thread only, and safe without a lock for that reason: CreateTexture and
+    /// UpdateTexture both run on the main thread as queued ThreadCommands, so a
+    /// reader on that thread cannot see a half-swapped texture. The identity changes
+    /// whenever the core changes resolution — CreateTexture makes a NEW ImageTexture
+    /// — so a caller must re-read it rather than cache it.
+    godot::Ref<godot::ImageTexture> GetTexture() const { return m_texture; }
+
     void SetImageFormat(godot::Image::Format format);
     void CreateTexture(int32_t width, int32_t height, godot::Image::Format image_format, godot::PackedByteArray pixel_data, bool flip_y);
     void UpdateTexture(godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);

@@ -502,6 +502,11 @@ MeshInstance3D* Wrapper::LiveNode() const
     return Object::cast_to<MeshInstance3D>(ObjectDB::get_instance(m_node_id));
 }
 
+Ref<ImageTexture> Wrapper::GetVideoTexture() const
+{
+    return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
+}
+
 void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
 {
     if (!m_video_handler)

@@ -71,6 +71,11 @@ void Libretro::SetScreenMesh(MeshInstance3D* node)
     m_wrapper->SetScreenMesh(node);
 }
 
+Ref<ImageTexture> Libretro::GetVideoTexture() const
+{
+    return m_wrapper ? m_wrapper->GetVideoTexture() : Ref<ImageTexture>();
+}
+
 void Libretro::SetCoreOption(const godot::String& key, const godot::String& value)
 {
     m_wrapper->SetCoreOption(key.utf8().get_data(), value.utf8().get_data());
@@ -423,6 +428,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("StartContent", "node", "root_directory", "core_name", "game_path"), &Libretro::StartContent);
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("SetScreenMesh", "node"), &Libretro::SetScreenMesh);
+    ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);
     ClassDB::bind_method(D_METHOD("PeekCoreOptions", "root_directory", "core_name"), &Libretro::PeekCoreOptions);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
