@@ -76,6 +76,12 @@ Ref<ImageTexture> Libretro::GetVideoTexture() const
     return m_wrapper ? m_wrapper->GetVideoTexture() : Ref<ImageTexture>();
 }
 
+void Libretro::SetAudioPlaying(bool playing)
+{
+    if (m_wrapper)
+        m_wrapper->SetAudioPlaying(playing);
+}
+
 void Libretro::SetCoreOption(const godot::String& key, const godot::String& value)
 {
     m_wrapper->SetCoreOption(key.utf8().get_data(), value.utf8().get_data());
@@ -429,6 +435,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("SetScreenMesh", "node"), &Libretro::SetScreenMesh);
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
+    ClassDB::bind_method(D_METHOD("SetAudioPlaying", "playing"), &Libretro::SetAudioPlaying);
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);
     ClassDB::bind_method(D_METHOD("PeekCoreOptions", "root_directory", "core_name"), &Libretro::PeekCoreOptions);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);

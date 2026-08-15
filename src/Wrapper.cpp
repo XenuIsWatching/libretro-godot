@@ -507,6 +507,12 @@ Ref<ImageTexture> Wrapper::GetVideoTexture() const
     return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
 }
 
+void Wrapper::SetAudioPlaying(bool playing)
+{
+    if (m_audio_handler)
+        m_audio_handler->SetPlaying(playing);
+}
+
 void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
 {
     if (!m_video_handler)
@@ -514,8 +520,11 @@ void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
     m_video_handler->SetMesh(LiveNode(), new_mesh);
     m_node = new_mesh;
     m_node_id = new_mesh ? new_mesh->get_instance_id() : 0;
-    if (m_audio_handler)
-        m_audio_handler->SetPlaying(new_mesh != nullptr);
+    // Whether the sound is heard is no longer read off the mesh. It used to be —
+    // no mesh, no picture, no point in the sound — but a picture now reaches a
+    // television by being sampled, so a machine whose own panel is dark because
+    // the picture moved to a set would have been silenced with it. See
+    // SetAudioPlaying, which the frontend calls when the wiring changes.
 }
 
 godot::Array Wrapper::GetControllerInfo() const

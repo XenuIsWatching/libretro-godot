@@ -131,6 +131,10 @@ public:
     /// Null before the first frame, and a NEW object whenever the core changes
     /// resolution, so read it per frame instead of caching it.
     godot::Ref<godot::ImageTexture> GetVideoTexture() const;
+
+    /// Whether this machine's sound is heard. A console wired to nothing is
+    /// silent; it used to be silenced as a side effect of having no screen mesh.
+    void SetAudioPlaying(bool playing);
     void SetCoreOption(const godot::String& key, const godot::String& value);
     void SetInputEnabled(bool enabled);
 

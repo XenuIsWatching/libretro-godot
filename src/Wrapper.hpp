@@ -89,6 +89,10 @@ public:
     void SetScreenMesh(godot::MeshInstance3D* node);
     /// The running core's picture. See VideoHandler::GetTexture.
     godot::Ref<godot::ImageTexture> GetVideoTexture() const;
+    /// Whether the core's sound is heard at all. Used to be a side effect of
+    /// SetScreenMesh — a machine with nowhere to put its picture was muted — which
+    /// only worked while the picture went somewhere by being PAINTED there.
+    void SetAudioPlaying(bool playing);
 
     const std::unordered_map<std::string, OptionCategory>& GetOptionCategories() const { return m_options_handler->GetCategories(); }
     const std::unordered_map<std::string, OptionDefinition>& GetOptionDefinitions() const { return m_options_handler->GetDefinitions(); }
