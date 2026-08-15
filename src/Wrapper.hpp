@@ -5,8 +5,6 @@
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
-#include <godot_cpp/classes/mesh_instance3d.hpp>
-#include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
 
@@ -68,7 +66,7 @@ public:
     /// the same file for a given core name.
     static std::string ResolveCorePath(const std::string& root_directory, const std::string& core_name);
 
-    void StartContent(godot::MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path);
+    void StartContent(const std::string& root_directory, const std::string& core_name, const std::string& game_path);
     void StopContent();
     /// Silence, then stop the emulation thread, waiting at most `budget_ms` for it
     /// to leave the core. True when it exited and teardown finished. False means
@@ -84,9 +82,6 @@ public:
     /// every handler it is still inside alive. A Wrapper this has been called on
     /// must never be destroyed.
     void AbandonThread();
-    /// m_node re-resolved through ObjectDB, or null if it has been freed.
-    godot::MeshInstance3D* LiveNode() const;
-    void SetScreenMesh(godot::MeshInstance3D* node);
     /// The running core's picture. See VideoHandler::GetTexture.
     godot::Ref<godot::ImageTexture> GetVideoTexture() const;
     /// Whether the core's sound is heard at all. Used to be a side effect of
@@ -331,10 +326,6 @@ public:
 
     void _process(double delta);
 
-    godot::MeshInstance3D* m_node;
-    /// Instance id of m_node. A raw node pointer outlives the node it points at
-    /// during scene teardown; this is what makes the liveness check possible.
-    uint64_t m_node_id = 0;
 
     const std::string& GetRootDirectory() const { return m_root_directory; }
     const std::string& GetTempDirectory() const { return m_temp_directory; }

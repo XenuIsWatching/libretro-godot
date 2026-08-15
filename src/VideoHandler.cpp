@@ -299,61 +299,17 @@ retro_proc_address_t VideoHandler::HwRenderGetProcAddress(const char* sym)
 #endif
 }
 
-void VideoHandler::Init(MeshInstance3D* mesh)
+void VideoHandler::Init()
 {
-    if (m_new_material.is_valid())
-        m_new_material.unref();
-
-    m_new_material.instantiate();
-    m_new_material->set_albedo(Color(0, 0, 0, 1));
-    m_new_material->set_feature(StandardMaterial3D::FEATURE_EMISSION, true);
-    // Point-sample the core's picture. StandardMaterial3D defaults to
-    // LINEAR_WITH_MIPMAPS, which on a 240x160 GBA frame blends every texel with its
-    // neighbors no matter how the screen is scaled, so the emulator output arrives
-    // pre-softened before any headset resampling. Every shader that handles a core
-    // picture (screen_window, gameboy_lcd, vb_stereo) already declares
-    // filter_nearest; this is the path the plain handheld screens (GBA, PSP) and
-    // non-CRT TVs use.
-    m_new_material->set_texture_filter(StandardMaterial3D::TEXTURE_FILTER_NEAREST);
-
-    // mesh may be null (console powered on with no TV): create the material now
-    // and bind it once a mesh is attached via SetScreenMesh(). The core's texture
-    // still lands on m_new_material, so the picture appears the moment a TV connects.
-    if (mesh)
-    {
-        m_original_surface_material_override = mesh->get_surface_override_material(0);
-        mesh->set_surface_override_material(0, m_new_material);
-    }
-}
-
-void VideoHandler::SetMesh(MeshInstance3D* old_mesh, MeshInstance3D* new_mesh)
-{
-    // Restore original material on old mesh
-    if (old_mesh && m_new_material.is_valid())
-        old_mesh->set_surface_override_material(0, m_original_surface_material_override);
-
-    if (new_mesh)
-    {
-        m_original_surface_material_override = new_mesh->get_surface_override_material(0);
-        new_mesh->set_surface_override_material(0, m_new_material);
-        // Re-apply existing texture if we already have one
-        if (m_texture.is_valid())
-            m_new_material->set_texture(StandardMaterial3D::TEXTURE_EMISSION, m_texture);
-    }
+    // Nothing to set up for the picture any more. This used to build an emissive
+    // material and install it on a mesh the frontend handed over — and, because a
+    // material installed once is the last word, everything that later wanted to
+    // show or hide a machine had to be sequenced around that single write. The
+    // frame goes into m_texture; whoever displays it asks for it.
 }
 
 void VideoHandler::DeInit()
 {
-    auto* w = Wrapper::GetCurrentThreadWrapper();
-    // LiveNode(), not m_node: teardown can run after the scene that owns the
-    // mesh has been freed, and the raw pointer does not go null when it does.
-    MeshInstance3D* node = w ? w->LiveNode() : nullptr;
-    if (node)
-        node->set_surface_override_material(0, m_original_surface_material_override);
-
-    if (m_new_material.is_valid())
-        m_new_material.unref();
-
     if (m_texture.is_valid())
         m_texture.unref();
 
@@ -856,13 +812,9 @@ void VideoHandler::CreateTexture(int32_t width, int32_t height, Image::Format im
     if (flip_y)
         m_image->flip_y();
 
+    // A NEW texture object, which is why a display samples GetTexture() per frame
+    // rather than holding on to what it got.
     m_texture = ImageTexture::create_from_image(m_image);
-
-    auto* w = Wrapper::GetCurrentThreadWrapper();
-    MeshInstance3D* node = w ? w->LiveNode() : nullptr;
-    if (node)
-        node->set_surface_override_material(0, m_new_material);
-    m_new_material->set_texture(StandardMaterial3D::TEXTURE_EMISSION, m_texture);
 }
 
 void VideoHandler::UpdateTexture(PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y)

@@ -51,24 +51,19 @@ void Libretro::ConnectOptionsReady(const godot::Callable& callable, uint32_t fla
     connect("options_ready", callable, flags);
 }
 
-void Libretro::StartContent(MeshInstance3D* node, String root_directory, String core_name, String game_path)
+void Libretro::StartContent(String root_directory, String core_name, String game_path)
 {
     // The previous run has to be gone before this one starts: it owns the handlers
     // the new core would reuse. Bounded, because a core that will not unwind would
     // otherwise hang the caller (a reset, a netplay restart) forever.
     if (!m_wrapper->StopEmulationThreadBounded(kStopBudgetMs))
         AbandonWrapper();
-    m_wrapper->StartContent(node, root_directory.utf8().get_data(), core_name.utf8().get_data(), game_path.utf8().get_data());
+    m_wrapper->StartContent(root_directory.utf8().get_data(), core_name.utf8().get_data(), game_path.utf8().get_data());
 }
 
 void Libretro::StopContent()
 {
     m_wrapper->StopContent();
-}
-
-void Libretro::SetScreenMesh(MeshInstance3D* node)
-{
-    m_wrapper->SetScreenMesh(node);
 }
 
 Ref<ImageTexture> Libretro::GetVideoTexture() const
@@ -431,9 +426,8 @@ Dictionary Libretro::ConvertOptionValues(const std::unordered_map<std::string, s
 void Libretro::_bind_methods()
 {
     ClassDB::bind_method(D_METHOD("ConnectOptionsReady", "callable", "flags"), &Libretro::ConnectOptionsReady, DEFVAL(0u));
-    ClassDB::bind_method(D_METHOD("StartContent", "node", "root_directory", "core_name", "game_path"), &Libretro::StartContent);
+    ClassDB::bind_method(D_METHOD("StartContent", "root_directory", "core_name", "game_path"), &Libretro::StartContent);
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
-    ClassDB::bind_method(D_METHOD("SetScreenMesh", "node"), &Libretro::SetScreenMesh);
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("SetAudioPlaying", "playing"), &Libretro::SetAudioPlaying);
     ClassDB::bind_method(D_METHOD("SetCoreOption", "key", "value"), &Libretro::SetCoreOption);

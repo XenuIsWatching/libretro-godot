@@ -1,8 +1,6 @@
 #pragma once
 
-#include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
-#include <godot_cpp/classes/standard_material3d.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -34,9 +32,8 @@ public:
     static uintptr_t HwRenderGetCurrentFramebuffer();
     static retro_proc_address_t HwRenderGetProcAddress(const char* sym);
 
-    void Init(godot::MeshInstance3D* mesh);
+    void Init();
     void DeInit();
-    void SetMesh(godot::MeshInstance3D* old_mesh, godot::MeshInstance3D* new_mesh);
 
     bool InitHwRenderContext(int32_t width, int32_t height);
     /// Replace an active hardware context for SET_SYSTEM_AV_INFO. The caller
@@ -106,8 +103,6 @@ public:
     static retro_hw_context_type GetPreferredHwRenderType();
 
 private:
-    godot::Ref<godot::StandardMaterial3D> m_original_surface_material_override = nullptr;
-    godot::Ref<godot::StandardMaterial3D> m_new_material = nullptr;
     // Size of the frame the emulation thread produced last. Emulation-thread
     // state: it decides there whether a frame needs a new texture or fits the
     // existing one. The main thread must not read it to size a queued frame:

@@ -2,7 +2,6 @@
 
 #include <godot_cpp/classes/node3d.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
-#include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
@@ -113,7 +112,7 @@ public:
     Libretro();
     ~Libretro();
 
-    void StartContent(godot::MeshInstance3D* node, godot::String root_directory, godot::String core_name, godot::String game_path);
+    void StartContent(godot::String root_directory, godot::String core_name, godot::String game_path);
     void StopContent();
 
     /// Ask to track RetroAchievements for the content about to be started.
@@ -124,7 +123,6 @@ public:
     bool RaClaimSession(int console_id);
     /// True while this node's core is the one being tracked.
     bool RaHoldsSession() const;
-    void SetScreenMesh(godot::MeshInstance3D* node);
 
     /// The running core's picture, for a display that samples it rather than being
     /// painted into — the television reads this to put the machine on its glass.

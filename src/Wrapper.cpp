@@ -357,20 +357,17 @@ std::string Wrapper::ResolveCorePath(const std::string& root_directory, const st
     return (cores_dir / (core_name + suffixes[0])).string();
 }
 
-void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directory, const std::string& core_name, const std::string& game_path)
+void Wrapper::StartContent(const std::string& root_directory, const std::string& core_name, const std::string& game_path)
 {
-    // node may be null: a console powered on with no TV connected still runs; the
-    // core renders to its texture with no bound mesh until SetScreenMesh() attaches
-    // one (e.g. when a TV is plugged in). VideoHandler::Init tolerates a null mesh.
+    // Nothing is told where to render. The core draws into its own texture and a
+    // display samples it, so a machine with nowhere to show its picture is not a
+    // case this has to know about.
 
     StopEmulationThread();
 
     // A cartridge run owns an in-memory ROM image. Do not retain or reuse it
     // when this Wrapper is restarted with disc/full-path content.
     std::vector<uint8_t>().swap(m_game_buffer);
-
-    m_node = node;
-    m_node_id = node ? node->get_instance_id() : 0;
 
     auto audio_stream_player = memnew(AudioStreamPlayer3D);
     audio_stream_player->set_name("AudioStreamPlayer3D");
@@ -399,7 +396,7 @@ void Wrapper::StartContent(MeshInstance3D* node, const std::string& root_directo
     m_message_handler = std::make_unique<MessageHandler>();
     m_log_handler = std::make_unique<LogHandler>();
 
-    m_video_handler->Init(node);
+    m_video_handler->Init();
 
     m_root_directory = root_directory;
     m_temp_directory = std::filesystem::path(root_directory).append("temp").string();
@@ -495,13 +492,6 @@ Libretro* Wrapper::LiveLibretroNode() const
     return Object::cast_to<Libretro>(ObjectDB::get_instance(m_libretro_node_id));
 }
 
-MeshInstance3D* Wrapper::LiveNode() const
-{
-    if (m_node_id == 0)
-        return nullptr;
-    return Object::cast_to<MeshInstance3D>(ObjectDB::get_instance(m_node_id));
-}
-
 Ref<ImageTexture> Wrapper::GetVideoTexture() const
 {
     return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
@@ -513,19 +503,6 @@ void Wrapper::SetAudioPlaying(bool playing)
         m_audio_handler->SetPlaying(playing);
 }
 
-void Wrapper::SetScreenMesh(MeshInstance3D* new_mesh)
-{
-    if (!m_video_handler)
-        return;
-    m_video_handler->SetMesh(LiveNode(), new_mesh);
-    m_node = new_mesh;
-    m_node_id = new_mesh ? new_mesh->get_instance_id() : 0;
-    // Whether the sound is heard is no longer read off the mesh. It used to be —
-    // no mesh, no picture, no point in the sound — but a picture now reaches a
-    // television by being sampled, so a machine whose own panel is dark because
-    // the picture moved to a set would have been silenced with it. See
-    // SetAudioPlaying, which the frontend calls when the wiring changes.
-}
 
 godot::Array Wrapper::GetControllerInfo() const
 {
@@ -1893,9 +1870,6 @@ void Wrapper::FinishTeardown()
     m_options_handler = nullptr;
     m_message_handler = nullptr;
     m_log_handler = nullptr;
-
-    m_node = nullptr;
-    m_node_id = 0;
 
     // Discard commands the dying thread left queued; they must not execute
     // against the next content run's handlers.
