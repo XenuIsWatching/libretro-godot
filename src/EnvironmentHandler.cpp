@@ -641,10 +641,26 @@ bool EnvironmentHandler::ReplaceDiskImage(uint32_t index, const std::string& pat
 
 bool EnvironmentHandler::GetThrottleState(retro_throttle_state* state)
 {
-    if (state)
+    if (!state)
+        return true;
+
+    // RETRO_THROTTLE_NONE carries the rate the frontend is actually calling
+    // retro_run at, which here is the core's own declared fps: that figure is
+    // the pacing loop's ceiling. A rate of 0 means something else entirely --
+    // it is what the unthrottled and frame-stepping modes report -- and a core
+    // that sizes its frame budget from this reads it as "unbounded". dosbox_pure
+    // divides by it, so a 0 inflated its budget ~70x and drove its cycle
+    // governor to the 4,000,000 ceiling at a tenth of real speed.
+    state->mode = RETRO_THROTTLE_NONE;
+    state->rate = 0.0f;
+
+    if (Wrapper* wrapper = Wrapper::GetCurrentThreadWrapper())
     {
-        state->mode = RETRO_THROTTLE_NONE;
-        state->rate = 0.0f;
+        double fps = wrapper->GetDeclaredFps();
+        if (!(fps > 0.0))
+            fps = wrapper->m_system_av_info.timing.fps;
+        if (fps > 0.0)
+            state->rate = static_cast<float>(fps);
     }
 
     return true;
