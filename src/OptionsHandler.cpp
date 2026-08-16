@@ -164,6 +164,8 @@ bool OptionsHandler::SetCoreOptions(const retro_core_option_definition* definiti
 
 bool OptionsHandler::SetCoreOptions(const retro_core_options_intl* options_intl)
 {
+    if (!options_intl)
+        return SetCoreOptions(static_cast<const retro_core_option_definition*>(nullptr));
     return SetCoreOptions(options_intl->local ? options_intl->local : options_intl->us);
 }
 
@@ -176,9 +178,17 @@ bool OptionsHandler::SetCoreOptionsV2(const retro_core_options_v2* options)
     if (!options)
         return true;
 
+    // desc and info are optional, and neocd ships every category with a null info.
+    // Constructing a std::string from that is undefined behaviour: it corrupts the
+    // heap and takes the process down a few allocations later.
     if (options->categories)
         for (auto category = options->categories; category->key; ++category)
-            m_categories.emplace(category->key, OptionCategory{ category->desc, category->info });
+            m_categories.emplace(category->key,
+                OptionCategory{ category->desc ? category->desc : "",
+                                category->info ? category->info : "" });
+
+    if (!options->definitions)
+        return true;
 
     for (auto definition = options->definitions; definition->key; ++definition)
     {
@@ -206,6 +216,8 @@ bool OptionsHandler::SetCoreOptionsV2(const retro_core_options_v2* options)
 
 bool OptionsHandler::SetCoreOptionsV2Intl(const retro_core_options_v2_intl* options)
 {
+    if (!options)
+        return SetCoreOptionsV2(nullptr);
     return SetCoreOptionsV2(options->local ? options->local : options->us);
 }
 
