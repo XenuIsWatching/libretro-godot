@@ -356,19 +356,26 @@ Dictionary Libretro::PeekCoreOptions(const String& root_directory, const String&
 {
     Dictionary result;
 
-    const std::string core_path = Wrapper::ResolveCorePath(
-        std::string(root_directory.utf8().get_data()),
-        std::string(core_name.utf8().get_data()));
+    const std::string root = std::string(root_directory.utf8().get_data());
+    const std::string core = std::string(core_name.utf8().get_data());
+    const std::string core_path = Wrapper::ResolveCorePath(root, core);
+
+    // The same three a real run of this core is given (see Wrapper::StartContent),
+    // so a core that decides what to publish from what it finds in them decides it
+    // here the way it will decide it at launch.
+    Xenu::PeekDirectories directories;
+    directories.system_directory      = std::filesystem::path(root).append("system").append(core).string();
+    directories.save_directory        = std::filesystem::path(root).append("save").append(core).string();
+    directories.core_assets_directory = std::filesystem::path(root).append("core_assets").append(core).string();
 
     // Qualified: the member function name would otherwise hide the free one.
     OptionsHandler options;
-    const std::filesystem::path options_path = std::filesystem::path(
-        std::string(root_directory.utf8().get_data())) / "core_options"
-        / (std::string(core_name.utf8().get_data()) + ".opt");
+    const std::filesystem::path options_path =
+        std::filesystem::path(root) / "core_options" / (core + ".opt");
     // Peeking may read this core's saved choices, but merely opening the menu
     // must not create a defaults file or touch another running instance.
     options.SetPersistencePath(options_path.string(), false);
-    if (!Xenu::PeekCoreOptions(core_path, options))
+    if (!Xenu::PeekCoreOptions(core_path, directories, options))
         return result;
 
     result["categories"]  = ConvertOptionCategories(options.GetCategories());
