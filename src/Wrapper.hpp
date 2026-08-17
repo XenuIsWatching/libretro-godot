@@ -225,6 +225,23 @@ public:
     /// caller however the core manages its own threads.
     void RequestReset();
 
+    /// Will a command enqueued right now ever be drained? True while the
+    /// emulation thread is running AND while it is still starting up: the queue
+    /// is drained at the top of every loop iteration, which by construction is
+    /// after the core is loaded, so enqueueing during startup is correct.
+    /// Testing m_running alone loses every request made in the window between
+    /// StartContent returning and the emulation thread reaching its loop.
+    bool AcceptsEmuCommands() const;
+
+    /// The negative answers, emitted straight through the node's deferred-call
+    /// queue rather than the main-thread command queue: _process drains that
+    /// queue only while running, and discards it outright while a stop is
+    /// pending, so a reply posted there when the core is gone is never seen.
+    /// Shared by the request guards and by EmuThreadCommand::Abandon.
+    void AnswerNoSaveState();
+    void AnswerNoLoadState();
+    void AnswerNoDiskInfo();
+
     /// Serialize the core on the emulation thread; result arrives via the
     /// savestate_ready(data, frame) signal (empty data on failure).
     void RequestSaveState();
@@ -378,6 +395,10 @@ public:
     bool m_audio_reinit_restore_failed = false;
     std::condition_variable m_condition_variable;
     std::atomic<bool> m_running = false;
+    // Raised by StartContent before the thread launches, dropped once the loop
+    // owns the core (or the thread gives up). Between those two points there is
+    // a thread that WILL drain the command queue, which m_running cannot say.
+    std::atomic<bool> m_starting = false;
     std::atomic<bool> m_stop_requested = false; // set by main thread; never written by emulation thread
     // Deferred-stop bookkeeping: m_stopping = a stop was signalled and teardown
     // is pending; m_thread_exited = the emulation thread has fully exited (set

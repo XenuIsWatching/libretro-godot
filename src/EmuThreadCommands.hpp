@@ -18,6 +18,11 @@ public:
     virtual ~EmuThreadCommand() = default;
 
     virtual void Execute(Wrapper& wrapper) = 0;
+
+    /// The emulation thread is going away without ever running this command.
+    /// A command whose caller is waiting on a signal must answer it here or that
+    /// caller waits forever; the rest do nothing, which is why this is not pure.
+    virtual void Abandon(Wrapper& wrapper) { (void)wrapper; }
 };
 
 /// retro_serialize the core on the emulation thread, then emit
@@ -26,6 +31,7 @@ class EmuThreadCommandSaveState : public EmuThreadCommand
 {
 public:
     void Execute(Wrapper& wrapper) override;
+    void Abandon(Wrapper& wrapper) override;
 };
 
 /// retro_unserialize a savestate on the emulation thread, reset the netplay
@@ -40,6 +46,7 @@ public:
     }
 
     void Execute(Wrapper& wrapper) override;
+    void Abandon(Wrapper& wrapper) override;
 
 private:
     godot::PackedByteArray m_data;
@@ -146,6 +153,7 @@ class EmuThreadCommandDiskInfo : public EmuThreadCommand
 {
 public:
     void Execute(Wrapper& wrapper) override;
+    void Abandon(Wrapper& wrapper) override;
 };
 
 /// Open/close the core's virtual disc tray (set_eject_state), then re-emit
@@ -159,6 +167,7 @@ public:
     }
 
     void Execute(Wrapper& wrapper) override;
+    void Abandon(Wrapper& wrapper) override;
 
 private:
     bool m_ejected;
@@ -177,6 +186,7 @@ public:
     }
 
     void Execute(Wrapper& wrapper) override;
+    void Abandon(Wrapper& wrapper) override;
 
 private:
     uint32_t m_index;

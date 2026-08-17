@@ -424,6 +424,9 @@ void Wrapper::StartContent(const std::string& root_directory, const std::string&
 
     m_stop_requested = false;
     m_thread_exited = false;
+    // Before the thread exists, so a request made on the very next line of the
+    // caller's frame is queued for it rather than refused.
+    m_starting = true;
     m_thread = std::thread(&Wrapper::EmulationThreadLoop, this);
 }
 
@@ -776,13 +779,37 @@ godot::PackedInt32Array Wrapper::TakeNetplayLocalRecords()
     return out;
 }
 
+bool Wrapper::AcceptsEmuCommands() const
+{
+    return m_core && (m_running.load(std::memory_order_acquire) ||
+                      m_starting.load(std::memory_order_acquire));
+}
+
+void Wrapper::AnswerNoSaveState()
+{
+    if (Libretro* node = LiveLibretroNode())
+        node->call_deferred("emit_signal", "savestate_ready",
+            godot::PackedByteArray(), static_cast<int64_t>(-1));
+}
+
+void Wrapper::AnswerNoLoadState()
+{
+    if (Libretro* node = LiveLibretroNode())
+        node->call_deferred("emit_signal", "savestate_loaded", false);
+}
+
+void Wrapper::AnswerNoDiskInfo()
+{
+    if (Libretro* node = LiveLibretroNode())
+        node->call_deferred("emit_signal", "disk_control_ready",
+            false, static_cast<int64_t>(0), static_cast<int64_t>(0), false);
+}
+
 void Wrapper::RequestSaveState()
 {
-    if (!m_core || !m_running)
+    if (!AcceptsEmuCommands())
     {
-        if (Libretro* node = LiveLibretroNode())
-            node->call_deferred("emit_signal", "savestate_ready",
-                godot::PackedByteArray(), static_cast<int64_t>(-1));
+        AnswerNoSaveState();
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSaveState>());
@@ -790,10 +817,9 @@ void Wrapper::RequestSaveState()
 
 void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame)
 {
-    if (!m_core || !m_running)
+    if (!AcceptsEmuCommands())
     {
-        if (Libretro* node = LiveLibretroNode())
-            node->call_deferred("emit_signal", "savestate_loaded", false);
+        AnswerNoLoadState();
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandLoadState>(data, frame));
@@ -803,11 +829,9 @@ void Wrapper::RequestLoadState(const godot::PackedByteArray& data, int64_t frame
 
 void Wrapper::RequestDiskInfo()
 {
-    if (!m_core || !m_running)
+    if (!AcceptsEmuCommands())
     {
-        if (Libretro* node = LiveLibretroNode())
-            node->call_deferred("emit_signal", "disk_control_ready",
-                false, static_cast<int64_t>(0), static_cast<int64_t>(0), false);
+        AnswerNoDiskInfo();
         return;
     }
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandDiskInfo>());
@@ -815,14 +839,14 @@ void Wrapper::RequestDiskInfo()
 
 void Wrapper::SetDiskEjectState(bool ejected)
 {
-    if (!m_core || !m_running)
+    if (!AcceptsEmuCommands())
         return;
     m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSetDiskEjected>(ejected));
 }
 
 void Wrapper::ReplaceDiskImage(uint32_t index, const godot::String& path)
 {
-    if (!m_core || !m_running)
+    if (!AcceptsEmuCommands())
         return;
     m_emu_thread_commands_queue.enqueue(
         std::make_unique<EmuThreadCommandReplaceDisk>(index, std::string(path.utf8().get_data())));
@@ -1898,6 +1922,23 @@ void Wrapper::EmulationThreadLoop()
     bool sram_active = false;
     ScopeExit lifecycle_cleanup([&]()
     {
+        // Answer whatever is still queued before tearing anything down. Callers
+        // of RequestSaveState/RequestLoadState/RequestDiskInfo are waiting on a
+        // signal, and a core that failed to load — or one being stopped — leaves
+        // no other thread that will ever reply to them.
+        //
+        // Clear the flags FIRST so nothing new is accepted, then drain. The gap
+        // between a guard passing and the enqueue landing is not closed by this
+        // and cannot be without a lock on the hot path; a caller still needs its
+        // own timeout for that window.
+        m_running = false;
+        m_starting = false;
+        {
+            std::unique_ptr<EmuThreadCommand> orphan;
+            while (m_emu_thread_commands_queue.try_dequeue(orphan))
+                orphan->Abandon(*this);
+        }
+
         // Every successful libretro lifecycle call has a matching teardown,
         // including failures before the frame loop begins.
         if (game_loaded)
@@ -1912,7 +1953,6 @@ void Wrapper::EmulationThreadLoop()
         if (core_initialized)
             m_core->retro_deinit();
 
-        m_running = false;
         t_current_wrapper = nullptr;
         Log("Libretro thread stopped.");
     });
@@ -2054,7 +2094,10 @@ void Wrapper::EmulationThreadLoop()
     if (m_stop_requested)
         return;
 
+    // Running before not-starting, never the other way round: a request landing
+    // between the two must see one of them true or it is refused.
     m_running = true;
+    m_starting = false;
 
     {
         std::unique_lock<std::mutex> lock(m_mutex);
@@ -2178,9 +2221,21 @@ void Wrapper::EmulationThreadLoop()
         }
 
         // Battery save: dirty-check flush roughly every 10 seconds of frames.
+        //
+        // The counter goes BACKWARDS: loading a savestate stores the state's own
+        // frame, and netplay rollback rewinds on every correction. A plain
+        // (fc - last >= 600) then reads hundreds of thousands of frames negative
+        // and never fires again for the rest of the run — the battery save
+        // silently stops being written. Restart the window at the rewound frame
+        // instead of flushing, so a rollback that corrects every frame does not
+        // pay for a dirty check every frame.
         {
             int64_t fc = m_frame_counter.load(std::memory_order_relaxed);
-            if (fc - m_sram_flush_counter >= 600)
+            if (fc < m_sram_flush_counter)
+            {
+                m_sram_flush_counter = fc;
+            }
+            else if (fc - m_sram_flush_counter >= 600)
             {
                 m_sram_flush_counter = fc;
                 FlushSramIfDirty();

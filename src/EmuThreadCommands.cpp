@@ -33,6 +33,11 @@ void EmuThreadCommandSaveState::Execute(Wrapper& wrapper)
     wrapper.EmitSignalOnMainThread("savestate_ready", args);
 }
 
+void EmuThreadCommandSaveState::Abandon(Wrapper& wrapper)
+{
+    wrapper.AnswerNoSaveState();
+}
+
 void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
 {
     bool ok = false;
@@ -63,6 +68,11 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
     godot::Array args;
     args.append(ok);
     wrapper.EmitSignalOnMainThread("savestate_loaded", args);
+}
+
+void EmuThreadCommandLoadState::Abandon(Wrapper& wrapper)
+{
+    wrapper.AnswerNoLoadState();
 }
 
 void EmuThreadCommandReset::Execute(Wrapper& wrapper)
@@ -115,6 +125,11 @@ void EmuThreadCommandDiskInfo::Execute(Wrapper& wrapper)
     wrapper.EmitDiskInfo();
 }
 
+void EmuThreadCommandDiskInfo::Abandon(Wrapper& wrapper)
+{
+    wrapper.AnswerNoDiskInfo();
+}
+
 void EmuThreadCommandSetDiskEjected::Execute(Wrapper& wrapper)
 {
     if (wrapper.m_environment_handler)
@@ -129,6 +144,11 @@ void EmuThreadCommandSetDiskEjected::Execute(Wrapper& wrapper)
     wrapper.EmitDiskInfo();
 }
 
+void EmuThreadCommandSetDiskEjected::Abandon(Wrapper& wrapper)
+{
+    wrapper.AnswerNoDiskInfo();
+}
+
 void EmuThreadCommandReplaceDisk::Execute(Wrapper& wrapper)
 {
     if (wrapper.m_environment_handler)
@@ -139,5 +159,10 @@ void EmuThreadCommandReplaceDisk::Execute(Wrapper& wrapper)
             LogWarning("ReplaceDiskImage refused by core: " + m_path);
     }
     wrapper.EmitDiskInfo();
+}
+
+void EmuThreadCommandReplaceDisk::Abandon(Wrapper& wrapper)
+{
+    wrapper.AnswerNoDiskInfo();
 }
 }
