@@ -500,6 +500,11 @@ Ref<ImageTexture> Wrapper::GetVideoTexture() const
     return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
 }
 
+Ref<Image> Wrapper::GetVideoImage() const
+{
+    return m_video_handler ? m_video_handler->GetImage() : Ref<Image>();
+}
+
 void Wrapper::SetAudioPlaying(bool playing)
 {
     if (m_audio_handler)

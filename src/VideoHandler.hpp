@@ -51,6 +51,15 @@ public:
     /// — so a caller must re-read it rather than cache it.
     godot::Ref<godot::ImageTexture> GetTexture() const { return m_texture; }
 
+    /// The same frame, CPU-side: the buffer the texture was uploaded FROM, so
+    /// reading it costs no GPU readback and stalls no pipeline. Main-thread only
+    /// for the same reason GetTexture() is.
+    ///
+    /// The emulation thread keeps writing into this Image, so anything that
+    /// outlives the current frame — an encode, a worker task — must take a
+    /// duplicate() rather than hold the reference.
+    godot::Ref<godot::Image> GetImage() const { return m_image; }
+
     void SetImageFormat(godot::Image::Format format);
     void CreateTexture(int32_t width, int32_t height, godot::Image::Format image_format, godot::PackedByteArray pixel_data, bool flip_y);
     void UpdateTexture(godot::PackedByteArray pixel_data, int32_t width, int32_t height, bool flip_y);

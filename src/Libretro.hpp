@@ -130,6 +130,14 @@ public:
     /// resolution, so read it per frame instead of caching it.
     godot::Ref<godot::ImageTexture> GetVideoTexture() const;
 
+    /// The same frame as a CPU-side Image — the buffer the texture was uploaded
+    /// FROM, so reading it costs no GPU readback. A savestate thumbnail wants
+    /// this and never get_image() on the texture, which syncs the GPU.
+    ///
+    /// duplicate() it before handing it anywhere that outlives this frame: the
+    /// core writes the next frame straight into these same pixels.
+    godot::Ref<godot::Image> GetVideoImage() const;
+
     /// Whether this machine's sound is heard. A console wired to nothing is
     /// silent; it used to be silenced as a side effect of having no screen mesh.
     void SetAudioPlaying(bool playing);
