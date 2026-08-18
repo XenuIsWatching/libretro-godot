@@ -23,6 +23,12 @@ namespace
 /// defaults its rate control to; it is a correction for buffer drift, not a
 /// speed control, and the pacing brake still owns the coarse rate.
 constexpr double k_drc_max_delta = 0.005;
+
+// How stale a published brake may be before the pacing loop measures the sink
+// itself instead. Between pushes the sink only drains and the extrapolation is
+// exact, so this is not an accuracy budget; it is the guard for cores that drive
+// the single-sample callback and so never reach the batch path that publishes.
+constexpr double k_brake_sample_max_age_ms = 100.0;
 }
 
 void AudioHandler::SampleCallback(int16_t left, int16_t right)
@@ -134,6 +140,11 @@ size_t AudioHandler::SampleBatchCallback(const int16_t* data, size_t frames)
         self->PushFrames(self->m_in_float.data(), frames);
     }
 
+    // Measured here, after the push, so it reflects the audio this batch just
+    // added. Sampling before the push reads the sink one frame short and the loop
+    // then decays that further, which is a brake that never engages.
+    self->PublishBrake();
+
     return frames;
 }
 
@@ -190,7 +201,7 @@ uint32_t AudioHandler::QueuedFrames() const
     return (avail >= 0 && total > static_cast<uint32_t>(avail)) ? total - static_cast<uint32_t>(avail) : 0;
 }
 
-double AudioHandler::MsUntilSinkWantsFrames() const
+double AudioHandler::MeasureBrakeMs() const
 {
     if (m_mix_rate <= 0.0)
         return 0.0;
@@ -225,6 +236,46 @@ double AudioHandler::MsUntilSinkWantsFrames() const
     if (avail > 0)
         return 0.0;
     return 500.0 * static_cast<double>(m_audio_buffer_total_frames) / m_mix_rate;
+}
+
+
+void AudioHandler::PublishBrake()
+{
+    const double brake = MeasureBrakeMs();
+    m_brake_at_sample_ms.store(brake, std::memory_order_relaxed);
+    // Released last: the pacing loop acquires this, so a non-zero stamp guarantees
+    // the brake beside it is the one measured with it.
+    m_brake_sampled_at_ns.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(),
+        std::memory_order_release);
+}
+
+double AudioHandler::MsUntilSinkWantsFrames() const
+{
+    if (m_mix_rate <= 0.0)
+        return 0.0;
+    if (!m_accept_audio.load(std::memory_order_acquire))
+        return 0.0;
+
+    const int64_t sampled_at_ns = m_brake_sampled_at_ns.load(std::memory_order_acquire);
+    if (sampled_at_ns != 0)
+    {
+        const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const double age_ms = static_cast<double>(now_ns - sampled_at_ns) / 1.0e6;
+        if (age_ms <= k_brake_sample_max_age_ms)
+        {
+            // The sink drains at the mixer's rate, so the brake is worth what it was
+            // measured at minus the real time since. Decaying it is what stops a held
+            // value from re-braking at full strength on every pass and starving the
+            // core of the retro_run that would refresh it.
+            const double remaining_ms = m_brake_at_sample_ms.load(std::memory_order_relaxed) - age_ms;
+            return remaining_ms > 0.0 ? remaining_ms : 0.0;
+        }
+    }
+
+    return MeasureBrakeMs();
 }
 
 uint32_t AudioHandler::EffectiveTotalFrames() const

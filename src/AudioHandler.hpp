@@ -9,6 +9,7 @@
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -70,6 +71,17 @@ public:
     ///
     /// Returns 0 whenever there is no sink to measure, so a missing or stopped sink
     /// can never brake emulation to a halt.
+    ///
+    /// Prefers the value published by the last audio batch over measuring the sink
+    /// again. Measuring costs an ObjectDB lookup plus a cross-extension call, and the
+    /// pacing loop asks many times per frame, which put a process-global spinlock on
+    /// the hot path. Between pushes the sink only drains, and it drains at the
+    /// mixer's rate, so a brake measured at N ms is worth exactly N minus the real
+    /// time since. Every push republishes, so the extrapolation is never guessing
+    /// about audio that arrived in the meantime.
+    ///
+    /// Falls back to measuring when nothing has been published recently, which keeps
+    /// cores driving the single-sample callback behaving exactly as they did.
     double MsUntilSinkWantsFrames() const;
 
     /// How full the sink is, 0-100, as a percentage of EffectiveTotalFrames.
@@ -149,6 +161,14 @@ private:
     std::atomic<uint32_t> m_audio_buffer_occupancy{0};
     /// Last brake the pacing loop computed. See LastBrakeMs.
     std::atomic<double> m_last_brake_ms{0.0};
+
+    /// The brake as measured just after the last push, with the steady_clock reading
+    /// it was taken at. Written on whichever thread runs the core's audio callback,
+    /// read by the pacing loop, so atomic. Time is nanoseconds since the clock epoch
+    /// because time_point is not lock-free on every ABI we build for. A zero stamp
+    /// means nothing has been published yet.
+    std::atomic<double>  m_brake_at_sample_ms{0.0};
+    std::atomic<int64_t> m_brake_sampled_at_ns{0};
     /// The sink's own target fill, cached at Init so the brake does not pay a
     /// cross-extension call for a constant on every pass of the pacing loop.
     uint32_t m_sink_target_frames = 0;
@@ -161,6 +181,13 @@ private:
 
     void PushFrames(const float* interleaved, size_t frames);
     uint32_t QueuedFrames() const;
+    /// Measure the sink and return how long until it wants audio. Touches the sink,
+    /// so it belongs off the pacing loop's hot path.
+    double MeasureBrakeMs() const;
+    /// Measure and publish, with the moment of measurement. Called at the end of the
+    /// batch path, after the push, so the sample reflects the audio just added
+    /// rather than the sink as it stood before it.
+    void PublishBrake();
     uint32_t EffectiveTotalFrames() const;
 };
 }
