@@ -430,6 +430,42 @@ static void TestChain()
 }
 
 
+// -- T10: the cable decides who is player one, not the power switch ---------
+static void TestSeating()
+{
+    std::printf("T10 the cable decides who is player one\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* grey = Fake(0x9001);
+    Wrapper* purple = Fake(0x9002);
+
+    // GREY attaches first, standing for the handheld switched on first. This is
+    // the case that used to come out wrong: the coordinator ranked machines by
+    // how long it had known them, and an endpoint is created when its CORE
+    // attaches, so the console powered on first became player one and the cable
+    // had no say at all.
+    c.Attach(grey, 0, "gba-sio-1", GBA_HZ);
+    c.Attach(purple, 0, "gba-sio-1", GBA_HZ);
+
+    // The room names the machine holding the PURPLE connector first, because it
+    // walks the lead from its purple end. On hardware that is the unit whose SI
+    // line the cable pulls low, and it owns the clock.
+    Check(c.ConnectGroup({{purple, 0}, {grey, 0}}), "the room cables purple then grey");
+
+    unsigned n = 0;
+    Check(c.Peers(purple, 0, &n) == 0 && n == 2, "the purple end is player one");
+    Check(c.Peers(grey, 0, &n) == 1 && n == 2, "the grey end is player two");
+
+    // And turning the lead round swaps the players, with neither machine
+    // switched off. Moving a plug from one console to the other is the whole of
+    // how this is done on real hardware.
+    Check(c.ConnectGroup({{grey, 0}, {purple, 0}}), "the lead is turned round");
+    Check(c.Peers(grey, 0, &n) == 0, "now the grey machine is player one");
+    Check(c.Peers(purple, 0, &n) == 1, "and the other one is player two");
+
+    c.DropOwner(grey);
+    c.DropOwner(purple);
+}
+
 int main()
 {
     TestUnbounded();
@@ -441,6 +477,7 @@ int main()
     TestTeardownReleases();
     TestPullingOneEndFreesBoth();
     TestChain();
+    TestSeating();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

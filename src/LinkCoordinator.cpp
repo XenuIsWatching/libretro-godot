@@ -248,7 +248,7 @@ void LinkCoordinator::LogBusesLocked(const char* why) const
             }
             // "on" means the core called attach, which is the whole question
             // when a cable looks right and the game refuses to link anyway.
-            line += ep->label + (ep->attached ? " on" : " OFF");
+            line += ep->label + " P" + std::to_string(i + 1) + (ep->attached ? " on" : " OFF");
         }
         line += "]";
     }
@@ -286,9 +286,9 @@ void LinkCoordinator::RebuildBuses()
 
     // Connected components over the wires. A flood fill rather than union-find:
     // there are a handful of machines in a room, and this way the members come
-    // out in a stable order so a bus index does not depend on the order the
-    // cables happened to be seated in. Two peers replaying the same inputs have
-    // to agree about who is player one.
+    // out in a stable order rather than in the order the flood happened to reach
+    // them. Two peers replaying the same inputs have to agree about who is
+    // player one.
     std::vector<Endpoint*> seen;
     for (auto& start_ep : m_endpoints)
     {
@@ -326,11 +326,30 @@ void LinkCoordinator::RebuildBuses()
             continue;
         }
 
-        // Ordered by how long the coordinator has known each endpoint, which is
-        // stable across runs, rather than by the order the flood happened to
-        // reach them.
+        // By the seat the room gave each machine, which is where the player
+        // numbers come from.
+        //
+        // NOT by how long the coordinator has known an endpoint, which is what
+        // this used to be. That is a stable order and a wrong one: an endpoint
+        // is created when its CORE attaches, so it ranked the machines by which
+        // handheld was switched on first, and the cable had no say at all. Plug
+        // the purple connector into the console you turned on second and it
+        // still came out as player two. On hardware the parent is whichever unit
+        // the cable pulls SI low on, so which end of the lead a machine holds is
+        // the whole of the answer.
+        //
+        // Creation order remains the tie-break, for a bus described one wire at
+        // a time through Connect rather than as a set through ConnectGroup.
         std::sort(component.begin(), component.end(),
                   [this](const Endpoint* x, const Endpoint* y) {
+                      if (x->seat != y->seat && x->seat >= 0 && y->seat >= 0)
+                      {
+                          return x->seat < y->seat;
+                      }
+                      if ((x->seat >= 0) != (y->seat >= 0))
+                      {
+                          return x->seat >= 0;
+                      }
                       auto pos = [this](const Endpoint* e) {
                           for (size_t i = 0; i < m_endpoints.size(); ++i)
                           {
@@ -431,6 +450,7 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
     for (Endpoint* ep : group)
     {
         CutLinksAt(*ep);
+        ep->seat = -1;
     }
 
     if (group.size() < 2)
@@ -463,6 +483,14 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
         {
             m_links.push_back(Link{group.front(), group[i]});
         }
+
+        // The order given IS the seating. The room walks the leads from the head
+        // of the chain and takes its purple end first, so group.front() is the
+        // machine holding the connector that owns the clock on real hardware.
+        for (size_t i = 0; i < group.size(); ++i)
+        {
+            group[i]->seat = static_cast<int>(i);
+        }
     }
 
     RebuildBuses();
@@ -486,6 +514,7 @@ void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
         {
             const std::string label = ep->label;
             CutLinksAt(*ep);
+            ep->seat = -1;
             RebuildBuses();
             LogBusesLocked(("pulled the cable at " + label).c_str());
         }

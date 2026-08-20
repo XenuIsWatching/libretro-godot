@@ -130,6 +130,17 @@ private:
         Bus* bus = nullptr;
         int index = -1;
 
+        /// Where the ROOM says this machine sits on the wire, or -1 if nobody
+        /// said. Player one is seat zero.
+        ///
+        /// This is a physical fact and the coordinator cannot work it out: on
+        /// real hardware the parent is the unit whose SI line the CABLE pulls
+        /// low, so it is decided by which connector went into which console and
+        /// by nothing else. The room knows that -- it walks the leads from the
+        /// head of the chain and takes its purple end first -- and ConnectGroup
+        /// is how it says so.
+        int seat = -1;
+
         /// An endpoint counts toward other members' grants only once it has
         /// published, and its origin is the first tick it published after
         /// joining the bus. Two machines cabled together mid-session are
