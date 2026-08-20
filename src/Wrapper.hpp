@@ -307,6 +307,10 @@ public:
     /// Callable from the emulation thread.
     void EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args);
 
+    /// CRC32 over every writable region of the core's published memory map, for
+    /// cores that do not answer RETRO_MEMORY_SYSTEM_RAM at all. Sets `ok` false
+    /// when the core published no usable map either.
+    uint32_t MappedRamCrc(bool& ok) const;
     /// CRC32 of the core's system RAM, emitted as netplay_crc(frame, crc)
     /// every m_np_crc_interval frames while in netplay mode (desync detection).
     void EmitNetplayCrc(int64_t frame);

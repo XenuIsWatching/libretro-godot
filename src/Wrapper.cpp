@@ -1149,7 +1149,7 @@ retro_memory_map Wrapper::GetMemoryMap() const
 // Self-contained CRC32 (polynomial 0xEDB88320). libretro-common's crc32.c is
 // not part of this build, and the table init must be thread-safe (multiple
 // emulation threads may race the first call).
-static uint32_t Crc32(const uint8_t* data, size_t size)
+static const uint32_t* Crc32Table()
 {
     static uint32_t table[256];
     static std::once_flag once;
@@ -1163,10 +1163,24 @@ static uint32_t Crc32(const uint8_t* data, size_t size)
             table[i] = crc;
         }
     });
-    uint32_t crc = 0xFFFFFFFFu;
+    return table;
+}
+
+// Folds one more block into a running CRC. `crc` is the RAW register rather than
+// a finished value: start at 0xFFFFFFFF, feed as many blocks as there are, and
+// invert once at the end. That is what lets a hash span several disjoint regions
+// without hashing a hash.
+static uint32_t Crc32Update(uint32_t crc, const uint8_t* data, size_t size)
+{
+    const uint32_t* table = Crc32Table();
     for (size_t i = 0; i < size; ++i)
         crc = table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
-    return crc ^ 0xFFFFFFFFu;
+    return crc;
+}
+
+static uint32_t Crc32(const uint8_t* data, size_t size)
+{
+    return Crc32Update(0xFFFFFFFFu, data, size) ^ 0xFFFFFFFFu;
 }
 
 uint32_t Wrapper::ComputeRamCrc(bool& ok) const
@@ -1176,10 +1190,47 @@ uint32_t Wrapper::ComputeRamCrc(bool& ok) const
         return 0;
     void* ram = m_core->retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
     size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
-    if (ram == nullptr || size == 0)
-        return 0;
-    ok = true;
-    return Crc32(static_cast<const uint8_t*>(ram), size);
+    if (ram != nullptr && size != 0)
+    {
+        ok = true;
+        return Crc32(static_cast<const uint8_t*>(ram), size);
+    }
+    return MappedRamCrc(ok);
+}
+
+uint32_t Wrapper::MappedRamCrc(bool& ok) const
+{
+    // Not every core answers RETRO_MEMORY_SYSTEM_RAM, and one that does not is
+    // not thereby exempt from being checked for determinism. mGBA is the case in
+    // hand: it returns NULL for SYSTEM_RAM and publishes a memory MAP instead,
+    // so before this the netplay CRC signal simply never fired for it and the
+    // determinism spike sat there waiting for checkpoints that were never coming.
+    //
+    // Everything writable, in the order the core listed it. CONST descriptors
+    // are ROM and BIOS and cannot change, so hashing them would cost time and
+    // tell nobody anything. What is left, on a Game Boy Advance, is IWRAM,
+    // EWRAM, the save, VRAM, palette, OAM and the IO block. That is a STRICTER
+    // oracle than a flat SYSTEM_RAM: a divergence that has only reached a sprite
+    // table shows up here and would not show up there.
+    //
+    // Order is the core's own and does not vary between runs of the same build,
+    // which is all a comparison needs. The number is not portable across cores
+    // or across core versions, and nothing asks it to be: every use compares two
+    // runs of one build against each other.
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t hashed = 0;
+    for (const retro_memory_descriptor& descriptor : m_memory_descriptors)
+    {
+        if (descriptor.ptr == nullptr || descriptor.len == 0)
+            continue;
+        if (descriptor.flags & RETRO_MEMDESC_CONST)
+            continue;
+        const uint8_t* base = static_cast<const uint8_t*>(descriptor.ptr) + descriptor.offset;
+        crc = Crc32Update(crc, base, descriptor.len);
+        hashed += descriptor.len;
+    }
+    ok = hashed > 0;
+    return ok ? (crc ^ 0xFFFFFFFFu) : 0;
 }
 
 void Wrapper::EmitNetplayCrc(int64_t frame)
