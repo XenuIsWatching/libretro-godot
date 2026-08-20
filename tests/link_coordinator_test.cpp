@@ -331,6 +331,40 @@ static void TestTeardownReleases()
     Check(released, "DropOwner releases it");
 }
 
+
+// ── T8: a cable has two ends ────────────────────────────────────────────────
+static void TestPullingOneEndFreesBoth()
+{
+    std::printf("T8 pulling one end frees the other\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x7001);
+    Wrapper* b = Fake(0x7002);
+    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
+    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    c.Connect(a, 0, b, 0);
+
+    unsigned n = 0;
+    c.Peers(a, 0, &n);
+    Check(n == 2, "both are on the bus to start with");
+
+    // Only one end is pulled, which is all a hand can do.
+    c.Disconnect(a, 0);
+
+    n = 99;
+    Check(c.Peers(a, 0, &n) == -1 && n == 0, "the pulled end is cabled to nothing");
+    n = 99;
+    Check(c.Peers(b, 0, &n) == -1 && n == 0, "so is the end still holding the lead");
+
+    // And the survivor must genuinely be free, not merely reporting so: with
+    // nothing bounding it, its advance has to come back unbounded.
+    SetCurrent(b);
+    Check(c.Advance(b, 0, 0, GRAIN, 10 * GRAIN) == RETRO_LINK_UNBOUNDED,
+          "the survivor runs free rather than waiting on a ghost");
+
+    c.DropOwner(a);
+    c.DropOwner(b);
+}
+
 int main()
 {
     TestUnbounded();
@@ -340,6 +374,7 @@ int main()
     TestRecvOrdering();
     TestCrossRate();
     TestTeardownReleases();
+    TestPullingOneEndFreesBoth();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

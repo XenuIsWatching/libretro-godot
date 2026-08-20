@@ -132,6 +132,12 @@ public:
     /// Pull the cable out of `port`. Peers go unbounded immediately, which for
     /// a guest mid-transfer looks like the cable being yanked, because it is.
     void LinkDisconnect(uint32_t port);
+    /// How many machines are attached to `port`'s bus, this one included.
+    ///
+    /// 0 when nothing is cabled to it, or when the core has not attached its
+    /// serial hardware yet. Live rather than cached: the room decides what a
+    /// port is wired to, and a cable can be pulled while the machine runs.
+    uint32_t LinkPeerCount(uint32_t port);
 
     /// Ask to track RetroAchievements for the content about to be started.
     /// `console_id` is an RC_CONSOLE_* value (see RaConsoles.for_systemid); 0 means

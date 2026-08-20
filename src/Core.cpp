@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <sstream>
+#include <mutex>
 #include <random>
 #include <cstring>
 
@@ -93,6 +94,17 @@ bool Core::Load(CallbackTrampolines* trampolines)
     // nothing but a silent refusal. Sweep the strays before adding another: a copy
     // still in use by a live instance survives, because Windows will not delete a
     // mapped DLL and unlinking a mapped .so leaves that mapping intact.
+    //
+    // Held from the sweep through to the load, because the "still in use" part is
+    // only true once the library is actually MAPPED. Between copy_file and
+    // LoadHandle the copy is an ordinary file on disk, and a second instance
+    // starting in that window sweeps it away; the first instance then fails to
+    // open a path that existed a moment ago. Nothing hit this until two cores
+    // started in the same frame, which is exactly what cabling two handhelds
+    // together does.
+    static std::mutex s_temp_copy_mutex;
+    std::unique_lock<std::mutex> temp_copy_lock(s_temp_copy_mutex);
+
     std::error_code sweep_ec;
     for (const auto& entry : std::filesystem::directory_iterator(temp_dir, sweep_ec))
     {
@@ -122,6 +134,9 @@ bool Core::Load(CallbackTrampolines* trampolines)
 
     if (!LoadHandle())
         return false;
+
+    // Mapped now, so the next sweep will leave it alone.
+    temp_copy_lock.unlock();
 
     LoadFunction(retro_set_environment);
     LoadFunction(retro_set_video_refresh);

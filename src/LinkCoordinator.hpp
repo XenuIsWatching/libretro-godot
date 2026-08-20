@@ -126,6 +126,8 @@ private:
     Endpoint* Find(Wrapper* owner, unsigned port);
     Endpoint& FindOrCreate(Wrapper* owner, unsigned port);
     void RemoveFromBus(Endpoint& ep);
+    /// Reset one endpoint's bus-side state. Shared so every way off a bus agrees.
+    static void Detached(Endpoint& ep);
     void Reindex(Bus& bus);
 
     /// Ceiling for `ep` in its own ticks, or RETRO_LINK_UNBOUNDED when nothing

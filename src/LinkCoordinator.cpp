@@ -213,6 +213,18 @@ void LinkCoordinator::Reindex(Bus& bus)
     }
 }
 
+void LinkCoordinator::Detached(Endpoint& ep)
+{
+    ep.bus = nullptr;
+    ep.index = -1;
+    // A pulled cable is a pulled cable: anything still queued was addressed to
+    // a machine this one is no longer wired to.
+    ep.inbox.clear();
+    ep.published = false;
+    ep.local_delta = 0;
+    ep.safe_delta = 0;
+}
+
 void LinkCoordinator::RemoveFromBus(Endpoint& ep)
 {
     Bus* bus = ep.bus;
@@ -224,14 +236,20 @@ void LinkCoordinator::RemoveFromBus(Endpoint& ep)
     bus->members.erase(std::remove(bus->members.begin(), bus->members.end(), &ep), bus->members.end());
     Reindex(*bus);
 
-    ep.bus = nullptr;
-    ep.index = -1;
-    // A pulled cable is a pulled cable: anything still queued was addressed to
-    // a machine this one is no longer wired to.
-    ep.inbox.clear();
-    ep.published = false;
-    ep.local_delta = 0;
-    ep.safe_delta = 0;
+    Detached(ep);
+
+    // A cable has two ends, so taking one machine off leaves the last one
+    // holding a lead that goes nowhere. Drop it too rather than leaving it on a
+    // bus of one, which would report itself as cabled to something and keep a
+    // pointer to a bus about to be freed. With three or four machines on a
+    // multiplayer lead the rest carry on, which is what unplugging one of them
+    // does.
+    if (bus->members.size() == 1)
+    {
+        Endpoint* last = bus->members.front();
+        bus->members.clear();
+        Detached(*last);
+    }
 
     if (bus->members.empty())
     {

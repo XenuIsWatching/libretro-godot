@@ -443,6 +443,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("LinkConnect", "other", "port", "other_port"), &Libretro::LinkConnect, DEFVAL(0u), DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
+    ClassDB::bind_method(D_METHOD("LinkPeerCount", "port"), &Libretro::LinkPeerCount, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("GetVideoImage"), &Libretro::GetVideoImage);
     ClassDB::bind_method(D_METHOD("SetAudioPlaying", "playing"), &Libretro::SetAudioPlaying);
@@ -544,5 +545,17 @@ void Libretro::LinkDisconnect(uint32_t port)
     {
         LinkCoordinator::Get().Disconnect(m_wrapper.get(), port);
     }
+}
+
+uint32_t Libretro::LinkPeerCount(uint32_t port)
+{
+    if (!m_wrapper)
+    {
+        return 0;
+    }
+
+    unsigned count = 0;
+    LinkCoordinator::Get().Peers(m_wrapper.get(), port, &count);
+    return static_cast<uint32_t>(count);
 }
 }
