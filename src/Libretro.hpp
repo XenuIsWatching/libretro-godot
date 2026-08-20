@@ -120,8 +120,14 @@ public:
     // hardware to the bus on its own, but what it is wired to is the room's
     // decision, not the core's.
 
-    /// Cable `port` on this machine to `port` on `other`. False when either
-    /// side is not running, or the two speak different link protocols.
+    /// Cable `port` on this machine to `port` on `other`.
+    ///
+    /// Neither machine has to be running. A cable seated into a console that is
+    /// switched off is an ordinary thing to do, and the link simply comes alive
+    /// when both cores attach their serial hardware to the bus.
+    ///
+    /// False for a missing or self target, or when the two ends have already
+    /// attached and named different link protocols.
     bool LinkConnect(Libretro* other, uint32_t port, uint32_t other_port);
     /// Pull the cable out of `port`. Peers go unbounded immediately, which for
     /// a guest mid-transfer looks like the cable being yanked, because it is.

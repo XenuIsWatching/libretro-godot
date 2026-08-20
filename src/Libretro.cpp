@@ -527,9 +527,11 @@ bool Libretro::LinkConnect(Libretro* other, uint32_t port, uint32_t other_port)
     }
     if (!m_wrapper || !other->m_wrapper)
     {
-        // Nothing is running on one end yet. Worth saying out loud rather than
-        // failing quietly, because from inside the room the cable looks seated.
-        LogError("LinkConnect: both machines must be running.");
+        // Not the "console is switched off" case, which is ordinary and joins
+        // fine: a wrapper exists from the moment the node does. This is a node
+        // being torn down, and worth saying out loud because from inside the
+        // room the cable still looks seated.
+        LogError("LinkConnect: a machine is being torn down.");
         return false;
     }
 
