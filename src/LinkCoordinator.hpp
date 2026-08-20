@@ -89,6 +89,8 @@ public:
     int      Attach(Wrapper* owner, unsigned port, const char* protocol_id, uint64_t clock_rate);
     void     Detach(Wrapper* owner, unsigned port);
     int      Peers(Wrapper* owner, unsigned port, unsigned* count);
+    uint64_t Delivered(Wrapper* owner, unsigned port);
+    uint64_t Sent(Wrapper* owner, unsigned port);
     bool     Send(Wrapper* owner, unsigned port, uint64_t tick, unsigned to, const void* buf, size_t len);
     bool     Recv(Wrapper* owner, unsigned port, uint64_t* tick, unsigned* from, void* buf, size_t* len);
     uint64_t Advance(Wrapper* owner, unsigned port, uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick);
@@ -136,6 +138,13 @@ private:
         bool shutting_down = false;
 
         std::deque<Message> inbox;
+
+        /// Messages this endpoint has taken off the bus. Only ever counted up,
+        /// and only so a test can tell a link that NEGOTIATED from a link that
+        /// is actually carrying a game: peer counts prove the cable, traffic
+        /// proves the guests are talking over it.
+        uint64_t delivered = 0;
+        uint64_t sent = 0;
     };
 
     struct Bus

@@ -528,6 +528,20 @@ int LinkCoordinator::Peers(Wrapper* owner, unsigned port, unsigned* count)
     return ep->index;
 }
 
+uint64_t LinkCoordinator::Sent(Wrapper* owner, unsigned port)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    Endpoint* ep = Find(owner, port);
+    return ep ? ep->sent : 0;
+}
+
+uint64_t LinkCoordinator::Delivered(Wrapper* owner, unsigned port)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    Endpoint* ep = Find(owner, port);
+    return ep ? ep->delivered : 0;
+}
+
 bool LinkCoordinator::Send(Wrapper* owner, unsigned port, uint64_t tick, unsigned to, const void* buf, size_t len)
 {
     if (len > MAX_PAYLOAD)
@@ -587,6 +601,7 @@ bool LinkCoordinator::Send(Wrapper* owner, unsigned port, uint64_t tick, unsigne
         auto at = std::upper_bound(member->inbox.begin(), member->inbox.end(), msg.tick,
                                    [](uint64_t t, const Message& m) { return t < m.tick; });
         member->inbox.insert(at, std::move(msg));
+        ++sender->sent;   // counted where a message is actually QUEUED, not attempted
         delivered = true;
     }
 
@@ -604,12 +619,20 @@ bool LinkCoordinator::Recv(Wrapper* owner, unsigned port, uint64_t* tick, unsign
         return false;
     }
 
+    // Handed over as soon as it is queued, in tick order, and NOT held back
+    // until this machine reaches the tick on it.
+    //
+    // The tick says when the event LANDS, not when the message may be read. A
+    // master stamps a transfer at its own horizon exactly so the slave learns
+    // about it in advance and can schedule its own completion for the same tick;
+    // waiting until the slave got there would deliver the news too late to act
+    // on, and in practice never at all, since the barrier lets a peer reach that
+    // horizon and not one tick further.
+    //
+    // What keeps a message from arriving in this machine's past is the horizon
+    // itself: the sender promised not to originate before it, and this machine
+    // cannot have run beyond it.
     const Message& head = ep->inbox.front();
-    const uint64_t now = ep->origin + ep->local_delta;
-    if (head.tick > now)
-    {
-        return false;   // still in this machine's future
-    }
 
     const size_t capacity = len ? *len : 0;
     if (head.data.size() > capacity)
@@ -638,6 +661,7 @@ bool LinkCoordinator::Recv(Wrapper* owner, unsigned port, uint64_t* tick, unsign
     }
 
     ep->inbox.pop_front();
+    ++ep->delivered;
     return true;
 }
 

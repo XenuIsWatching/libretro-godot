@@ -198,12 +198,17 @@ static void TestSendRecv()
     uint64_t tick = 0;
     unsigned from = 99;
     SetCurrent(b);
-    Check(!c.Recv(b, 0, &tick, &from, buf, &len), "B cannot see a message in its future");
 
-    c.Advance(b, 0, 600, 600 + GRAIN, 600);   // B reaches tick 600
-    len = sizeof buf;
-    Check(c.Recv(b, 0, &tick, &from, buf, &len), "B receives once it reaches the tick");
-    Check(tick == 500 && from == 0, "tick and sender index survive");
+    // Handed over straight away, NOT withheld until B reaches tick 500.
+    //
+    // The tick says when the event LANDS, not when the message may be read. A
+    // master stamps a transfer ahead of itself exactly so the slave hears about
+    // it in time to schedule its own side for the same tick; holding it back
+    // until the slave got there would deliver the news too late to act on, and
+    // the barrier means that moment never comes. The sender's horizon is what
+    // stops it arriving in the past instead.
+    Check(c.Recv(b, 0, &tick, &from, buf, &len), "B is told about the transfer in advance");
+    Check(tick == 500 && from == 0, "and told which tick it lands on");
     Check(len == 4 && std::memcmp(buf, payload, 4) == 0, "payload survives");
 
     len = sizeof buf;

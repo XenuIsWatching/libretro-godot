@@ -100,9 +100,16 @@ typedef int (RETRO_CALLCONV *retro_link_peers_t)(unsigned port, unsigned *count)
 typedef bool (RETRO_CALLCONV *retro_link_send_t)(unsigned port, uint64_t tick,
       unsigned to, const void *buf, size_t len);
 
-/* Pop the next message whose tick this core has reached, translated into this
- * core's own units. Returns false when nothing is ready. `len` is in/out:
- * buffer capacity on entry, bytes written on return. */
+/* Pop the next queued message, oldest first, with its tick translated into this
+ * core's own units. Returns false when the queue is empty. `len` is in/out:
+ * buffer capacity on entry, bytes written on return.
+ *
+ * The tick says when the event LANDS, not when the message became readable. A
+ * core is told about a transfer ahead of time precisely so it can schedule its
+ * own side of it for that tick, so messages are handed over as soon as they
+ * arrive rather than held until the clock catches up. What stops one landing in
+ * the past is the sender's commit horizon: it promised not to originate before
+ * that tick, and the bus will not have let this core run beyond it. */
 typedef bool (RETRO_CALLCONV *retro_link_recv_t)(unsigned port, uint64_t *tick,
       unsigned *from, void *buf, size_t *len);
 

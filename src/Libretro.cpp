@@ -447,6 +447,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkConnectGroup", "others", "ports"), &Libretro::LinkConnectGroup);
     ClassDB::bind_method(D_METHOD("LinkPeerCount", "port"), &Libretro::LinkPeerCount, DEFVAL(0u));
+    ClassDB::bind_method(D_METHOD("LinkTraffic", "port"), &Libretro::LinkTraffic, DEFVAL(0u));
+    ClassDB::bind_method(D_METHOD("LinkSent", "port"), &Libretro::LinkSent, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("GetVideoImage"), &Libretro::GetVideoImage);
     ClassDB::bind_method(D_METHOD("SetAudioPlaying", "playing"), &Libretro::SetAudioPlaying);
@@ -590,5 +592,15 @@ bool Libretro::LinkConnectGroup(const godot::Array& others, const godot::PackedI
     }
 
     return LinkCoordinator::Get().ConnectGroup(group);
+}
+
+uint64_t Libretro::LinkTraffic(uint32_t port)
+{
+    return m_wrapper ? LinkCoordinator::Get().Delivered(m_wrapper.get(), port) : 0;
+}
+
+uint64_t Libretro::LinkSent(uint32_t port)
+{
+    return m_wrapper ? LinkCoordinator::Get().Sent(m_wrapper.get(), port) : 0;
 }
 }
