@@ -494,6 +494,11 @@ public:
     /// or a core that will not unwind). Resolved per use, so a dead node is a
     /// no-op instead of a dangling call.
     Libretro* LiveLibretroNode() const;
+
+    /// Emu thread: tell the node the run could not start. Safe when the node has
+    /// already gone -- LiveLibretroNode answers null and this does nothing.
+    void NotifyContentLoadFailed(const char* reason) const;
+
     uint64_t m_libretro_node_id = 0;
 
     /// Signal the emulation thread to stop. blocking=true joins and tears down

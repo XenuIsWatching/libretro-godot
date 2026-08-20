@@ -360,6 +360,11 @@ void Libretro::NotifySramFlushed(const String& path, int64_t size, bool final_fl
     call_deferred("emit_signal", "sram_flushed", path, size, final_flush);
 }
 
+void Libretro::NotifyContentLoadFailed(const String& reason)
+{
+    call_deferred("emit_signal", "content_load_failed", reason);
+}
+
 Dictionary Libretro::PeekCoreOptions(const String& root_directory, const String& core_name)
 {
     Dictionary result;
@@ -517,6 +522,11 @@ void Libretro::_bind_methods()
         PropertyInfo(Variant::INT,    "size"),
         PropertyInfo(Variant::BOOL,   "final")));
 
+    /// The run never started: the core would not load, the content was
+    /// unreadable, or the core refused it. Fires instead of, never alongside,
+    /// a successful start -- a listener should power the machine back off.
+    ADD_SIGNAL(MethodInfo("content_load_failed", PropertyInfo(Variant::STRING, "reason")));
+
     ADD_SIGNAL(MethodInfo("options_ready", PropertyInfo(Variant::DICTIONARY, "categories"), PropertyInfo(Variant::DICTIONARY, "definitions"), PropertyInfo(Variant::DICTIONARY, "current_values")));
     ADD_SIGNAL(MethodInfo("rumble_state_changed",
         PropertyInfo(Variant::INT,   "port"),
@@ -560,7 +570,7 @@ uint32_t Libretro::LinkPeerCount(uint32_t port)
     }
 
     unsigned count = 0;
-    LinkCoordinator::Get().Peers(m_wrapper.get(), port, &count);
+    LinkCoordinator::Get().PeersFor(m_wrapper.get(), port, &count);
     return static_cast<uint32_t>(count);
 }
 

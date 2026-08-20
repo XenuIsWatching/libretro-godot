@@ -504,6 +504,12 @@ Libretro* Wrapper::LiveLibretroNode() const
     return Object::cast_to<Libretro>(ObjectDB::get_instance(m_libretro_node_id));
 }
 
+void Wrapper::NotifyContentLoadFailed(const char* reason) const
+{
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifyContentLoadFailed(godot::String(reason));
+}
+
 Ref<ImageTexture> Wrapper::GetVideoTexture() const
 {
     return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
@@ -1976,14 +1982,24 @@ void Wrapper::EmulationThreadLoop()
     });
 
     if (!m_core->Load(m_trampolines.get()))
+    {
+        NotifyContentLoadFailed("This core could not be loaded.");
         return;
+    }
     core_initialized = true;
 
     if (m_game_path.empty())
     {
+        // Kept as a guard even though nothing in the app reaches here: measured
+        // 2026-08-20 over sixteen cores, not one starts without content, and six
+        // take the process down when asked (mgba and parallel_n64 dereference a
+        // null game info; mednafen_saturn, neocd, dolphin and same_cdi die on a
+        // zeroed one). A machine wanting its BIOS is handed empty media instead
+        // -- see BiosBoot -- which is a real path and takes the branch below.
         if (!m_core->GetSupportsNoGame())
         {
             LogError("Game not set and this core does not support no game mode.");
+            NotifyContentLoadFailed("This system cannot start without a game.");
             return;
         }
 
@@ -1992,6 +2008,7 @@ void Wrapper::EmulationThreadLoop()
         if (!m_core->retro_load_game(&game_info))
         {
             LogError("Failed to load game");
+            NotifyContentLoadFailed("This system cannot start without a game.");
             return;
         }
         game_loaded = true;
@@ -2001,6 +2018,7 @@ void Wrapper::EmulationThreadLoop()
         if (!std::filesystem::is_regular_file(m_game_path))
         {
             LogError("Game not found: " + m_game_path);
+            NotifyContentLoadFailed("The game file is missing.");
             return;
         }
 
@@ -2022,6 +2040,7 @@ void Wrapper::EmulationThreadLoop()
             if (!file)
             {
                 LogError("Failed to open game file: " + m_game_path);
+                NotifyContentLoadFailed("The game file could not be opened.");
                 return;
             }
 
@@ -2038,6 +2057,7 @@ void Wrapper::EmulationThreadLoop()
                 LogError("Game is " + std::to_string(game_size / (1024 * 1024)) +
                          " MB but this core requires the whole file in memory (limit " +
                          std::to_string(MAX_GAME_BUFFER_BYTES / (1024 * 1024)) + " MB): " + m_game_path);
+                NotifyContentLoadFailed("This game is too large for this core to load.");
                 return;
             }
 
@@ -2045,6 +2065,7 @@ void Wrapper::EmulationThreadLoop()
             if (!file.read(reinterpret_cast<char*>(m_game_buffer.data()), game_size))
             {
                 LogError("Failed to read game file: " + m_game_path);
+                NotifyContentLoadFailed("The game file could not be read.");
                 return;
             }
 
@@ -2055,6 +2076,7 @@ void Wrapper::EmulationThreadLoop()
         if (!m_core->retro_load_game(&game_info))
         {
             LogError("Failed to load game");
+            NotifyContentLoadFailed("This core refused the game.");
             return;
         }
         game_loaded = true;

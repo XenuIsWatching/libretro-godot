@@ -104,64 +104,60 @@ LinkCoordinator& LinkCoordinator::Get()
 // know about gets a clean "not attached" answer rather than a crash.
 namespace
 {
-Wrapper* CallerOrNull()
+/* Nothing here works out WHO is calling.
+ *
+ * The old shape recovered the caller from a thread-local set when a core's
+ * emulation thread started, which holds only while a core does its work on that
+ * one thread. Plenty do not: Dolphin runs its CPU on a thread of its own
+ * whenever dual-core is enabled, and that is a user-facing setting, so a link
+ * built on the calling thread would have worked and then silently stopped
+ * working the moment somebody turned dual-core on for speed.
+ *
+ * The handle a core was given at attach says which port it means, and the
+ * coordinator checks it against the ports it still has, under its own lock. */
+retro_link_handle_t RETRO_CALLCONV LinkAttachCb(unsigned port, const char* protocol_id,
+                                                uint64_t clock_rate)
 {
-    return CurrentThreadWrapper();
-}
-
-int RETRO_CALLCONV LinkAttachCb(unsigned port, const char* protocol_id, uint64_t clock_rate)
-{
-    Wrapper* owner = CallerOrNull();
+    /* Attach is the ONE call that still has to know which core is asking, and
+     * the only one a core makes before it has a handle. Cores call it while
+     * loading a game, which is the emulation thread in every frontend this has
+     * to work with, so the thread-local is sound here in a way it is not for
+     * the calls that follow. */
+    Wrapper* owner = CurrentThreadWrapper();
     if (!owner)
     {
         LogError("LinkAttach: no wrapper on this thread.");
-        return -1;
+        return nullptr;
     }
     return LinkCoordinator::Get().Attach(owner, port, protocol_id, clock_rate);
 }
 
-void RETRO_CALLCONV LinkDetachCb(unsigned port)
+void RETRO_CALLCONV LinkDetachCb(retro_link_handle_t handle)
 {
-    if (Wrapper* owner = CallerOrNull())
-    {
-        LinkCoordinator::Get().Detach(owner, port);
-    }
+    LinkCoordinator::Get().Detach(handle);
 }
 
-int RETRO_CALLCONV LinkPeersCb(unsigned port, unsigned* count)
+int RETRO_CALLCONV LinkPeersCb(retro_link_handle_t handle, unsigned* count)
 {
-    Wrapper* owner = CallerOrNull();
-    if (!owner)
-    {
-        if (count)
-        {
-            *count = 0;
-        }
-        return -1;
-    }
-    return LinkCoordinator::Get().Peers(owner, port, count);
+    return LinkCoordinator::Get().Peers(handle, count);
 }
 
-bool RETRO_CALLCONV LinkSendCb(unsigned port, uint64_t tick, unsigned to, const void* buf, size_t len)
+bool RETRO_CALLCONV LinkSendCb(retro_link_handle_t handle, uint64_t tick, unsigned to,
+                               const void* buf, size_t len)
 {
-    Wrapper* owner = CallerOrNull();
-    return owner && LinkCoordinator::Get().Send(owner, port, tick, to, buf, len);
+    return LinkCoordinator::Get().Send(handle, tick, to, buf, len);
 }
 
-bool RETRO_CALLCONV LinkRecvCb(unsigned port, uint64_t* tick, unsigned* from, void* buf, size_t* len)
+bool RETRO_CALLCONV LinkRecvCb(retro_link_handle_t handle, uint64_t* tick, unsigned* from,
+                               void* buf, size_t* len)
 {
-    Wrapper* owner = CallerOrNull();
-    return owner && LinkCoordinator::Get().Recv(owner, port, tick, from, buf, len);
+    return LinkCoordinator::Get().Recv(handle, tick, from, buf, len);
 }
 
-uint64_t RETRO_CALLCONV LinkAdvanceCb(unsigned port, uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick)
+uint64_t RETRO_CALLCONV LinkAdvanceCb(retro_link_handle_t handle, uint64_t local_tick,
+                                      uint64_t safe_tick, uint64_t request_tick)
 {
-    Wrapper* owner = CallerOrNull();
-    if (!owner)
-    {
-        return RETRO_LINK_UNBOUNDED;
-    }
-    return LinkCoordinator::Get().Advance(owner, port, local_tick, safe_tick, request_tick);
+    return LinkCoordinator::Get().Advance(handle, local_tick, safe_tick, request_tick);
 }
 }
 
@@ -179,6 +175,23 @@ const retro_link_interface* LinkCoordinator::Interface()
 }
 
 // ── Endpoint bookkeeping ────────────────────────────────────────────────────
+
+LinkCoordinator::Endpoint* LinkCoordinator::Resolve(retro_link_handle_t handle)
+{
+    const uint64_t id = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
+    if (!id)
+    {
+        return nullptr;
+    }
+    for (auto& ep : m_endpoints)
+    {
+        if (ep->id == id)
+        {
+            return ep.get();
+        }
+    }
+    return nullptr;
+}
 
 LinkCoordinator::Endpoint* LinkCoordinator::Find(Wrapper* owner, unsigned port)
 {
@@ -202,6 +215,7 @@ LinkCoordinator::Endpoint& LinkCoordinator::FindOrCreate(Wrapper* owner, unsigne
     Endpoint& ep = *m_endpoints.back();
     ep.owner = owner;
     ep.port = port;
+    ep.id = m_next_id++;
     ep.label = "m" + std::to_string(++m_next_label) + ":" + std::to_string(port);
     return ep;
 }
@@ -547,12 +561,13 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
 
 // ── Core side ───────────────────────────────────────────────────────────────
 
-int LinkCoordinator::Attach(Wrapper* owner, unsigned port, const char* protocol_id, uint64_t clock_rate)
+retro_link_handle_t LinkCoordinator::Attach(Wrapper* owner, unsigned port,
+                                            const char* protocol_id, uint64_t clock_rate)
 {
     if (clock_rate == 0)
     {
         LogError("Attach: clock_rate must not be zero.");
-        return -1;
+        return nullptr;
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -566,14 +581,14 @@ int LinkCoordinator::Attach(Wrapper* owner, unsigned port, const char* protocol_
     LogBusesLocked("after attach");
 
     m_cv.notify_all();
-    return ep.bus ? ep.index : 0;
+    return reinterpret_cast<retro_link_handle_t>(static_cast<uintptr_t>(ep.id));
 }
 
-void LinkCoordinator::Detach(Wrapper* owner, unsigned port)
+void LinkCoordinator::Detach(retro_link_handle_t handle)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (Endpoint* ep = Find(owner, port))
+        if (Endpoint* ep = Resolve(handle))
         {
             ep->attached = false;
             // The cable is untouched: the guest simply stopped driving its
@@ -591,7 +606,36 @@ void LinkCoordinator::Detach(Wrapper* owner, unsigned port)
     m_cv.notify_all();
 }
 
-int LinkCoordinator::Peers(Wrapper* owner, unsigned port, unsigned* count)
+int LinkCoordinator::Peers(retro_link_handle_t handle, unsigned* count)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    Endpoint* ep = Resolve(handle);
+    if (!ep || !ep->attached || !ep->bus)
+    {
+        if (count)
+        {
+            *count = 0;
+        }
+        return -1;
+    }
+
+    if (count)
+    {
+        unsigned live = 0;
+        for (const Endpoint* member : ep->bus->members)
+        {
+            if (member->attached)
+            {
+                ++live;
+            }
+        }
+        *count = live;
+    }
+    return ep->index;
+}
+
+int LinkCoordinator::PeersFor(Wrapper* owner, unsigned port, unsigned* count)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -634,7 +678,8 @@ uint64_t LinkCoordinator::Delivered(Wrapper* owner, unsigned port)
     return ep ? ep->delivered : 0;
 }
 
-bool LinkCoordinator::Send(Wrapper* owner, unsigned port, uint64_t tick, unsigned to, const void* buf, size_t len)
+bool LinkCoordinator::Send(retro_link_handle_t handle, uint64_t tick, unsigned to, const void* buf,
+                           size_t len)
 {
     if (len > MAX_PAYLOAD)
     {
@@ -648,7 +693,7 @@ bool LinkCoordinator::Send(Wrapper* owner, unsigned port, uint64_t tick, unsigne
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    Endpoint* sender = Find(owner, port);
+    Endpoint* sender = Resolve(handle);
     if (!sender || !sender->attached || !sender->bus)
     {
         return false;
@@ -701,11 +746,12 @@ bool LinkCoordinator::Send(Wrapper* owner, unsigned port, uint64_t tick, unsigne
     return delivered;
 }
 
-bool LinkCoordinator::Recv(Wrapper* owner, unsigned port, uint64_t* tick, unsigned* from, void* buf, size_t* len)
+bool LinkCoordinator::Recv(retro_link_handle_t handle, uint64_t* tick, unsigned* from, void* buf,
+                           size_t* len)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    Endpoint* ep = Find(owner, port);
+    Endpoint* ep = Resolve(handle);
     if (!ep || !ep->attached || ep->inbox.empty())
     {
         return false;
@@ -792,12 +838,12 @@ uint64_t LinkCoordinator::CeilingLocked(const Endpoint& ep) const
     return ceiling;
 }
 
-uint64_t LinkCoordinator::Advance(Wrapper* owner, unsigned port, uint64_t local_tick, uint64_t safe_tick,
-                                  uint64_t request_tick)
+uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tick,
+                                  uint64_t safe_tick, uint64_t request_tick)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
 
-    Endpoint* ep = Find(owner, port);
+    Endpoint* ep = Resolve(handle);
     if (!ep || !ep->attached)
     {
         return RETRO_LINK_UNBOUNDED;
@@ -859,8 +905,10 @@ uint64_t LinkCoordinator::Advance(Wrapper* owner, unsigned port, uint64_t local_
         m_cv.wait(lock);
 
         // The endpoint may have been torn down while this thread slept, so it
-        // is looked up again rather than held across the wait.
-        ep = Find(owner, port);
+        // is looked up again rather than held across the wait. By ID: the memory
+        // is freed on teardown and may since have been handed to a different
+        // endpoint, so an address would quietly resolve to a live stranger.
+        ep = Resolve(handle);
         if (!ep || !ep->attached || ep->shutting_down)
         {
             return RETRO_LINK_UNBOUNDED;

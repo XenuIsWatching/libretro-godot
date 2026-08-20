@@ -12,6 +12,8 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <map>
+#include <utility>
 #include <vector>
 
 #include "Debug.hpp"
@@ -33,6 +35,27 @@ using Xenu::LinkCoordinator;
 using Xenu::Wrapper;
 
 static int g_failures = 0;
+/* The handle each attached port was given.
+ *
+ * A core keeps its own; the cases here talk about machines and ports, so they
+ * are remembered on the side and looked up. Attaching twice on one port is not
+ * something a core does, so a plain map is enough. */
+static std::map<std::pair<Wrapper*, unsigned>, retro_link_handle_t> g_handles;
+
+static retro_link_handle_t H(Wrapper* w, unsigned port)
+{
+    auto it = g_handles.find({w, port});
+    return it == g_handles.end() ? nullptr : it->second;
+}
+
+static retro_link_handle_t DoAttach(LinkCoordinator& c, Wrapper* w, unsigned port,
+                                    const char* protocol, uint64_t hz)
+{
+    retro_link_handle_t h = c.Attach(w, port, protocol, hz);
+    g_handles[{w, port}] = h;
+    return h;
+}
+
 static void Check(bool ok, const char* what)
 {
     std::printf("  %s  %s\n", ok ? "PASS" : "FAIL", what);
@@ -52,11 +75,11 @@ static void TestUnbounded()
     std::printf("T1 solo endpoint runs free\n");
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x1001);
-    Check(c.Attach(a, 0, "gba-sio-1", GBA_HZ) >= 0, "attach succeeds");
-    Check(c.Advance(a, 0, 1000, 1000 + GRAIN, 1000 + GRAIN) == RETRO_LINK_UNBOUNDED,
+    Check(DoAttach(c, a, 0, "gba-sio-1", GBA_HZ) != nullptr, "attach succeeds");
+    Check(c.Advance(H(a, 0), 1000, 1000 + GRAIN, 1000 + GRAIN) == RETRO_LINK_UNBOUNDED,
           "advance is unbounded with no peer");
     unsigned n = 99;
-    Check(c.Peers(a, 0, &n) == -1 && n == 0, "peers reports not cabled");
+    Check(c.Peers(H(a, 0), &n) == -1 && n == 0, "peers reports not cabled");
     c.DropOwner(a);
 }
 
@@ -68,8 +91,8 @@ static RunResult RunPair(int steps, unsigned seed, bool jitter)
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x2001);
     Wrapper* b = Fake(0x2002);
-    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
     c.Connect(a, 0, b, 0);
 
     RunResult out;
@@ -84,7 +107,7 @@ static RunResult RunPair(int steps, unsigned seed, bool jitter)
         {
             if (jitter && (rng() % 4) == 0)
                 std::this_thread::sleep_for(std::chrono::microseconds(rng() % 200));
-            const uint64_t grant = c.Advance(self, 0, now, now + GRAIN, now + GRAIN);
+            const uint64_t grant = c.Advance(H(self, 0), now, now + GRAIN, now + GRAIN);
             grants.push_back(grant);
             // An unbounded answer means nothing is holding this machine up, so
             // it takes the whole grain it asked for and keeps going.
@@ -101,14 +124,14 @@ static RunResult RunPair(int steps, unsigned seed, bool jitter)
         finished.fetch_add(1);
         while (finished.load() < 2)
         {
-            c.Advance(self, 0, now, now + (GRAIN * 1000), 0);
+            c.Advance(H(self, 0), now, now + (GRAIN * 1000), 0);
             std::this_thread::yield();
         }
 
         // A core that stops driving its serial port says so. Without this the
         // peer would wait on a horizon that is never going to move again, which
         // is a genuine hang and not something the bus can paper over.
-        c.Detach(self, 0);
+        c.Detach(H(self, 0));
     };
 
     std::thread ta(body, a, std::ref(out.grants_a), seed);
@@ -175,23 +198,23 @@ static void TestSendRecv()
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x3001);
     Wrapper* b = Fake(0x3002);
-    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
     c.Connect(a, 0, b, 0);
 
     // Both publish once so the bus knows where each machine starts.
     SetCurrent(a);
-    c.Advance(a, 0, 0, GRAIN, 0);
+    c.Advance(H(a, 0), 0, GRAIN, 0);
     SetCurrent(b);
-    c.Advance(b, 0, 0, GRAIN, 0);
+    c.Advance(H(b, 0), 0, GRAIN, 0);
 
     unsigned n = 0;
-    Check(c.Peers(a, 0, &n) == 0 && n == 2, "A is index 0 of 2");
-    Check(c.Peers(b, 0, &n) == 1 && n == 2, "B is index 1 of 2");
+    Check(c.Peers(H(a, 0), &n) == 0 && n == 2, "A is index 0 of 2");
+    Check(c.Peers(H(b, 0), &n) == 1 && n == 2, "B is index 1 of 2");
 
     const uint8_t payload[4] = {0xDE, 0xAD, 0xBE, 0xEF};
     SetCurrent(a);
-    Check(c.Send(a, 0, 500, RETRO_LINK_BROADCAST, payload, sizeof payload), "A sends at tick 500");
+    Check(c.Send(H(a, 0), 500, RETRO_LINK_BROADCAST, payload, sizeof payload), "A sends at tick 500");
 
     uint8_t buf[16];
     size_t len = sizeof buf;
@@ -207,12 +230,12 @@ static void TestSendRecv()
     // until the slave got there would deliver the news too late to act on, and
     // the barrier means that moment never comes. The sender's horizon is what
     // stops it arriving in the past instead.
-    Check(c.Recv(b, 0, &tick, &from, buf, &len), "B is told about the transfer in advance");
+    Check(c.Recv(H(b, 0), &tick, &from, buf, &len), "B is told about the transfer in advance");
     Check(tick == 500 && from == 0, "and told which tick it lands on");
     Check(len == 4 && std::memcmp(buf, payload, 4) == 0, "payload survives");
 
     len = sizeof buf;
-    Check(!c.Recv(b, 0, &tick, &from, buf, &len), "inbox is drained");
+    Check(!c.Recv(H(b, 0), &tick, &from, buf, &len), "inbox is drained");
 
     c.DropOwner(a);
     c.DropOwner(b);
@@ -225,27 +248,27 @@ static void TestRecvOrdering()
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x4001);
     Wrapper* b = Fake(0x4002);
-    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
     c.Connect(a, 0, b, 0);
     SetCurrent(a);
-    c.Advance(a, 0, 0, GRAIN, 0);
+    c.Advance(H(a, 0), 0, GRAIN, 0);
     SetCurrent(b);
-    c.Advance(b, 0, 0, GRAIN, 0);
+    c.Advance(H(b, 0), 0, GRAIN, 0);
 
     // Sent later-tick first, on purpose.
     const uint8_t late = 2, early = 1;
     SetCurrent(a);
-    c.Send(a, 0, 900, RETRO_LINK_BROADCAST, &late, 1);
-    c.Send(a, 0, 300, RETRO_LINK_BROADCAST, &early, 1);
+    c.Send(H(a, 0), 900, RETRO_LINK_BROADCAST, &late, 1);
+    c.Send(H(a, 0), 300, RETRO_LINK_BROADCAST, &early, 1);
 
     SetCurrent(b);
-    c.Advance(b, 0, 1000, 1000 + GRAIN, 1000);
+    c.Advance(H(b, 0), 1000, 1000 + GRAIN, 1000);
 
     uint8_t v = 0; size_t len = 1; uint64_t tick = 0; unsigned from = 0;
-    len = 1; c.Recv(b, 0, &tick, &from, &v, &len);
+    len = 1; c.Recv(H(b, 0), &tick, &from, &v, &len);
     const bool first_is_early = (v == early && tick == 300);
-    len = 1; c.Recv(b, 0, &tick, &from, &v, &len);
+    len = 1; c.Recv(H(b, 0), &tick, &from, &v, &len);
     const bool second_is_late = (v == late && tick == 900);
     Check(first_is_early && second_is_late, "messages come back oldest first");
 
@@ -260,28 +283,28 @@ static void TestCrossRate()
     auto& c = LinkCoordinator::Get();
     Wrapper* slow = Fake(0x5001);   // 1 MHz
     Wrapper* fast = Fake(0x5002);   // 2 MHz
-    c.Attach(slow, 0, "x", 1000000ull);
-    c.Attach(fast, 0, "x", 2000000ull);
+    DoAttach(c, slow, 0, "x", 1000000ull);
+    DoAttach(c, fast, 0, "x", 2000000ull);
     c.Connect(slow, 0, fast, 0);
 
     SetCurrent(slow);
-    c.Advance(slow, 0, 0, 1000, 0);          // horizon 1000 slow ticks
+    c.Advance(H(slow, 0), 0, 1000, 0);          // horizon 1000 slow ticks
     SetCurrent(fast);
     // 1000 ticks at 1 MHz is 2000 ticks at 2 MHz, so exactly 2000 is reachable.
-    Check(c.Advance(fast, 0, 0, 0, 2000) == 2000, "a 1000-tick horizon at 1 MHz lets a 2 MHz peer reach 2000");
+    Check(c.Advance(H(fast, 0), 0, 0, 2000) == 2000, "a 1000-tick horizon at 1 MHz lets a 2 MHz peer reach 2000");
 
     // And one tick past it is not: that request must park until the slow
     // machine extends its promise.
     std::atomic<bool> past{false};
     std::thread probe([&] {
         SetCurrent(fast);
-        c.Advance(fast, 0, 0, 0, 2001);
+        c.Advance(H(fast, 0), 0, 0, 2001);
         past = true;
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
     const bool blocked = !past.load();
     SetCurrent(slow);
-    c.Advance(slow, 0, 0, 2000, 0);          // extend the slow horizon
+    c.Advance(H(slow, 0), 0, 2000, 0);          // extend the slow horizon
     probe.join();
     Check(blocked, "2001 blocks until the slow machine promises further");
     SetCurrent(fast);
@@ -289,11 +312,11 @@ static void TestCrossRate()
     // And a message keeps its place on the wall clock across the rate change.
     const uint8_t byte = 0x5A;
     SetCurrent(slow);
-    c.Send(slow, 0, 500, RETRO_LINK_BROADCAST, &byte, 1);
+    c.Send(H(slow, 0), 500, RETRO_LINK_BROADCAST, &byte, 1);
     SetCurrent(fast);
-    c.Advance(fast, 0, 2000, 2000, 2000);
+    c.Advance(H(fast, 0), 2000, 2000, 2000);
     uint64_t tick = 0; unsigned from = 0; uint8_t v = 0; size_t len = 1;
-    Check(c.Recv(fast, 0, &tick, &from, &v, &len) && tick == 1000,
+    Check(c.Recv(H(fast, 0), &tick, &from, &v, &len) && tick == 1000,
           "a message at slow tick 500 arrives at fast tick 1000");
 
     c.DropOwner(slow);
@@ -307,18 +330,18 @@ static void TestTeardownReleases()
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x6001);
     Wrapper* b = Fake(0x6002);
-    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
     c.Connect(a, 0, b, 0);
 
     // B publishes a horizon, then stops for good. A will park behind it.
     SetCurrent(b);
-    c.Advance(b, 0, 0, GRAIN, 0);
+    c.Advance(H(b, 0), 0, GRAIN, 0);
 
     std::atomic<bool> returned{false};
     std::thread ta([&] {
         SetCurrent(a);
-        c.Advance(a, 0, 0, GRAIN, 10 * GRAIN);   // far past B's horizon: must block
+        c.Advance(H(a, 0), 0, GRAIN, 10 * GRAIN);   // far past B's horizon: must block
         returned = true;
     });
 
@@ -344,26 +367,26 @@ static void TestPullingOneEndFreesBoth()
     auto& c = LinkCoordinator::Get();
     Wrapper* a = Fake(0x7001);
     Wrapper* b = Fake(0x7002);
-    c.Attach(a, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(b, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
     c.Connect(a, 0, b, 0);
 
     unsigned n = 0;
-    c.Peers(a, 0, &n);
+    c.Peers(H(a, 0), &n);
     Check(n == 2, "both are on the bus to start with");
 
     // Only one end is pulled, which is all a hand can do.
     c.Disconnect(a, 0);
 
     n = 99;
-    Check(c.Peers(a, 0, &n) == -1 && n == 0, "the pulled end is cabled to nothing");
+    Check(c.Peers(H(a, 0), &n) == -1 && n == 0, "the pulled end is cabled to nothing");
     n = 99;
-    Check(c.Peers(b, 0, &n) == -1 && n == 0, "so is the end still holding the lead");
+    Check(c.Peers(H(b, 0), &n) == -1 && n == 0, "so is the end still holding the lead");
 
     // And the survivor must genuinely be free, not merely reporting so: with
     // nothing bounding it, its advance has to come back unbounded.
     SetCurrent(b);
-    Check(c.Advance(b, 0, 0, GRAIN, 10 * GRAIN) == RETRO_LINK_UNBOUNDED,
+    Check(c.Advance(H(b, 0), 0, GRAIN, 10 * GRAIN) == RETRO_LINK_UNBOUNDED,
           "the survivor runs free rather than waiting on a ghost");
 
     c.DropOwner(a);
@@ -382,7 +405,7 @@ static void TestChain()
     Wrapper* e = Fake(0x8004);
     for (Wrapper* w : {a, b, d, e})
     {
-        c.Attach(w, 0, "gba-sio-1", GBA_HZ);
+        DoAttach(c, w, 0, "gba-sio-1", GBA_HZ);
     }
 
     // The room reports which machines share one wire, as edges. A GBA chain does
@@ -395,33 +418,33 @@ static void TestChain()
     c.Connect(d, 0, e, 0);
 
     unsigned n = 0;
-    c.Peers(a, 0, &n);
+    c.Peers(H(a, 0), &n);
     Check(n == 4, "all four are on one bus");
 
     // Player numbers have to be stable, because two peers replaying the same
     // inputs must agree about who owns the clock.
-    Check(c.Peers(a, 0, &n) == 0, "A is player one");
-    Check(c.Peers(e, 0, &n) == 3, "E is player four");
+    Check(c.Peers(H(a, 0), &n) == 0, "A is player one");
+    Check(c.Peers(H(e, 0), &n) == 3, "E is player four");
 
     // And every one of them bounds the others. With four machines the ceiling
     // is the SLOWEST, so a straggler anywhere in the chain holds the rest.
     SetCurrent(a);
-    c.Advance(a, 0, 0, GRAIN, 0);
+    c.Advance(H(a, 0), 0, GRAIN, 0);
     SetCurrent(b);
-    c.Advance(b, 0, 0, GRAIN, 0);
+    c.Advance(H(b, 0), 0, GRAIN, 0);
     SetCurrent(d);
-    c.Advance(d, 0, 0, GRAIN, 0);
+    c.Advance(H(d, 0), 0, GRAIN, 0);
     // E has not published, so it still pins everyone at their origin.
     SetCurrent(a);
-    Check(c.Advance(a, 0, 0, GRAIN, 0) == 0, "an unpublished peer still bounds the chain");
+    Check(c.Advance(H(a, 0), 0, GRAIN, 0) == 0, "an unpublished peer still bounds the chain");
 
     // Cutting the MIDDLE cable has to leave two buses, not one severed heap.
     // An edge-based topology is the only way that falls out correctly.
     c.Disconnect(b, 0);
     n = 99;
-    Check(c.Peers(d, 0, &n) == 0 && n == 2, "the far half is still a pair");
+    Check(c.Peers(H(d, 0), &n) == 0 && n == 2, "the far half is still a pair");
     n = 99;
-    Check(c.Peers(a, 0, &n) == -1 && n == 0, "and A is left holding nothing");
+    Check(c.Peers(H(a, 0), &n) == -1 && n == 0, "and A is left holding nothing");
 
     for (Wrapper* w : {a, b, d, e})
     {
@@ -443,8 +466,8 @@ static void TestSeating()
     // how long it had known them, and an endpoint is created when its CORE
     // attaches, so the console powered on first became player one and the cable
     // had no say at all.
-    c.Attach(grey, 0, "gba-sio-1", GBA_HZ);
-    c.Attach(purple, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, grey, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, purple, 0, "gba-sio-1", GBA_HZ);
 
     // The room names the machine holding the PURPLE connector first, because it
     // walks the lead from its purple end. On hardware that is the unit whose SI
@@ -452,15 +475,15 @@ static void TestSeating()
     Check(c.ConnectGroup({{purple, 0}, {grey, 0}}), "the room cables purple then grey");
 
     unsigned n = 0;
-    Check(c.Peers(purple, 0, &n) == 0 && n == 2, "the purple end is player one");
-    Check(c.Peers(grey, 0, &n) == 1 && n == 2, "the grey end is player two");
+    Check(c.Peers(H(purple, 0), &n) == 0 && n == 2, "the purple end is player one");
+    Check(c.Peers(H(grey, 0), &n) == 1 && n == 2, "the grey end is player two");
 
     // And turning the lead round swaps the players, with neither machine
     // switched off. Moving a plug from one console to the other is the whole of
     // how this is done on real hardware.
     Check(c.ConnectGroup({{grey, 0}, {purple, 0}}), "the lead is turned round");
-    Check(c.Peers(grey, 0, &n) == 0, "now the grey machine is player one");
-    Check(c.Peers(purple, 0, &n) == 1, "and the other one is player two");
+    Check(c.Peers(H(grey, 0), &n) == 0, "now the grey machine is player one");
+    Check(c.Peers(H(purple, 0), &n) == 1, "and the other one is player two");
 
     c.DropOwner(grey);
     c.DropOwner(purple);

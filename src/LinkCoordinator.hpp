@@ -86,22 +86,31 @@ public:
     void DropOwner(Wrapper* owner);
 
     // ── Core side: reached through the trampolines ───────────────────────────
-    int      Attach(Wrapper* owner, unsigned port, const char* protocol_id, uint64_t clock_rate);
-    void     Detach(Wrapper* owner, unsigned port);
-    int      Peers(Wrapper* owner, unsigned port, unsigned* count);
+    //
+    // Everything after Attach takes the ENDPOINT the core was given, not the
+    // (instance, port) pair it was found by. The core hands back what it was
+    // handed, so nothing has to be worked out from the calling thread -- which
+    // is the only way this survives a core that runs on more than one.
+    retro_link_handle_t Attach(Wrapper* owner, unsigned port, const char* protocol_id,
+                               uint64_t clock_rate);
+    void     Detach(retro_link_handle_t handle);
+    int      Peers(retro_link_handle_t handle, unsigned* count);
+    bool     Send(retro_link_handle_t handle, uint64_t tick, unsigned to, const void* buf, size_t len);
+    bool     Recv(retro_link_handle_t handle, uint64_t* tick, unsigned* from, void* buf, size_t* len);
+    uint64_t Advance(retro_link_handle_t handle, uint64_t local_tick, uint64_t safe_tick,
+                     uint64_t request_tick);
+
+    // Read by the ROOM rather than by a core, so these look an endpoint up by
+    // machine and port the way everything else on the host side does. A cable
+    // is a thing in a room; it has no handle and no business holding one.
+    int      PeersFor(Wrapper* owner, unsigned port, unsigned* count);
     uint64_t Delivered(Wrapper* owner, unsigned port);
     uint64_t Sent(Wrapper* owner, unsigned port);
-    bool     Send(Wrapper* owner, unsigned port, uint64_t tick, unsigned to, const void* buf, size_t len);
-    bool     Recv(Wrapper* owner, unsigned port, uint64_t* tick, unsigned* from, void* buf, size_t* len);
-    uint64_t Advance(Wrapper* owner, unsigned port, uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick);
 
     /// Largest payload a single Send will carry. Link protocols move a handful
     /// of bytes per transfer; the cap exists so a malformed core cannot make
     /// the host allocate without bound.
     static constexpr size_t MAX_PAYLOAD = 4096;
-
-private:
-    LinkCoordinator() = default;
 
     struct Message
     {
@@ -114,6 +123,17 @@ private:
 
     struct Endpoint
     {
+        /// What a core is handed at attach, and hands back on every call.
+        ///
+        /// An id rather than the address, and never reused. A thread parked in
+        /// Advance sleeps with the lock released, and the endpoint it was
+        /// waiting on can be torn down in that moment -- a machine switched off
+        /// erases them -- so it has to look the endpoint up again after waking.
+        /// An address could not survive that: the memory may be freed, and worse
+        /// may be handed to the NEXT endpoint, so a stale handle would quietly
+        /// resolve to a live stranger. An id cannot be mistaken for another.
+        uint64_t id = 0;
+
         Wrapper* owner = nullptr;
         unsigned port = 0;
 
@@ -178,12 +198,19 @@ private:
         Endpoint* b = nullptr;
     };
 
+private:
+    LinkCoordinator() = default;
+
     Endpoint* Find(Wrapper* owner, unsigned port);
     Endpoint& FindOrCreate(Wrapper* owner, unsigned port);
 
     /// Forget every wire touching `ep`. A machine's port holds one plug, so in
     /// practice that is one wire, but a junction on a cable can hold more.
     void CutLinksAt(const Endpoint& ep);
+
+    /// The endpoint a handle names, or null if it has been torn down since.
+    /// Caller holds m_mutex.
+    Endpoint* Resolve(retro_link_handle_t handle);
 
     /// Rebuild every bus from the wires. Called after any change to them.
     ///
@@ -207,6 +234,9 @@ private:
 
     /// How many endpoints exist, used to number them for the log.
     unsigned m_next_label = 0;
+
+    /// Next endpoint id. Starts at 1 so that a zero handle is always invalid.
+    uint64_t m_next_id = 1;
 
     /// Ceiling for `ep` in its own ticks, or RETRO_LINK_UNBOUNDED when nothing
     /// bounds it. Caller holds m_mutex.

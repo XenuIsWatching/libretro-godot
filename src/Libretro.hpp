@@ -187,6 +187,7 @@ public:
     /// every core started afterwards, so set it before StartContent.
     static void SetPreferredHwRender(int context_type);
 
+
     /// Returns per-port controller info as Array[Dictionary{port, controllers: Array[{name,id}], current_id}].
     godot::Array GetControllerInfo();
     /// Meta XR Audio voice ids this core's sound is spatialized through, or
@@ -329,6 +330,12 @@ public:
     /// disk, i.e. only when the dirty check found a change. `final` marks the
     /// flush at core shutdown, the last one for this run.
     void NotifySramFlushed(const godot::String& path, int64_t size, bool final_flush);
+
+    /// Called from the emulation thread when the run could not start: the core
+    /// would not load, the file was unreadable, or retro_load_game refused.
+    /// Without this a refused load raises nothing at all and the machine sits
+    /// powered on and black, indistinguishable from a broken core or a dead TV.
+    void NotifyContentLoadFailed(const godot::String& reason);
 
     /// Read a core's option set without starting it, for menus that let the
     /// player set options before launch. Returns a dictionary shaped like the
