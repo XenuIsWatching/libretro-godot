@@ -365,6 +365,66 @@ static void TestPullingOneEndFreesBoth()
     c.DropOwner(b);
 }
 
+
+// -- T9: three and four machines on one chain -------------------------------
+static void TestChain()
+{
+    std::printf("T9 cables chain into one bus\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x8001);
+    Wrapper* b = Fake(0x8002);
+    Wrapper* d = Fake(0x8003);
+    Wrapper* e = Fake(0x8004);
+    for (Wrapper* w : {a, b, d, e})
+    {
+        c.Attach(w, 0, "gba-sio-1", GBA_HZ);
+    }
+
+    // The room reports which machines share one wire, as edges. A GBA chain does
+    // not put two cables in one handheld: the third and fourth join through the
+    // junction ON the cable, which has no core behind it and so never appears
+    // here. What reaches the coordinator is a spanning tree of the machines the
+    // room worked out are on the same wire.
+    c.Connect(a, 0, b, 0);
+    c.Connect(b, 0, d, 0);
+    c.Connect(d, 0, e, 0);
+
+    unsigned n = 0;
+    c.Peers(a, 0, &n);
+    Check(n == 4, "all four are on one bus");
+
+    // Player numbers have to be stable, because two peers replaying the same
+    // inputs must agree about who owns the clock.
+    Check(c.Peers(a, 0, &n) == 0, "A is player one");
+    Check(c.Peers(e, 0, &n) == 3, "E is player four");
+
+    // And every one of them bounds the others. With four machines the ceiling
+    // is the SLOWEST, so a straggler anywhere in the chain holds the rest.
+    SetCurrent(a);
+    c.Advance(a, 0, 0, GRAIN, 0);
+    SetCurrent(b);
+    c.Advance(b, 0, 0, GRAIN, 0);
+    SetCurrent(d);
+    c.Advance(d, 0, 0, GRAIN, 0);
+    // E has not published, so it still pins everyone at their origin.
+    SetCurrent(a);
+    Check(c.Advance(a, 0, 0, GRAIN, 0) == 0, "an unpublished peer still bounds the chain");
+
+    // Cutting the MIDDLE cable has to leave two buses, not one severed heap.
+    // An edge-based topology is the only way that falls out correctly.
+    c.Disconnect(b, 0);
+    n = 99;
+    Check(c.Peers(d, 0, &n) == 0 && n == 2, "the far half is still a pair");
+    n = 99;
+    Check(c.Peers(a, 0, &n) == -1 && n == 0, "and A is left holding nothing");
+
+    for (Wrapper* w : {a, b, d, e})
+    {
+        c.DropOwner(w);
+    }
+}
+
+
 int main()
 {
     TestUnbounded();
@@ -375,6 +435,7 @@ int main()
     TestCrossRate();
     TestTeardownReleases();
     TestPullingOneEndFreesBoth();
+    TestChain();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

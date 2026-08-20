@@ -132,6 +132,13 @@ public:
     /// Pull the cable out of `port`. Peers go unbounded immediately, which for
     /// a guest mid-transfer looks like the cable being yanked, because it is.
     void LinkDisconnect(uint32_t port);
+    /// Put this machine and every other on `others` on one wire.
+    ///
+    /// `others` is an Array of Libretro nodes, and `ports` the matching link
+    /// port on each, this machine's own port first. The general form of
+    /// LinkConnect, for when a chain of cables and junctions has joined three
+    /// or four machines rather than two.
+    bool LinkConnectGroup(const godot::Array& others, const godot::PackedInt32Array& ports);
     /// How many machines are attached to `port`'s bus, this one included.
     ///
     /// 0 when nothing is cabled to it, or when the core has not attached its

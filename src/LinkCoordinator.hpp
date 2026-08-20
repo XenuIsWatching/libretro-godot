@@ -53,11 +53,31 @@ public:
     static const retro_link_interface* Interface();
 
     // ── Host side: the cable ─────────────────────────────────────────────────
-    // Connect is what a seated link cable means. Either end may still be
-    // unattached (the guest has not touched its serial port yet); the bus just
-    // stays inert until both sides publish.
+    // Connect is what one seated link cable means: a single wire between two
+    // ports. Either end may still be unattached (the guest has not touched its
+    // serial port yet); the link just stays inert until both sides publish.
+    //
+    // Cables CHAIN. A GBA lead carries an inline junction so a third and fourth
+    // machine can join, and the set that ends up sharing one wire is whatever
+    // the cables transitively join together. So each call records one wire and
+    // the buses are derived from them, rather than a call declaring a whole bus:
+    // that is the only way unplugging the middle cable of A-B-C-D can leave A-B
+    // and C-D instead of one severed heap.
 
     bool Connect(Wrapper* a, unsigned port_a, Wrapper* b, unsigned port_b);
+
+    /// Every machine port sharing one wire, as the room worked it out.
+    ///
+    /// This is the general form and Connect is the two-machine case of it. The
+    /// room has to do the walking because the junction moulded into a link cable
+    /// is a scene object with no core behind it: it conducts, so it belongs in
+    /// the graph, but it can never be an endpoint here. So the room follows the
+    /// cables through their junctions, decides which machines end up on the same
+    /// wire, and states the answer.
+    ///
+    /// Listed ports leave whatever bus they were on. A group of fewer than two
+    /// is a lead going nowhere and leaves them on no bus at all.
+    bool ConnectGroup(const std::vector<std::pair<Wrapper*, unsigned>>& ports);
     void Disconnect(Wrapper* owner, unsigned port);
 
     /// Unblock and forget everything owned by `owner`. Must be called when an
@@ -123,12 +143,30 @@ private:
         std::vector<Endpoint*> members;
     };
 
+    /// One seated cable. The wires are what the room actually tells us about;
+    /// everything else here is worked out from them.
+    struct Link
+    {
+        Endpoint* a = nullptr;
+        Endpoint* b = nullptr;
+    };
+
     Endpoint* Find(Wrapper* owner, unsigned port);
     Endpoint& FindOrCreate(Wrapper* owner, unsigned port);
-    void RemoveFromBus(Endpoint& ep);
+
+    /// Forget every wire touching `ep`. A machine's port holds one plug, so in
+    /// practice that is one wire, but a junction on a cable can hold more.
+    void CutLinksAt(const Endpoint& ep);
+
+    /// Rebuild every bus from the wires. Called after any change to them.
+    ///
+    /// A machine left alone in its own component is on no bus at all: a cable
+    /// has two ends, and one machine holding a lead that goes nowhere is not
+    /// cabled to anything.
+    void RebuildBuses();
+
     /// Reset one endpoint's bus-side state. Shared so every way off a bus agrees.
     static void Detached(Endpoint& ep);
-    void Reindex(Bus& bus);
 
     /// Ceiling for `ep` in its own ticks, or RETRO_LINK_UNBOUNDED when nothing
     /// bounds it. Caller holds m_mutex.
@@ -138,5 +176,6 @@ private:
     std::condition_variable m_cv;
     std::vector<std::unique_ptr<Endpoint>> m_endpoints;
     std::vector<std::unique_ptr<Bus>> m_buses;
+    std::vector<Link> m_links;
 };
 }

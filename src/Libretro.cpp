@@ -7,6 +7,8 @@
 #include "RetroAchievements.hpp"
 
 #include <filesystem>
+#include <utility>
+#include <vector>
 
 using namespace godot;
 
@@ -443,6 +445,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("LinkConnect", "other", "port", "other_port"), &Libretro::LinkConnect, DEFVAL(0u), DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
+    ClassDB::bind_method(D_METHOD("LinkConnectGroup", "others", "ports"), &Libretro::LinkConnectGroup);
     ClassDB::bind_method(D_METHOD("LinkPeerCount", "port"), &Libretro::LinkPeerCount, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("GetVideoImage"), &Libretro::GetVideoImage);
@@ -557,5 +560,35 @@ uint32_t Libretro::LinkPeerCount(uint32_t port)
     unsigned count = 0;
     LinkCoordinator::Get().Peers(m_wrapper.get(), port, &count);
     return static_cast<uint32_t>(count);
+}
+
+bool Libretro::LinkConnectGroup(const godot::Array& others, const godot::PackedInt32Array& ports)
+{
+    if (!m_wrapper)
+    {
+        return false;
+    }
+    if (ports.size() != others.size() + 1)
+    {
+        // One port per machine, this one included. Getting this wrong would
+        // silently cable the wrong sockets together.
+        LogError("LinkConnectGroup: expected one port per machine.");
+        return false;
+    }
+
+    std::vector<std::pair<Wrapper*, unsigned>> group;
+    group.emplace_back(m_wrapper.get(), static_cast<unsigned>(ports[0]));
+
+    for (int i = 0; i < others.size(); ++i)
+    {
+        Libretro* other = godot::Object::cast_to<Libretro>(others[i]);
+        if (!other || other == this || !other->m_wrapper)
+        {
+            continue;
+        }
+        group.emplace_back(other->m_wrapper.get(), static_cast<unsigned>(ports[i + 1]));
+    }
+
+    return LinkCoordinator::Get().ConnectGroup(group);
 }
 }

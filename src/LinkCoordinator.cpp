@@ -205,14 +205,6 @@ LinkCoordinator::Endpoint& LinkCoordinator::FindOrCreate(Wrapper* owner, unsigne
     return ep;
 }
 
-void LinkCoordinator::Reindex(Bus& bus)
-{
-    for (size_t i = 0; i < bus.members.size(); ++i)
-    {
-        bus.members[i]->index = static_cast<int>(i);
-    }
-}
-
 void LinkCoordinator::Detached(Endpoint& ep)
 {
     ep.bus = nullptr;
@@ -225,37 +217,95 @@ void LinkCoordinator::Detached(Endpoint& ep)
     ep.safe_delta = 0;
 }
 
-void LinkCoordinator::RemoveFromBus(Endpoint& ep)
+void LinkCoordinator::CutLinksAt(const Endpoint& ep)
 {
-    Bus* bus = ep.bus;
-    if (!bus)
+    m_links.erase(std::remove_if(m_links.begin(), m_links.end(),
+                                 [&ep](const Link& l) { return l.a == &ep || l.b == &ep; }),
+                  m_links.end());
+}
+
+void LinkCoordinator::RebuildBuses()
+{
+    // Everything currently on a bus comes off it first. Anything that is still
+    // joined to something will be put back below, and anything that is not has
+    // just had its cable pulled and should look like it.
+    for (auto& ep : m_endpoints)
     {
-        return;
+        if (ep->bus)
+        {
+            Detached(*ep);
+        }
     }
+    m_buses.clear();
 
-    bus->members.erase(std::remove(bus->members.begin(), bus->members.end(), &ep), bus->members.end());
-    Reindex(*bus);
-
-    Detached(ep);
-
-    // A cable has two ends, so taking one machine off leaves the last one
-    // holding a lead that goes nowhere. Drop it too rather than leaving it on a
-    // bus of one, which would report itself as cabled to something and keep a
-    // pointer to a bus about to be freed. With three or four machines on a
-    // multiplayer lead the rest carry on, which is what unplugging one of them
-    // does.
-    if (bus->members.size() == 1)
+    // Connected components over the wires. A flood fill rather than union-find:
+    // there are a handful of machines in a room, and this way the members come
+    // out in a stable order so a bus index does not depend on the order the
+    // cables happened to be seated in. Two peers replaying the same inputs have
+    // to agree about who is player one.
+    std::vector<Endpoint*> seen;
+    for (auto& start_ep : m_endpoints)
     {
-        Endpoint* last = bus->members.front();
-        bus->members.clear();
-        Detached(*last);
-    }
+        Endpoint* root = start_ep.get();
+        if (root->bus || std::find(seen.begin(), seen.end(), root) != seen.end())
+        {
+            continue;
+        }
 
-    if (bus->members.empty())
-    {
-        m_buses.erase(std::remove_if(m_buses.begin(), m_buses.end(),
-                                     [bus](const std::unique_ptr<Bus>& b) { return b.get() == bus; }),
-                      m_buses.end());
+        std::vector<Endpoint*> component;
+        std::vector<Endpoint*> pending{root};
+        seen.push_back(root);
+
+        while (!pending.empty())
+        {
+            Endpoint* here = pending.back();
+            pending.pop_back();
+            component.push_back(here);
+
+            for (const Link& l : m_links)
+            {
+                Endpoint* other = (l.a == here) ? l.b : (l.b == here ? l.a : nullptr);
+                if (!other || std::find(seen.begin(), seen.end(), other) != seen.end())
+                {
+                    continue;
+                }
+                seen.push_back(other);
+                pending.push_back(other);
+            }
+        }
+
+        // One machine on its own is not cabled to anything.
+        if (component.size() < 2)
+        {
+            continue;
+        }
+
+        // Ordered by how long the coordinator has known each endpoint, which is
+        // stable across runs, rather than by the order the flood happened to
+        // reach them.
+        std::sort(component.begin(), component.end(),
+                  [this](const Endpoint* x, const Endpoint* y) {
+                      auto pos = [this](const Endpoint* e) {
+                          for (size_t i = 0; i < m_endpoints.size(); ++i)
+                          {
+                              if (m_endpoints[i].get() == e)
+                              {
+                                  return i;
+                              }
+                          }
+                          return m_endpoints.size();
+                      };
+                      return pos(x) < pos(y);
+                  });
+
+        m_buses.push_back(std::make_unique<Bus>());
+        Bus& bus = *m_buses.back();
+        bus.members = component;
+        for (size_t i = 0; i < bus.members.size(); ++i)
+        {
+            bus.members[i]->bus = &bus;
+            bus.members[i]->index = static_cast<int>(i);
+        }
     }
 }
 
@@ -284,17 +334,91 @@ bool LinkCoordinator::Connect(Wrapper* a, unsigned port_a, Wrapper* b, unsigned 
         return false;
     }
 
-    RemoveFromBus(ea);
-    RemoveFromBus(eb);
+    // One wire per call. Seating the same cable twice must not double it up, or
+    // pulling it once would leave half of it behind.
+    for (const Link& l : m_links)
+    {
+        if ((l.a == &ea && l.b == &eb) || (l.a == &eb && l.b == &ea))
+        {
+            return true;
+        }
+    }
 
-    m_buses.push_back(std::make_unique<Bus>());
-    Bus& bus = *m_buses.back();
-    bus.members.push_back(&ea);
-    bus.members.push_back(&eb);
-    ea.bus = &bus;
-    eb.bus = &bus;
-    Reindex(bus);
+    // Deliberately NOT cutting whatever else these two are already joined to.
+    //
+    // A machine's socket does hold one plug, but that rule belongs to the room's
+    // snap zones, not here. A GBA chain does not put two cables in one handheld:
+    // the third machine joins through the JUNCTION on the cable, which is a
+    // scene object with no core behind it and so can never be an endpoint. The
+    // room walks the cables and their junctions, works out which machines end up
+    // sharing one wire, and reports that set as edges. Enforcing one-link-per-
+    // port here would tear the chain apart as fast as the room described it.
+    m_links.push_back(Link{&ea, &eb});
+    RebuildBuses();
 
+    m_cv.notify_all();
+    return true;
+}
+
+bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigned>>& ports)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::vector<Endpoint*> group;
+    for (const auto& p : ports)
+    {
+        if (!p.first)
+        {
+            continue;
+        }
+        Endpoint& ep = FindOrCreate(p.first, p.second);
+        if (std::find(group.begin(), group.end(), &ep) == group.end())
+        {
+            group.push_back(&ep);
+        }
+    }
+
+    // Whatever these were on before, they are on this now. Stated as a set
+    // rather than accumulated, so a cable pulled out of the middle of a chain
+    // leaves the two halves apart instead of merged.
+    for (Endpoint* ep : group)
+    {
+        CutLinksAt(*ep);
+    }
+
+    if (group.size() < 2)
+    {
+        // A lead going nowhere: one machine, or the same one named twice. The
+        // endpoints have already been cut loose above, which is the right state,
+        // but the caller has to hear that nothing was joined or it will record a
+        // link the bus never made.
+        RebuildBuses();
+        m_cv.notify_all();
+        return false;
+    }
+
+    {
+        const std::string& protocol = group.front()->protocol_id;
+        for (Endpoint* ep : group)
+        {
+            if (ep->attached && group.front()->attached && ep->protocol_id != protocol)
+            {
+                LogError("ConnectGroup: protocol mismatch, '" + ep->protocol_id + "' vs '" + protocol + "'.");
+                RebuildBuses();
+                m_cv.notify_all();
+                return false;
+            }
+        }
+
+        // A star from the first, which is enough to make one component. The
+        // shape of the tree does not matter; only who ends up reachable.
+        for (size_t i = 1; i < group.size(); ++i)
+        {
+            m_links.push_back(Link{group.front(), group[i]});
+        }
+    }
+
+    RebuildBuses();
     m_cv.notify_all();
     return true;
 }
@@ -305,10 +429,12 @@ void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (Endpoint* ep = Find(owner, port))
         {
-            RemoveFromBus(*ep);
+            CutLinksAt(*ep);
+            RebuildBuses();
         }
     }
-    // Whoever was waiting on the other end is now unbounded and must be let go.
+    // Whoever was waiting on the other end may now be unbounded, and a chain
+    // that has just been cut in the middle has two halves to wake.
     m_cv.notify_all();
 }
 
@@ -321,12 +447,13 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
             if (ep->owner == owner)
             {
                 ep->shutting_down = true;
-                RemoveFromBus(*ep);
+                CutLinksAt(*ep);
             }
         }
         m_endpoints.erase(std::remove_if(m_endpoints.begin(), m_endpoints.end(),
                                          [owner](const std::unique_ptr<Endpoint>& e) { return e->owner == owner; }),
                           m_endpoints.end());
+        RebuildBuses();
     }
     m_cv.notify_all();
 }
