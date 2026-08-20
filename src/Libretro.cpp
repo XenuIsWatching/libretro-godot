@@ -95,6 +95,11 @@ void Libretro::SetInputEnabled(bool enabled)
     m_wrapper->m_input_enabled = enabled;
 }
 
+void Libretro::SetNoContentPassesNull(bool passes_null)
+{
+    Wrapper::SetNoContentPassesNull(passes_null);
+}
+
 void Libretro::SetPreferredHwRender(int context_type)
 {
     VideoHandler::SetPreferredHwRender(static_cast<retro_hw_context_type>(context_type));
@@ -461,6 +466,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("PeekCoreOptions", "root_directory", "core_name"), &Libretro::PeekCoreOptions);
     ClassDB::bind_method(D_METHOD("SetInputEnabled", "enabled"), &Libretro::SetInputEnabled);
     ClassDB::bind_static_method("Libretro", D_METHOD("SetPreferredHwRender", "context_type"), &Libretro::SetPreferredHwRender);
+    ClassDB::bind_static_method("Libretro", D_METHOD("SetNoContentPassesNull", "passes_null"), &Libretro::SetNoContentPassesNull);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
     ClassDB::bind_method(D_METHOD("GetAudioVoiceIds"), &Libretro::GetAudioVoiceIds);
     ClassDB::bind_method(D_METHOD("SetAudioChannelMode", "mode"), &Libretro::SetAudioChannelMode);

@@ -187,6 +187,12 @@ public:
     /// every core started afterwards, so set it before StartContent.
     static void SetPreferredHwRender(int context_type);
 
+    /// Which convention a no-content start hands retro_load_game: true for a
+    /// null pointer (libretro's own, and RetroArch's), false for a zeroed
+    /// retro_game_info. Measured per core -- see Wrapper::SetNoContentPassesNull.
+    /// Must be set before StartContent; it is read as the core loads.
+    static void SetNoContentPassesNull(bool passes_null);
+
 
     /// Returns per-port controller info as Array[Dictionary{port, controllers: Array[{name,id}], current_id}].
     godot::Array GetControllerInfo();

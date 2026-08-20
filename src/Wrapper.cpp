@@ -510,6 +510,23 @@ void Wrapper::NotifyContentLoadFailed(const char* reason) const
         node->NotifyContentLoadFailed(godot::String(reason));
 }
 
+namespace
+{
+// Read on the emulation thread as the content loads, written from GDScript
+// before StartContent. Defaults to the libretro convention.
+std::atomic<bool> g_no_content_passes_null{ true };
+}
+
+void Wrapper::SetNoContentPassesNull(bool passes_null)
+{
+    g_no_content_passes_null.store(passes_null, std::memory_order_relaxed);
+}
+
+bool Wrapper::GetNoContentPassesNull()
+{
+    return g_no_content_passes_null.load(std::memory_order_relaxed);
+}
+
 Ref<ImageTexture> Wrapper::GetVideoTexture() const
 {
     return m_video_handler ? m_video_handler->GetTexture() : Ref<ImageTexture>();
@@ -1990,12 +2007,12 @@ void Wrapper::EmulationThreadLoop()
 
     if (m_game_path.empty())
     {
-        // Kept as a guard even though nothing in the app reaches here: measured
-        // 2026-08-20 over sixteen cores, not one starts without content, and six
-        // take the process down when asked (mgba and parallel_n64 dereference a
-        // null game info; mednafen_saturn, neocd, dolphin and same_cdi die on a
-        // zeroed one). A machine wanting its BIOS is handed empty media instead
-        // -- see BiosBoot -- which is a real path and takes the branch below.
+        // Kept as a floor. Measured 2026-08-20 over sixteen cores: not one stock
+        // core starts without content, and six take the process down when asked
+        // (mgba and parallel_n64 dereference a null game info; mednafen_saturn,
+        // neocd, dolphin and same_cdi die on a zeroed one). A core reaching here
+        // has to have said SET_SUPPORT_NO_GAME out loud, so a core that never
+        // claimed it cannot be attempted by an over-eager BiosBoot row.
         if (!m_core->GetSupportsNoGame())
         {
             LogError("Game not set and this core does not support no game mode.");
@@ -2003,9 +2020,19 @@ void Wrapper::EmulationThreadLoop()
             return;
         }
 
+        // Which of the two conventions a core wants is not something it says out
+        // loud, so it is measured per core and carried in the BiosBoot table. A
+        // null pointer is libretro's own convention and what RetroArch passes,
+        // which is what a core detecting no-content with `if (!info)` expects; a
+        // zeroed struct is the one that does not fault on a core that reads the
+        // argument without checking.
+        const bool pass_null = GetNoContentPassesNull();
+        Log(std::string("Starting with no content, passing ") +
+            (pass_null ? "a null game info" : "a zeroed game info") + ".");
+
         retro_game_info game_info = {};
 
-        if (!m_core->retro_load_game(&game_info))
+        if (!m_core->retro_load_game(pass_null ? nullptr : &game_info))
         {
             LogError("Failed to load game");
             NotifyContentLoadFailed("This system cannot start without a game.");

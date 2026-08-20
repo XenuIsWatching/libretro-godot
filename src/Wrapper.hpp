@@ -499,6 +499,17 @@ public:
     /// already gone -- LiveLibretroNode answers null and this does nothing.
     void NotifyContentLoadFailed(const char* reason) const;
 
+    /// Which no-content convention retro_load_game is called with. libretro's is
+    /// a null pointer, and that is what RetroArch passes, but it is not safe
+    /// everywhere: stock mgba dereferences the argument without checking. A
+    /// zeroed struct survives that, at the cost of looking to the core like
+    /// content with an empty path. Neither works for every core, so the right
+    /// one is measured per core by Tools/bios_boot_probe and carried in the
+    /// BiosBoot table. Written from GDScript before StartContent spins the
+    /// emulation thread up, exactly like SetPreferredHwRender.
+    static void SetNoContentPassesNull(bool passes_null);
+    static bool GetNoContentPassesNull();
+
     uint64_t m_libretro_node_id = 0;
 
     /// Signal the emulation thread to stop. blocking=true joins and tears down
