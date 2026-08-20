@@ -1,5 +1,6 @@
 #include "Libretro.hpp"
 
+#include "LinkCoordinator.hpp"
 #include "Wrapper.hpp"
 #include "AudioHandler.hpp"
 #include "CoreOptionsPeek.hpp"
@@ -440,6 +441,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("ConnectOptionsReady", "callable", "flags"), &Libretro::ConnectOptionsReady, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("StartContent", "root_directory", "core_name", "game_path"), &Libretro::StartContent);
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
+    ClassDB::bind_method(D_METHOD("LinkConnect", "other", "port", "other_port"), &Libretro::LinkConnect, DEFVAL(0u), DEFVAL(0u));
+    ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("GetVideoTexture"), &Libretro::GetVideoTexture);
     ClassDB::bind_method(D_METHOD("GetVideoImage"), &Libretro::GetVideoImage);
     ClassDB::bind_method(D_METHOD("SetAudioPlaying", "playing"), &Libretro::SetAudioPlaying);
@@ -513,5 +516,31 @@ void Libretro::_bind_methods()
         PropertyInfo(Variant::INT,   "port"),
         PropertyInfo(Variant::FLOAT, "weak"),
         PropertyInfo(Variant::FLOAT, "strong")));
+}
+
+bool Libretro::LinkConnect(Libretro* other, uint32_t port, uint32_t other_port)
+{
+    if (!other || other == this)
+    {
+        LogError("LinkConnect: a machine cannot be cabled to itself.");
+        return false;
+    }
+    if (!m_wrapper || !other->m_wrapper)
+    {
+        // Nothing is running on one end yet. Worth saying out loud rather than
+        // failing quietly, because from inside the room the cable looks seated.
+        LogError("LinkConnect: both machines must be running.");
+        return false;
+    }
+
+    return LinkCoordinator::Get().Connect(m_wrapper.get(), port, other->m_wrapper.get(), other_port);
+}
+
+void Libretro::LinkDisconnect(uint32_t port)
+{
+    if (m_wrapper)
+    {
+        LinkCoordinator::Get().Disconnect(m_wrapper.get(), port);
+    }
 }
 }
