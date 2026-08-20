@@ -6,6 +6,8 @@
 
 #include <libretro.h>
 
+#include "LinkInterface.hpp"
+
 namespace Xenu
 {
 class Wrapper;
@@ -63,5 +65,6 @@ private:
     bool SetDiskControlExtInterface(const retro_disk_control_ext_callback* callback);
     bool GetThrottleState(retro_throttle_state* state);
     bool GetClearAllThreadWaitsCb(retro_environment_t* env);
+    bool GetLinkInterface(retro_link_interface* link_interface);
 };
 }

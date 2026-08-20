@@ -2,6 +2,7 @@
 
 #include <godot_cpp/variant/string.hpp>
 
+#include "LinkCoordinator.hpp"
 #include "Wrapper.hpp"
 #include "Debug.hpp"
 #include "InputHandler.hpp"
@@ -146,6 +147,8 @@ static bool runloop_clear_all_thread_waits(uint32_t clear_threads, void* data)
     X(RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE) \
     X(RETRO_ENVIRONMENT_GET_DEVICE_POWER) \
     X(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE) \
+    X(RETRO_ENVIRONMENT_GET_LINK_INTERFACE) \
+    X(RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL) \
     X(RETRO_ENVIRONMENT_GET_PLAYLIST_DIRECTORY) \
     X(RETRO_ENVIRONMENT_GET_FILE_BROWSER_START_DIRECTORY) \
     X(RETRO_ENVIRONMENT_RETROARCH_START_BLOCK) \
@@ -314,6 +317,10 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     case RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE:                            return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_DEVICE_POWER:                                    return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE:                             return EnvironmentNotImplemented(cmd);
+    // Both spellings: cores probe the experimental number today, and will
+    // find the plain one if libretro ever assigns it.
+    case RETRO_ENVIRONMENT_GET_LINK_INTERFACE:
+    case RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL:                            return instance->m_environment_handler->GetLinkInterface(static_cast<retro_link_interface*>(data));
     case RETRO_ENVIRONMENT_GET_PLAYLIST_DIRECTORY:                              return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_FILE_BROWSER_START_DIRECTORY:                    return EnvironmentNotImplemented(cmd);
     // custom environment commands
@@ -670,6 +677,22 @@ bool EnvironmentHandler::GetClearAllThreadWaitsCb(retro_environment_t* env)
 {
     if (env)
         *env = runloop_clear_all_thread_waits;
+    return true;
+}
+
+bool EnvironmentHandler::GetLinkInterface(retro_link_interface* link_interface)
+{
+    if (!link_interface)
+    {
+        return false;
+    }
+
+    // Every member is the host's, and the trampolines recover the calling
+    // instance from its emulation thread, so one shared table serves every core
+    // in the process. The core is answered whether or not anything is cabled to
+    // it yet: with no peers the bus grants without bound, which is what lets a
+    // core keep a single code path and still run standalone.
+    *link_interface = *LinkCoordinator::Interface();
     return true;
 }
 }

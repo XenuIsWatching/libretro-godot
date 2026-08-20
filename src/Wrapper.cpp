@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "Libretro.hpp"
+#include "LinkCoordinator.hpp"
 #include "Debug.hpp"
 #include "ThreadCommandInitAudio.hpp"
 #include "ThreadCommandReinitAudio.hpp"
@@ -70,6 +71,14 @@ Wrapper* Wrapper::GetCurrentThreadWrapper()
 void Wrapper::SetCurrentThreadWrapper(Wrapper* wrapper)
 {
     t_current_wrapper = wrapper;
+}
+
+// Free-function form for callers that must not depend on Wrapper's full
+// definition. LinkCoordinator uses this so the link bus can be built and
+// tested without dragging in Godot.
+Wrapper* CurrentThreadWrapper()
+{
+    return t_current_wrapper;
 }
 
 // Godot reports both Shift/Ctrl/Alt/Super keys under one keycode, so the whole
@@ -1858,6 +1867,10 @@ void Wrapper::StopEmulationThread(bool blocking)
     m_running = false;
     m_condition_variable.notify_all(); // wake emulation thread if blocked on InitAudio CV wait
     m_np_cv.notify_all();              // wake emulation thread if blocked on the netplay input gate
+    // Same reason: an emulation thread parked on the link barrier is waiting
+    // on a peer that is never going to publish again, and the join below would
+    // block forever behind it.
+    LinkCoordinator::Get().DropOwner(this);
     m_stopping = true;
 
     if (!blocking)

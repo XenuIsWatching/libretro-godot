@@ -128,9 +128,15 @@ typedef bool (RETRO_CALLCONV *retro_link_recv_t)(unsigned port, uint64_t *tick,
  * lands. Within a single process it only has to be large enough to avoid
  * synchronizing every few cycles, so a small fraction of a frame is plenty.
  *
- * Returns the greatest tick this core may advance to, which is always at
- * least `local_tick` and never less than a previously returned value, or
- * RETRO_LINK_UNBOUNDED.
+ * Returns the tick this core may advance to: `request_tick`, or more only
+ * where a previous grant or the core's own position already stood further on.
+ * The grant is never larger than what was asked for even when more headroom
+ * happens to be available, because how far a peer has run at this instant is a
+ * wall-clock accident and returning it would make two machines replaying
+ * identical inputs disagree. Ask for more to get more.
+ *
+ * The result is always at least `local_tick`, never less than a previously
+ * returned value, or RETRO_LINK_UNBOUNDED.
  *
  * The grant MUST be a pure function of the participants' published ticks. It
  * must never depend on wall-clock time, nor on the order in which threads
