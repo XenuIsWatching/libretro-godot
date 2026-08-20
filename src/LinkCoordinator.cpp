@@ -202,6 +202,7 @@ LinkCoordinator::Endpoint& LinkCoordinator::FindOrCreate(Wrapper* owner, unsigne
     Endpoint& ep = *m_endpoints.back();
     ep.owner = owner;
     ep.port = port;
+    ep.label = "m" + std::to_string(++m_next_label) + ":" + std::to_string(port);
     return ep;
 }
 
@@ -222,6 +223,51 @@ void LinkCoordinator::CutLinksAt(const Endpoint& ep)
     m_links.erase(std::remove_if(m_links.begin(), m_links.end(),
                                  [&ep](const Link& l) { return l.a == &ep || l.b == &ep; }),
                   m_links.end());
+}
+
+void LinkCoordinator::LogBusesLocked(const char* why) const
+{
+    std::string line = std::string(why) + ": ";
+    if (m_buses.empty())
+    {
+        line += "nothing cabled";
+    }
+    for (size_t b = 0; b < m_buses.size(); ++b)
+    {
+        if (b)
+        {
+            line += " | ";
+        }
+        line += "bus " + std::to_string(b) + " [";
+        for (size_t i = 0; i < m_buses[b]->members.size(); ++i)
+        {
+            const Endpoint* ep = m_buses[b]->members[i];
+            if (i)
+            {
+                line += ", ";
+            }
+            // "on" means the core called attach, which is the whole question
+            // when a cable looks right and the game refuses to link anyway.
+            line += ep->label + (ep->attached ? " on" : " OFF");
+        }
+        line += "]";
+    }
+
+    // Endpoints the room has cabled that are on no bus at all, which is what a
+    // lead going nowhere looks like from here.
+    std::string loose;
+    for (const auto& ep : m_endpoints)
+    {
+        if (!ep->bus)
+        {
+            loose += (loose.empty() ? "" : ", ") + ep->label + (ep->attached ? " on" : " OFF");
+        }
+    }
+    if (!loose.empty())
+    {
+        line += "  loose: " + loose;
+    }
+    Log(line);
 }
 
 void LinkCoordinator::RebuildBuses()
@@ -355,6 +401,7 @@ bool LinkCoordinator::Connect(Wrapper* a, unsigned port_a, Wrapper* b, unsigned 
     // port here would tear the chain apart as fast as the room described it.
     m_links.push_back(Link{&ea, &eb});
     RebuildBuses();
+    LogBusesLocked(("cabled " + ea.label + " to " + eb.label).c_str());
 
     m_cv.notify_all();
     return true;
@@ -419,6 +466,14 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
     }
 
     RebuildBuses();
+    {
+        std::string who;
+        for (const Endpoint* ep : group)
+        {
+            who += (who.empty() ? "" : " + ") + ep->label;
+        }
+        LogBusesLocked(("cabled " + who).c_str());
+    }
     m_cv.notify_all();
     return true;
 }
@@ -429,8 +484,10 @@ void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (Endpoint* ep = Find(owner, port))
         {
+            const std::string label = ep->label;
             CutLinksAt(*ep);
             RebuildBuses();
+            LogBusesLocked(("pulled the cable at " + label).c_str());
         }
     }
     // Whoever was waiting on the other end may now be unbounded, and a chain
@@ -454,6 +511,7 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
                                          [owner](const std::unique_ptr<Endpoint>& e) { return e->owner == owner; }),
                           m_endpoints.end());
         RebuildBuses();
+        LogBusesLocked("after a machine was switched off");
     }
     m_cv.notify_all();
 }
@@ -475,6 +533,9 @@ int LinkCoordinator::Attach(Wrapper* owner, unsigned port, const char* protocol_
     ep.clock_rate = clock_rate;
     ep.attached = true;
 
+    Log(ep.label + " attached, protocol '" + ep.protocol_id + "', " + std::to_string(clock_rate) + " Hz");
+    LogBusesLocked("after attach");
+
     m_cv.notify_all();
     return ep.bus ? ep.index : 0;
 }
@@ -494,6 +555,8 @@ void LinkCoordinator::Detach(Wrapper* owner, unsigned port)
             ep->local_delta = 0;
             ep->safe_delta = 0;
             ep->inbox.clear();
+            Log(ep->label + " detached; the guest stopped driving its serial port");
+            LogBusesLocked("after detach");
         }
     }
     m_cv.notify_all();

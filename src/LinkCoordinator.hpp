@@ -116,6 +116,13 @@ private:
     {
         Wrapper* owner = nullptr;
         unsigned port = 0;
+
+        /// A short stable name for the log, "m1:0" for the first machine's port
+        /// zero. The bus knows a machine only as a pointer, and a pointer in a
+        /// log line is unreadable and different every run; the room's own
+        /// [LinkCable] lines carry the scene names, and these two are read
+        /// together.
+        std::string label;
         std::string protocol_id;
         uint64_t clock_rate = 0;
         bool attached = false;
@@ -176,6 +183,19 @@ private:
 
     /// Reset one endpoint's bus-side state. Shared so every way off a bus agrees.
     static void Detached(Endpoint& ep);
+
+    /// Say what the buses look like now. Caller holds m_mutex.
+    ///
+    /// Logged after every change to the wires because the symptom it explains is
+    /// silent: a machine only takes part in a link if its CORE called attach,
+    /// which happens at load behind a core option, so a console switched on
+    /// before the option was turned on is cabled in every visible respect while
+    /// never joining the bus at all. The room cannot see that and reports the
+    /// cable as seated. Here it reads as a member marked "off".
+    void LogBusesLocked(const char* why) const;
+
+    /// How many endpoints exist, used to number them for the log.
+    unsigned m_next_label = 0;
 
     /// Ceiling for `ep` in its own ticks, or RETRO_LINK_UNBOUNDED when nothing
     /// bounds it. Caller holds m_mutex.
