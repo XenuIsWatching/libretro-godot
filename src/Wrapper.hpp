@@ -275,9 +275,23 @@ public:
     /// op 1 = replace at `index` with `path` then close the tray.
     void ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const godot::String& path);
 
+    /// Netplay: apply a link-cable change strictly before running `frame`, so
+    /// every peer joins or drops the same wire on the same emulated frame.
+    /// op 1 connects `group` as one bus, head first; op 0 drops group[0].
+    ///
+    /// The Wrapper pointers are captured here, on the main thread, and held
+    /// until the frame lands. That is the same lifetime LinkCoordinator already
+    /// gives them for the life of a connection, so it is no weaker than an
+    /// immediate ConnectGroup - but a machine freed inside the LINK_LEAD window
+    /// would still be a dangling entry, which is why the frontend tears the
+    /// schedule down when a session stops.
+    void ScheduleLinkOp(int64_t frame, int32_t op,
+                        const std::vector<std::pair<Wrapper*, unsigned>>& group);
+
     // Emulation-thread internals (disk control).
     void EmitDiskInfo();
     void ApplyScheduledDiscOps(int64_t frame);
+    void ApplyScheduledLinkOps(int64_t frame);
 
     struct DiscOp
     {
@@ -484,6 +498,15 @@ public:
     // Netplay-scheduled disc ops (eject / replace), applied on the emulation
     // thread right before running their frame. Guarded by m_np_mutex.
     std::map<int64_t, DiscOp> m_disc_schedule;
+
+    struct LinkOp
+    {
+        int32_t op = 0;
+        std::vector<std::pair<Wrapper*, unsigned>> group;
+    };
+    /// Netplay-scheduled link changes, applied on the emulation thread right
+    /// before their frame. Guarded by m_np_mutex, like the disc schedule.
+    std::map<int64_t, LinkOp> m_link_schedule;
 
     // Rollback state. Everything below m_np_mutex-guarded unless noted.
     std::atomic<bool> m_np_rollback = false;

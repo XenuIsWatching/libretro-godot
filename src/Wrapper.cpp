@@ -901,6 +901,56 @@ void Wrapper::ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const go
     m_disc_schedule[frame] = DiscOp{ op, index, std::string(path.utf8().get_data()) };
 }
 
+void Wrapper::ScheduleLinkOp(int64_t frame, int32_t op,
+                             const std::vector<std::pair<Wrapper*, unsigned>>& group)
+{
+    if (!m_core || !m_running || group.empty())
+        return;
+    Log("Link op " + std::to_string(op) + " scheduled for frame " + std::to_string(frame)
+        + " over " + std::to_string(group.size()) + " machine(s)");
+    std::lock_guard<std::mutex> lock(m_np_mutex);
+    m_link_schedule[frame] = LinkOp{ op, group };
+}
+
+/// Emulation thread: apply any netplay-scheduled link change whose frame has
+/// arrived, strictly before running `frame`.
+///
+/// LinkCoordinator says this is the caller's job and it is right: it cannot
+/// enforce that Connect and Disconnect land on the same emulated frame on every
+/// peer, and a cable applied whenever a hand happened to move is a different
+/// frame on each of them. It takes its own lock, so calling it from here is
+/// safe even though the room schedules from the main thread.
+void Wrapper::ApplyScheduledLinkOps(int64_t frame)
+{
+    LinkOp op;
+    bool pending = false;
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        auto it = m_link_schedule.begin();
+        while (it != m_link_schedule.end() && it->first <= frame)
+        {
+            op = it->second;
+            pending = true;
+            it = m_link_schedule.erase(it);
+            break;   // at most one per frame boundary, like the disc schedule
+        }
+    }
+    if (!pending || op.group.empty())
+        return;
+    if (op.op == 0)
+    {
+        LinkCoordinator::Get().Disconnect(op.group[0].first, op.group[0].second);
+        Log("Netplay link PULL applied @frame " + std::to_string(frame));
+    }
+    else
+    {
+        const bool ok = LinkCoordinator::Get().ConnectGroup(op.group);
+        LogOK("Netplay link JOIN applied @frame " + std::to_string(frame)
+            + " over " + std::to_string(op.group.size()) + " machine(s), ok="
+            + std::string(ok ? "true" : "false"));
+    }
+}
+
 /// Emulation thread: read the disk-control state and emit disk_control_ready.
 void Wrapper::EmitDiskInfo()
 {
@@ -2514,9 +2564,11 @@ void Wrapper::EmulationThreadLoop()
             m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(frame - 30));
         }
 
-        // Netplay-scheduled disc ops land strictly before their frame runs,
-        // so every peer's core swaps discs on the identical frame.
+        // Netplay-scheduled disc ops and link changes land strictly before
+        // their frame runs, so every peer's core swaps discs and joins cables
+        // on the identical frame.
         ApplyScheduledDiscOps(m_frame_counter.load(std::memory_order_relaxed));
+        ApplyScheduledLinkOps(m_frame_counter.load(std::memory_order_relaxed));
 
         // Apply the agreed inputs: in netplay mode the emulation thread is
         // the sole InputHandler writer for the masked ports. Device-aware

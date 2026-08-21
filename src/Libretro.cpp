@@ -512,6 +512,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetDiskEjectState", "ejected"), &Libretro::SetDiskEjectState);
     ClassDB::bind_method(D_METHOD("ReplaceDiskImage", "index", "path"), &Libretro::ReplaceDiskImage);
     ClassDB::bind_method(D_METHOD("ScheduleDiscOp", "frame", "op", "index", "path"), &Libretro::ScheduleDiscOp);
+    ClassDB::bind_method(D_METHOD("ScheduleLinkOp", "frame", "op", "others", "ports"), &Libretro::ScheduleLinkOp);
     ClassDB::bind_method(D_METHOD("RaClaimSession", "console_id"), &Libretro::RaClaimSession);
     ClassDB::bind_method(D_METHOD("RaHoldsSession"), &Libretro::RaHoldsSession);
 
@@ -616,6 +617,28 @@ bool Libretro::LinkConnectGroup(const godot::Array& others, const godot::PackedI
     }
 
     return LinkCoordinator::Get().ConnectGroup(group);
+}
+
+void Libretro::ScheduleLinkOp(int64_t frame, int64_t op, const godot::Array& others,
+                              const godot::PackedInt32Array& ports)
+{
+    if (!m_wrapper)
+        return;
+    if (ports.size() != others.size() + 1)
+    {
+        LogError("ScheduleLinkOp: expected one port per machine.");
+        return;
+    }
+    std::vector<std::pair<Wrapper*, unsigned>> group;
+    group.emplace_back(m_wrapper.get(), static_cast<unsigned>(ports[0]));
+    for (int i = 0; i < others.size(); ++i)
+    {
+        Libretro* other = godot::Object::cast_to<Libretro>(others[i]);
+        if (!other || other == this || !other->m_wrapper)
+            continue;
+        group.emplace_back(other->m_wrapper.get(), static_cast<unsigned>(ports[i + 1]));
+    }
+    m_wrapper->ScheduleLinkOp(frame, static_cast<int32_t>(op), group);
 }
 
 uint64_t Libretro::LinkTraffic(uint32_t port)

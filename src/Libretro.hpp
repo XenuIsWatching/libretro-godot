@@ -302,6 +302,14 @@ public:
     void SetDiskEjectState(bool ejected);
     /// Hand the core a new disc file at image `index` (tray must be open).
     void ReplaceDiskImage(int64_t index, const godot::String& path);
+    /// Netplay: apply a link-cable change right before running `frame` on every
+    /// peer, so a plug seated mid-game joins the bus on one agreed frame rather
+    /// than whenever each peer's hands happened to move. Same shape as
+    /// LinkConnectGroup - one port per machine, this one first - with op 1 to
+    /// join and op 0 to drop this machine's port.
+    void ScheduleLinkOp(int64_t frame, int64_t op, const godot::Array& others,
+                        const godot::PackedInt32Array& ports);
+
     /// Netplay: apply a disc op right before running confirmed `frame` on every peer.
     /// op 0 = eject; op 1 = replace at `index` with `path` + close tray.
     void ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const godot::String& path);
