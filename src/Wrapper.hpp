@@ -294,8 +294,22 @@ public:
     /// Who the running core says it is: library_name, library_version, the
     /// libretro API version it was built against, and the size of one savestate.
     /// EMPTY until content has finished loading, and empty again once it stops,
-    /// which is what makes it usable as a readiness test as well as an identity.
-    /// Published from the emulation thread the moment the core is up.
+    /// which is what makes it usable as a readiness test as well as an
+    /// identity. Published from the emulation thread.
+    ///
+    /// `serialize_size` is 0 until the core has produced its first frame, and
+    /// the other three arrive at load. The split is not tidiness: the size is
+    /// not a property a core can always answer for before it has run, because
+    /// Dolphin measures one by marshalling onto its CPU thread and walking
+    /// every subsystem, and asking early segfaults it on a machine that does
+    /// not exist yet. But the identity cannot WAIT for a frame either, because
+    /// netplay's gate does not run frame 0 until every peer has reported ready,
+    /// and readiness is this dictionary being non-empty. Requiring a frame
+    /// deadlocks every cold start; asking at load kills Dolphin. So the two
+    /// halves are published at the two different moments each one is safe at.
+    ///
+    /// A reader comparing sizes across peers must therefore treat 0 as "not
+    /// measured yet" rather than as a difference.
     godot::Dictionary GetCoreIdentity() const;
 
     /// What the core currently declares its machine runs at. Updated when a
@@ -452,7 +466,10 @@ public:
     uint32_t m_core_api_version = 0;
     int64_t m_core_serialize_size = 0;
     bool m_core_identity_ready = false;
+    /// Emulation thread only, so a plain bool: the measurement is one-shot.
+    bool m_core_serialize_size_published = false;
     void PublishCoreIdentity();
+    void PublishCoreSerializeSize();
     void ClearCoreIdentity();
 
     std::atomic<double> m_declared_fps{0.0};

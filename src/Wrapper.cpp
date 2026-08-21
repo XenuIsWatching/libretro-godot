@@ -1239,15 +1239,21 @@ void Wrapper::PublishCoreIdentity()
 {
     if (!m_core)
         return;
-    int64_t serialize_size = 0;
-    if (m_core->retro_serialize_size)
-        serialize_size = static_cast<int64_t>(m_core->retro_serialize_size());
     std::lock_guard<std::mutex> lock(m_core_identity_mutex);
     m_core_library_name = m_core->GetLibraryName();
     m_core_library_version = m_core->GetLibraryVersion();
     m_core_api_version = m_core->GetApiVersion();
-    m_core_serialize_size = serialize_size;
     m_core_identity_ready = true;
+}
+
+void Wrapper::PublishCoreSerializeSize()
+{
+    if (m_core_serialize_size_published || !m_core || !m_core->retro_serialize_size)
+        return;
+    m_core_serialize_size_published = true;
+    const int64_t serialize_size = static_cast<int64_t>(m_core->retro_serialize_size());
+    std::lock_guard<std::mutex> lock(m_core_identity_mutex);
+    m_core_serialize_size = serialize_size;
 }
 
 void Wrapper::ClearCoreIdentity()
@@ -1258,6 +1264,7 @@ void Wrapper::ClearCoreIdentity()
     m_core_api_version = 0;
     m_core_serialize_size = 0;
     m_core_identity_ready = false;
+    m_core_serialize_size_published = false;
 }
 
 godot::Dictionary Wrapper::GetCoreIdentity() const
@@ -2293,9 +2300,12 @@ void Wrapper::EmulationThreadLoop()
     m_declared_sample_rate.store(m_system_av_info.timing.sample_rate, std::memory_order_relaxed);
     m_dropped_frames.store(0, std::memory_order_relaxed);
 
-    // The core is up and the game is loaded, which is the first moment
-    // retro_serialize_size can be trusted and the first moment a netplay peer
-    // may honestly answer "ready".
+    // Name, version and API only. All three were read at load from
+    // retro_get_system_info and cost no call into the core here, so this is
+    // safe for every core AND available before a single frame has run - which
+    // netplay requires, because its gate will not run frame 0 until every peer
+    // has reported ready. The savestate size is the dangerous one and follows
+    // the first frame instead.
     PublishCoreIdentity();
 
     auto last_time = std::chrono::steady_clock::now();
@@ -2384,6 +2394,14 @@ void Wrapper::EmulationThreadLoop()
                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                     std::chrono::duration<double, std::milli>(frame_duration_ms));
         }
+
+        // The savestate size, once the core has actually produced a frame.
+        // Here rather than beside a retro_run because the rollback path
+        // continues past both of those, and it would never be measured at all
+        // in the one mode that takes a state every single frame.
+        if (!m_core_serialize_size_published
+            && m_frame_counter.load(std::memory_order_relaxed) > 0)
+            PublishCoreSerializeSize();
 
         // Battery save: dirty-check flush roughly every 10 seconds of frames.
         //
