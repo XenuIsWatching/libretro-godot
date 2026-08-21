@@ -431,6 +431,8 @@ void Wrapper::StartContent(const std::string& root_directory, const std::string&
         }
     }
 
+    ClearCoreIdentity();
+
     m_stop_requested = false;
     m_thread_exited = false;
     // Before the thread exists, so a request made on the very next line of the
@@ -1233,6 +1235,44 @@ uint32_t Wrapper::MappedRamCrc(bool& ok) const
     return ok ? (crc ^ 0xFFFFFFFFu) : 0;
 }
 
+void Wrapper::PublishCoreIdentity()
+{
+    if (!m_core)
+        return;
+    int64_t serialize_size = 0;
+    if (m_core->retro_serialize_size)
+        serialize_size = static_cast<int64_t>(m_core->retro_serialize_size());
+    std::lock_guard<std::mutex> lock(m_core_identity_mutex);
+    m_core_library_name = m_core->GetLibraryName();
+    m_core_library_version = m_core->GetLibraryVersion();
+    m_core_api_version = m_core->GetApiVersion();
+    m_core_serialize_size = serialize_size;
+    m_core_identity_ready = true;
+}
+
+void Wrapper::ClearCoreIdentity()
+{
+    std::lock_guard<std::mutex> lock(m_core_identity_mutex);
+    m_core_library_name.clear();
+    m_core_library_version.clear();
+    m_core_api_version = 0;
+    m_core_serialize_size = 0;
+    m_core_identity_ready = false;
+}
+
+godot::Dictionary Wrapper::GetCoreIdentity() const
+{
+    godot::Dictionary out;
+    std::lock_guard<std::mutex> lock(m_core_identity_mutex);
+    if (!m_core_identity_ready)
+        return out;
+    out["library_name"] = godot::String(m_core_library_name.c_str());
+    out["library_version"] = godot::String(m_core_library_version.c_str());
+    out["api_version"] = static_cast<int64_t>(m_core_api_version);
+    out["serialize_size"] = m_core_serialize_size;
+    return out;
+}
+
 void Wrapper::EmitNetplayCrc(int64_t frame)
 {
     bool ok = false;
@@ -1975,6 +2015,8 @@ void Wrapper::FinishTeardown()
     m_audio_handler->DeInit();
     SetCurrentThreadWrapper(nullptr);
 
+    ClearCoreIdentity();
+
     m_core->Unload();
 
     m_core = nullptr;
@@ -2250,6 +2292,11 @@ void Wrapper::EmulationThreadLoop()
     m_declared_fps.store(m_system_av_info.timing.fps, std::memory_order_relaxed);
     m_declared_sample_rate.store(m_system_av_info.timing.sample_rate, std::memory_order_relaxed);
     m_dropped_frames.store(0, std::memory_order_relaxed);
+
+    // The core is up and the game is loaded, which is the first moment
+    // retro_serialize_size can be trusted and the first moment a netplay peer
+    // may honestly answer "ready".
+    PublishCoreIdentity();
 
     auto last_time = std::chrono::steady_clock::now();
     double accumulator = 0.0;

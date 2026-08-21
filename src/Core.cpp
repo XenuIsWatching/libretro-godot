@@ -171,7 +171,16 @@ bool Core::Load(CallbackTrampolines* trampolines)
         retro_system_info system_info = {};
         retro_get_system_info(&system_info);
         m_need_fullpath = system_info.need_fullpath;
+        // Cached here, before retro_init, because these strings are what a
+        // netplay peer compares against: two players on different platforms
+        // never hold the same core file, and library_version is the only
+        // identity that survives the difference.
+        m_library_name = system_info.library_name ? system_info.library_name : "";
+        m_library_version = system_info.library_version ? system_info.library_version : "";
+        m_api_version = retro_api_version();
         Log("Core need_fullpath: " + std::string(m_need_fullpath ? "true" : "false"));
+        Log("Core identity: " + m_library_name + " " + m_library_version
+            + " (libretro API " + std::to_string(m_api_version) + ")");
     }
 
     retro_set_environment(trampolines->GetEnvironmentCallback());
@@ -216,6 +225,21 @@ bool Core::GetSupportsNoGame() const
 bool Core::GetNeedFullpath() const
 {
     return m_need_fullpath;
+}
+
+const std::string& Core::GetLibraryName() const
+{
+    return m_library_name;
+}
+
+const std::string& Core::GetLibraryVersion() const
+{
+    return m_library_version;
+}
+
+uint32_t Core::GetApiVersion() const
+{
+    return m_api_version;
 }
 
 bool Core::LoadHandle()

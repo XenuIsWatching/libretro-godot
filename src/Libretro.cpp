@@ -285,6 +285,11 @@ int64_t Libretro::GetNetplayRollbackCount() const
     return m_wrapper->GetNetplayRollbackCount();
 }
 
+Dictionary Libretro::GetCoreIdentity() const
+{
+    return m_wrapper ? m_wrapper->GetCoreIdentity() : Dictionary();
+}
+
 double Libretro::GetDeclaredFps() const
 {
     return m_wrapper->GetDeclaredFps();
@@ -491,6 +496,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("RequestSaveState"), &Libretro::RequestSaveState);
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
+    ClassDB::bind_method(D_METHOD("GetCoreIdentity"), &Libretro::GetCoreIdentity);
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);
     ClassDB::bind_method(D_METHOD("GetDeclaredFps"), &Libretro::GetDeclaredFps);
     ClassDB::bind_method(D_METHOD("GetDeclaredSampleRate"), &Libretro::GetDeclaredSampleRate);

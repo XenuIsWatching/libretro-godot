@@ -25,6 +25,15 @@ public:
     bool GetSupportsNoGame() const;
     bool GetNeedFullpath() const;
 
+    /// What the core calls itself, read from retro_get_system_info at load.
+    /// This, not the file name and not a hash of the binary, is the only build
+    /// identity two peers on different platforms can compare: the same core
+    /// built for win-x64 and android-arm64 shares a library_version and shares
+    /// nothing else.
+    const std::string& GetLibraryName() const;
+    const std::string& GetLibraryVersion() const;
+    uint32_t GetApiVersion() const;
+
     decltype(&::retro_set_environment) retro_set_environment                       = nullptr;
     decltype(&::retro_set_video_refresh) retro_set_video_refresh                   = nullptr;
     decltype(&::retro_set_audio_sample) retro_set_audio_sample                     = nullptr;
@@ -63,6 +72,9 @@ private:
     void* m_handle = nullptr;
     bool m_supports_no_game = false;
     bool m_need_fullpath = false;
+    std::string m_library_name;
+    std::string m_library_version;
+    uint32_t m_api_version = 0;
 
     bool LoadHandle();
 

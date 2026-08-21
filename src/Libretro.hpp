@@ -309,6 +309,13 @@ public:
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;
 
+    /// Who the running core says it is: library_name, library_version,
+    /// api_version, serialize_size. EMPTY until the core has finished loading
+    /// content, and empty again after it stops. Netplay compares this across
+    /// peers, because it is the one build identity that means the same thing on
+    /// Windows, Linux, macOS and a Quest. The core FILE never matches there.
+    godot::Dictionary GetCoreIdentity() const;
+
     /// Rewind+replay corrections performed so far (rollback diagnostics).
     int64_t GetNetplayRollbackCount() const;
 

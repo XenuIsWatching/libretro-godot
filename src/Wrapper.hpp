@@ -3,6 +3,7 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/classes/input_event.hpp>
@@ -290,6 +291,13 @@ public:
     /// How many rewind+replay corrections have happened (diagnostics/HUD).
     int64_t GetNetplayRollbackCount() const { return m_np_rollback_count.load(std::memory_order_relaxed); }
 
+    /// Who the running core says it is: library_name, library_version, the
+    /// libretro API version it was built against, and the size of one savestate.
+    /// EMPTY until content has finished loading, and empty again once it stops,
+    /// which is what makes it usable as a readiness test as well as an identity.
+    /// Published from the emulation thread the moment the core is up.
+    godot::Dictionary GetCoreIdentity() const;
+
     /// What the core currently declares its machine runs at. Updated when a
     /// running core successfully changes its AV info. 0 until content is running.
     double GetDeclaredFps() const { return m_declared_fps.load(std::memory_order_relaxed); }
@@ -434,6 +442,19 @@ public:
     // Diagnostics published to the main thread (see the getters above). Written on
     // the emulation thread, read from _process; relaxed is enough for all three
     // because nothing else is ordered against them.
+    // Core identity, published once per content run (see GetCoreIdentity). A
+    // plain mutex rather than atomics: the strings are read a handful of times
+    // per session, and a release flag cannot stop a reader mid-string when the
+    // emulation thread clears them at teardown.
+    mutable std::mutex m_core_identity_mutex;
+    std::string m_core_library_name;
+    std::string m_core_library_version;
+    uint32_t m_core_api_version = 0;
+    int64_t m_core_serialize_size = 0;
+    bool m_core_identity_ready = false;
+    void PublishCoreIdentity();
+    void ClearCoreIdentity();
+
     std::atomic<double> m_declared_fps{0.0};
     std::atomic<double> m_declared_sample_rate{0.0};
     std::atomic<uint64_t> m_timing_revision{0};
