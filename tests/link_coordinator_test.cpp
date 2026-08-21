@@ -578,6 +578,54 @@ static void TestJoiningDoesNotFreezeThePlayers()
     Check(others, "and the rest of the party gets its grant too");
 }
 
+// ── T12: a cable seated before boot still enforces its protocol ─────────────
+static void TestLateAttachProtocolMismatch()
+{
+    std::printf("T12 late attachment validates the seated bus protocol\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0xA001);
+    Wrapper* b = Fake(0xA002);
+
+    Check(c.Connect(a, 0, b, 0), "the cable can be seated before either core attaches");
+    Check(DoAttach(c, a, 0, "gb-sio-1", GBA_HZ) != nullptr,
+          "the first protocol claims the wire");
+    Check(DoAttach(c, b, 0, "gc-gba-1", GBA_HZ) == nullptr,
+          "a later incompatible attachment is refused");
+    unsigned n = 0;
+    Check(c.Peers(H(a, 0), &n) == 0 && n == 1,
+          "the rejected endpoint is not reported as a live peer");
+    Check(DoAttach(c, b, 0, "gb-sio-1", GBA_HZ) != nullptr,
+          "the matching protocol can still attach afterwards");
+    Check(c.Peers(H(a, 0), &n) == 0 && n == 2,
+          "both compatible endpoints are then live");
+
+    c.DropOwner(a);
+    c.DropOwner(b);
+}
+
+// ── T13: refusing a bad regroup leaves the working cable alone ──────────────
+static void TestProtocolMismatchIsNonDestructive()
+{
+    std::printf("T13 an incompatible regroup is non-destructive\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0xB001);
+    Wrapper* b = Fake(0xB002);
+    Wrapper* alien = Fake(0xB003);
+    DoAttach(c, a, 0, "gb-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gb-sio-1", GBA_HZ);
+    DoAttach(c, alien, 0, "gc-gba-1", GBA_HZ);
+    Check(c.Connect(a, 0, b, 0), "a compatible pair starts connected");
+    Check(!c.ConnectGroup({{a, 0}, {b, 0}, {alien, 0}}),
+          "adding an incompatible endpoint is refused");
+    unsigned n = 0;
+    Check(c.Peers(H(a, 0), &n) == 0 && n == 2,
+          "the original pair remains connected after the refusal");
+
+    c.DropOwner(a);
+    c.DropOwner(b);
+    c.DropOwner(alien);
+}
+
 
 int main()
 {
@@ -596,6 +644,8 @@ int main()
     TestChain();
     TestSeating();
     TestJoiningDoesNotFreezeThePlayers();
+    TestLateAttachProtocolMismatch();
+    TestProtocolMismatchIsNonDestructive();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

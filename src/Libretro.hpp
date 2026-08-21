@@ -293,6 +293,8 @@ public:
     /// Front-panel reset (retro_reset), applied between frames. The core stays
     /// loaded, so the screen, audio voices and port bindings all survive.
     void RequestReset();
+    /// Netplay reset applied before one agreed emulated frame on every peer.
+    void ScheduleReset(int64_t frame);
     // ── Disk control (multi-disc games) ──────────────────────────────────────
     /// Query the core's disk-control state → disk_control_ready(has_control,
     /// count, current_index, ejected). Emits has_control=false when the core

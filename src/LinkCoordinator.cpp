@@ -458,17 +458,14 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
         }
     }
 
-    // Whatever these were on before, they are on this now. Stated as a set
-    // rather than accumulated, so a cable pulled out of the middle of a chain
-    // leaves the two halves apart instead of merged.
-    for (Endpoint* ep : group)
-    {
-        CutLinksAt(*ep);
-        ep->seat = -1;
-    }
-
     if (group.size() < 2)
     {
+        // Whatever this endpoint was on before, it is on no bus now.
+        for (Endpoint* ep : group)
+        {
+            CutLinksAt(*ep);
+            ep->seat = -1;
+        }
         // A lead going nowhere: one machine, or the same one named twice. The
         // endpoints have already been cut loose above, which is the right state,
         // but the caller has to hear that nothing was joined or it will record a
@@ -478,19 +475,36 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
         return false;
     }
 
+    // Validate before disturbing any existing buses. A failed attempt to plug
+    // an incompatible lead must not silently unplug working links.
+    std::string protocol;
+    for (Endpoint* ep : group)
     {
-        const std::string& protocol = group.front()->protocol_id;
-        for (Endpoint* ep : group)
+        if (!ep->attached)
         {
-            if (ep->attached && group.front()->attached && ep->protocol_id != protocol)
-            {
-                LogError("ConnectGroup: protocol mismatch, '" + ep->protocol_id + "' vs '" + protocol + "'.");
-                RebuildBuses();
-                m_cv.notify_all();
-                return false;
-            }
+            continue;
         }
+        if (protocol.empty())
+        {
+            protocol = ep->protocol_id;
+        }
+        else if (ep->protocol_id != protocol)
+        {
+            LogError("ConnectGroup: protocol mismatch, '" + ep->protocol_id + "' vs '" + protocol + "'.");
+            return false;
+        }
+    }
 
+    // Whatever these were on before, they are on this now. Stated as a set
+    // rather than accumulated, so a cable pulled out of the middle of a chain
+    // leaves the two halves apart instead of merged.
+    for (Endpoint* ep : group)
+    {
+        CutLinksAt(*ep);
+        ep->seat = -1;
+    }
+
+    {
         // A star from the first, which is enough to make one component. The
         // shape of the tree does not matter; only who ends up reachable.
         for (size_t i = 1; i < group.size(); ++i)
@@ -594,7 +608,23 @@ retro_link_port_t *LinkCoordinator::Attach(Wrapper* owner, unsigned port,
     std::lock_guard<std::mutex> lock(m_mutex);
 
     Endpoint& ep = FindOrCreate(owner, port);
-    ep.protocol_id = protocol_id ? protocol_id : "";
+    const std::string incoming_protocol = protocol_id ? protocol_id : "";
+    // A cable may be seated before either guest attaches.  ConnectGroup cannot
+    // validate that topology yet, so the later attachment must check every
+    // already-live member before accepting the interface.
+    if (ep.bus)
+    {
+        for (Endpoint* peer : ep.bus->members)
+        {
+            if (peer != &ep && peer->attached && peer->protocol_id != incoming_protocol)
+            {
+                LogError("Attach: protocol mismatch, '" + incoming_protocol + "' vs '"
+                         + peer->protocol_id + "'.");
+                return nullptr;
+            }
+        }
+    }
+    ep.protocol_id = incoming_protocol;
     ep.clock_rate = clock_rate;
     ep.attached = true;
 

@@ -744,6 +744,10 @@ void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_fra
         std::lock_guard<std::mutex> lock(m_np_mutex);
         m_np_inputs.clear();
         m_disc_schedule.clear();
+        m_reset_schedule.clear();
+        // Link operations retain Wrapper pointers until they land.  They must
+        // not survive a stopped session or reach a later core invocation.
+        m_link_schedule.clear();
     }
     m_np_port_mask.store(port_mask == 0 ? 0x1u : port_mask, std::memory_order_relaxed);
     if (start_frame >= 0)
@@ -898,7 +902,7 @@ void Wrapper::ScheduleDiscOp(int64_t frame, int32_t op, uint32_t index, const go
     Log("Disc op " + std::to_string(op) + " scheduled for frame " + std::to_string(frame)
         + " (index " + std::to_string(index) + ")");
     std::lock_guard<std::mutex> lock(m_np_mutex);
-    m_disc_schedule[frame] = DiscOp{ op, index, std::string(path.utf8().get_data()) };
+    m_disc_schedule.emplace(frame, DiscOp{ op, index, std::string(path.utf8().get_data()) });
 }
 
 void Wrapper::ScheduleLinkOp(int64_t frame, int32_t op,
@@ -909,7 +913,7 @@ void Wrapper::ScheduleLinkOp(int64_t frame, int32_t op,
     Log("Link op " + std::to_string(op) + " scheduled for frame " + std::to_string(frame)
         + " over " + std::to_string(group.size()) + " machine(s)");
     std::lock_guard<std::mutex> lock(m_np_mutex);
-    m_link_schedule[frame] = LinkOp{ op, group };
+    m_link_schedule.emplace(frame, LinkOp{ op, group });
 }
 
 /// Emulation thread: apply any netplay-scheduled link change whose frame has
@@ -922,32 +926,32 @@ void Wrapper::ScheduleLinkOp(int64_t frame, int32_t op,
 /// safe even though the room schedules from the main thread.
 void Wrapper::ApplyScheduledLinkOps(int64_t frame)
 {
-    LinkOp op;
-    bool pending = false;
+    std::vector<LinkOp> pending;
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
         auto it = m_link_schedule.begin();
         while (it != m_link_schedule.end() && it->first <= frame)
         {
-            op = it->second;
-            pending = true;
+            pending.push_back(std::move(it->second));
             it = m_link_schedule.erase(it);
-            break;   // at most one per frame boundary, like the disc schedule
         }
     }
-    if (!pending || op.group.empty())
-        return;
-    if (op.op == 0)
+    for (const LinkOp& op : pending)
     {
-        LinkCoordinator::Get().Disconnect(op.group[0].first, op.group[0].second);
-        Log("Netplay link PULL applied @frame " + std::to_string(frame));
-    }
-    else
-    {
-        const bool ok = LinkCoordinator::Get().ConnectGroup(op.group);
-        LogOK("Netplay link JOIN applied @frame " + std::to_string(frame)
-            + " over " + std::to_string(op.group.size()) + " machine(s), ok="
-            + std::string(ok ? "true" : "false"));
+        if (op.group.empty())
+            continue;
+        if (op.op == 0)
+        {
+            LinkCoordinator::Get().Disconnect(op.group[0].first, op.group[0].second);
+            Log("Netplay link PULL applied @frame " + std::to_string(frame));
+        }
+        else
+        {
+            const bool ok = LinkCoordinator::Get().ConnectGroup(op.group);
+            LogOK("Netplay link JOIN applied @frame " + std::to_string(frame)
+                + " over " + std::to_string(op.group.size()) + " machine(s), ok="
+                + std::string(ok ? "true" : "false"));
+        }
     }
 }
 
@@ -985,37 +989,57 @@ void Wrapper::EmitDiskInfo()
 /// the identical frame. Rollback waits for this boundary to be confirmed first.
 void Wrapper::ApplyScheduledDiscOps(int64_t frame)
 {
-    DiscOp op;
-    bool pending = false;
+    std::vector<DiscOp> pending;
     {
         std::lock_guard<std::mutex> lock(m_np_mutex);
         auto it = m_disc_schedule.begin();
         while (it != m_disc_schedule.end() && it->first <= frame)
         {
-            op = it->second;
-            pending = true;
+            pending.push_back(it->second);
             it = m_disc_schedule.erase(it);
-            // Apply at most one op per frame boundary; ops land on distinct
-            // frames in practice (eject and replace are separate schedules).
-            break;
         }
     }
-    if (!pending || !m_environment_handler)
+    if (pending.empty() || !m_environment_handler)
         return;
-    if (op.op == 0)
+    for (const DiscOp& op : pending)
     {
-        Log("Netplay disc EJECT applied @frame " + std::to_string(frame));
-        m_environment_handler->SetDiskEjected(true);
-    }
-    else
-    {
-        LogOK("Netplay disc SWAP applied @frame " + std::to_string(frame)
-            + " -> " + op.path);
-        m_environment_handler->SetDiskEjected(true);   // idempotent if already open
-        m_environment_handler->ReplaceDiskImage(op.index, op.path);
-        m_environment_handler->SetDiskEjected(false);
+        if (op.op == 0)
+        {
+            Log("Netplay disc EJECT applied @frame " + std::to_string(frame));
+            m_environment_handler->SetDiskEjected(true);
+        }
+        else
+        {
+            LogOK("Netplay disc SWAP applied @frame " + std::to_string(frame)
+                + " -> " + op.path);
+            m_environment_handler->SetDiskEjected(true);   // idempotent if already open
+            m_environment_handler->ReplaceDiskImage(op.index, op.path);
+            m_environment_handler->SetDiskEjected(false);
+        }
     }
     EmitDiskInfo();
+}
+
+/// Emulation thread: apply every front-panel reset due at this confirmed frame.
+/// Rollback never crosses the boundary: the scheduler stalls until confirmation,
+/// then the pre-reset history is discarded before the new anchor is serialized.
+void Wrapper::ApplyScheduledResets(int64_t frame)
+{
+    size_t count = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        auto end = m_reset_schedule.upper_bound(frame);
+        count = static_cast<size_t>(std::distance(m_reset_schedule.begin(), end));
+        m_reset_schedule.erase(m_reset_schedule.begin(), end);
+    }
+    if (count == 0 || !m_core || !m_core->retro_reset)
+        return;
+    for (size_t i = 0; i < count; ++i)
+        m_core->retro_reset();
+    m_np_states.clear();
+    m_np_used.clear();
+    m_np_crc_pending.clear();
+    LogOK("Netplay reset applied @frame " + std::to_string(frame));
 }
 
 // ── Battery saves (SRAM) ─────────────────────────────────────────────────────
@@ -1052,6 +1076,16 @@ void Wrapper::RequestReset()
 {
     if (m_core && m_running)
         m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandReset>());
+}
+
+void Wrapper::ScheduleReset(int64_t frame)
+{
+    if (!m_core || !m_running)
+        return;
+    Log("Reset scheduled for frame " + std::to_string(frame));
+    std::lock_guard<std::mutex> lock(m_np_mutex);
+    m_reset_schedule.insert(frame);
+    m_np_cv.notify_all();
 }
 
 /// Emu thread: fill SAVE_RAM from the pending bytes (netplay) or the backing
@@ -1607,11 +1641,13 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
                 ++m_np_watermark;
             const bool speculation_ok = frame <= m_np_watermark + m_np_max_ahead;
             const bool disc_due = !m_disc_schedule.empty() && m_disc_schedule.begin()->first <= frame;
+            const bool reset_due = !m_reset_schedule.empty() && *m_reset_schedule.begin() <= frame;
             // Disc state lives partly outside retro_serialize. Do not cross a
-            // scheduled swap speculatively: wait until this frame is confirmed,
-            // apply it once, and it can never sit behind a later rollback anchor.
-            const bool disc_ok = !disc_due || frame <= m_np_watermark;
-            return m_stop_requested.load() || (speculation_ok && disc_ok);
+            // scheduled swap or reset speculatively: wait until this frame is
+            // confirmed, apply it once, and it can never sit behind a later
+            // rollback anchor.
+            const bool boundary_ok = (!disc_due && !reset_due) || frame <= m_np_watermark;
+            return m_stop_requested.load() || (speculation_ok && boundary_ok);
         };
         if (!can_run())
         {
@@ -1631,6 +1667,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
     accumulator -= frame_duration_ms;
 
     ApplyScheduledDiscOps(frame);
+    ApplyScheduledResets(frame);
     if (!SaveRollbackState(frame))
     {
         FailNetplayRollback("core failed to serialize frame " + std::to_string(frame));
@@ -2564,10 +2601,11 @@ void Wrapper::EmulationThreadLoop()
             m_np_inputs.erase(m_np_inputs.begin(), m_np_inputs.lower_bound(frame - 30));
         }
 
-        // Netplay-scheduled disc ops and link changes land strictly before
-        // their frame runs, so every peer's core swaps discs and joins cables
-        // on the identical frame.
+        // Netplay-scheduled disc ops, resets and link changes land strictly
+        // before their frame runs, so every peer changes deterministic state on
+        // the identical boundary.
         ApplyScheduledDiscOps(m_frame_counter.load(std::memory_order_relaxed));
+        ApplyScheduledResets(m_frame_counter.load(std::memory_order_relaxed));
         ApplyScheduledLinkOps(m_frame_counter.load(std::memory_order_relaxed));
 
         // Apply the agreed inputs: in netplay mode the emulation thread is

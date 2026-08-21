@@ -17,8 +17,10 @@
 #include <vector>
 #include <queue>
 #include <map>
+#include <set>
 #include <array>
 #include <deque>
+#include <iterator>
 #include <unordered_map>
 
 #include <libretro.h>
@@ -231,6 +233,10 @@ public:
     /// caller however the core manages its own threads.
     void RequestReset();
 
+    /// Netplay: apply retro_reset strictly before running confirmed `frame` on
+    /// every peer. Unlike RequestReset this is part of the shared timeline.
+    void ScheduleReset(int64_t frame);
+
     /// Will a command enqueued right now ever be drained? True while the
     /// emulation thread is running AND while it is still starting up: the queue
     /// is drained at the top of every loop iteration, which by construction is
@@ -292,6 +298,7 @@ public:
     void EmitDiskInfo();
     void ApplyScheduledDiscOps(int64_t frame);
     void ApplyScheduledLinkOps(int64_t frame);
+    void ApplyScheduledResets(int64_t frame);
 
     struct DiscOp
     {
@@ -497,7 +504,14 @@ public:
     int64_t m_np_crc_interval = 60;
     // Netplay-scheduled disc ops (eject / replace), applied on the emulation
     // thread right before running their frame. Guarded by m_np_mutex.
-    std::map<int64_t, DiscOp> m_disc_schedule;
+    // A tray can be opened and closed before the same future boundary. Keep
+    // both operations, in scheduling order, instead of replacing the eject
+    // with the swap merely because their frame key matches.
+    std::multimap<int64_t, DiscOp> m_disc_schedule;
+
+    /// Netplay-scheduled front-panel resets. Multiple presses at one boundary
+    /// are retained, matching the disc/link schedules' no-loss rule.
+    std::multiset<int64_t> m_reset_schedule;
 
     struct LinkOp
     {
@@ -506,7 +520,9 @@ public:
     };
     /// Netplay-scheduled link changes, applied on the emulation thread right
     /// before their frame. Guarded by m_np_mutex, like the disc schedule.
-    std::map<int64_t, LinkOp> m_link_schedule;
+    // More than one cable may move on the same agreed frame.  A multimap keeps
+    // every operation instead of silently replacing the first one.
+    std::multimap<int64_t, LinkOp> m_link_schedule;
 
     // Rollback state. Everything below m_np_mutex-guarded unless noted.
     std::atomic<bool> m_np_rollback = false;
