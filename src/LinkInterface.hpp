@@ -64,19 +64,22 @@ extern "C" {
 
 /* An attached port, as the frontend knows it.
  *
- * Handed back by attach and passed to every other call. The core never looks
- * inside it; it exists so that the frontend can tell WHICH core is calling
- * without having to work it out from the calling thread.
+ * Handed back by attach and passed to every other call, the way a file handle
+ * is by the VFS interface's open. The core never looks inside it.
  *
- * That distinction matters more than it looks. libretro's function pointers
- * carry no userdata, so the usual trick is to recover the caller from a
- * thread-local set when the core's emulation thread starts -- which holds only
- * while a core does its work on that one thread. Plenty do not: Dolphin runs
- * its CPU on a thread of its own whenever dual-core is enabled, and that is a
- * user-facing setting, so a link built on the calling thread would work and
- * then silently stop working when someone turned dual-core on for speed.
- * Carrying the handle costs one argument and removes the question. */
-typedef struct retro_link_port *retro_link_handle_t;
+ * It names a PORT rather than a core, and that is what makes it necessary: a
+ * machine with more than one socket -- a GameCube has four -- must say which
+ * one it means on every call, so an argument of some kind was always going to
+ * be here. Naming the port with a token the frontend issued, rather than a
+ * bare number, lets the frontend validate it and tells it which core is
+ * calling for free.
+ *
+ * That second part is worth having. libretro's function pointers carry no
+ * userdata, so the usual way to recover the caller is a thread-local set when
+ * the core's emulation thread starts, which holds only while a core does its
+ * work on that one thread. Plenty do not: Dolphin runs its CPU on a thread of
+ * its own whenever dual-core is enabled, and that is a user-facing setting. */
+typedef struct retro_link_port retro_link_port_t;
 
 /* Join the bus on `port`.
  *
@@ -97,11 +100,11 @@ typedef struct retro_link_port *retro_link_handle_t;
  * The bus index a core needs for addressing comes from peers(), not from here,
  * because a cable can be plugged or pulled at any time and an index handed out
  * once would be stale by the next transfer. */
-typedef retro_link_handle_t (RETRO_CALLCONV *retro_link_attach_t)(unsigned port,
+typedef retro_link_port_t *(RETRO_CALLCONV *retro_link_attach_t)(unsigned port,
       const char *protocol_id, uint64_t clock_rate);
 
 /* Leave the bus. Peers observe this as a detach at the current tick. */
-typedef void (RETRO_CALLCONV *retro_link_detach_t)(retro_link_handle_t handle);
+typedef void (RETRO_CALLCONV *retro_link_detach_t)(retro_link_port_t *handle);
 
 /* Current membership of this port's bus.
  *
@@ -113,12 +116,12 @@ typedef void (RETRO_CALLCONV *retro_link_detach_t)(retro_link_handle_t handle);
  * host decides what a port is cabled to, and a cable can be plugged or pulled
  * while the machine is running, so a core's index and peer count can change
  * during a session. */
-typedef int (RETRO_CALLCONV *retro_link_peers_t)(retro_link_handle_t handle, unsigned *count);
+typedef int (RETRO_CALLCONV *retro_link_peers_t)(retro_link_port_t *handle, unsigned *count);
 
 /* Queue `buf` for delivery to peer `to` (or RETRO_LINK_BROADCAST), stamped at
  * `tick` on this core's timeline. The frontend copies the payload and does not
  * interpret it. Returns false if the port is not attached. */
-typedef bool (RETRO_CALLCONV *retro_link_send_t)(retro_link_handle_t handle, uint64_t tick,
+typedef bool (RETRO_CALLCONV *retro_link_send_t)(retro_link_port_t *handle, uint64_t tick,
       unsigned to, const void *buf, size_t len);
 
 /* Pop the next queued message, oldest first, with its tick translated into this
@@ -131,7 +134,7 @@ typedef bool (RETRO_CALLCONV *retro_link_send_t)(retro_link_handle_t handle, uin
  * arrive rather than held until the clock catches up. What stops one landing in
  * the past is the sender's commit horizon: it promised not to originate before
  * that tick, and the bus will not have let this core run beyond it. */
-typedef bool (RETRO_CALLCONV *retro_link_recv_t)(retro_link_handle_t handle, uint64_t *tick,
+typedef bool (RETRO_CALLCONV *retro_link_recv_t)(retro_link_port_t *handle, uint64_t *tick,
       unsigned *from, void *buf, size_t *len);
 
 /* Publish this core's position and its commit horizon, then ask how far it may
@@ -175,7 +178,7 @@ typedef bool (RETRO_CALLCONV *retro_link_recv_t)(retro_link_handle_t handle, uin
  *
  * Thread-safe. Cores generally run on their own emulation threads, and this
  * call is the rendezvous between them. */
-typedef uint64_t (RETRO_CALLCONV *retro_link_advance_t)(retro_link_handle_t handle,
+typedef uint64_t (RETRO_CALLCONV *retro_link_advance_t)(retro_link_port_t *handle,
       uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick);
 
 /* @see RETRO_ENVIRONMENT_GET_LINK_INTERFACE */

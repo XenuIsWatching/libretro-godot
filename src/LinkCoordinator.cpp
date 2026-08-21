@@ -115,7 +115,7 @@ namespace
  *
  * The handle a core was given at attach says which port it means, and the
  * coordinator checks it against the ports it still has, under its own lock. */
-retro_link_handle_t RETRO_CALLCONV LinkAttachCb(unsigned port, const char* protocol_id,
+retro_link_port_t *RETRO_CALLCONV LinkAttachCb(unsigned port, const char* protocol_id,
                                                 uint64_t clock_rate)
 {
     /* Attach is the ONE call that still has to know which core is asking, and
@@ -132,29 +132,29 @@ retro_link_handle_t RETRO_CALLCONV LinkAttachCb(unsigned port, const char* proto
     return LinkCoordinator::Get().Attach(owner, port, protocol_id, clock_rate);
 }
 
-void RETRO_CALLCONV LinkDetachCb(retro_link_handle_t handle)
+void RETRO_CALLCONV LinkDetachCb(retro_link_port_t *handle)
 {
     LinkCoordinator::Get().Detach(handle);
 }
 
-int RETRO_CALLCONV LinkPeersCb(retro_link_handle_t handle, unsigned* count)
+int RETRO_CALLCONV LinkPeersCb(retro_link_port_t *handle, unsigned* count)
 {
     return LinkCoordinator::Get().Peers(handle, count);
 }
 
-bool RETRO_CALLCONV LinkSendCb(retro_link_handle_t handle, uint64_t tick, unsigned to,
+bool RETRO_CALLCONV LinkSendCb(retro_link_port_t *handle, uint64_t tick, unsigned to,
                                const void* buf, size_t len)
 {
     return LinkCoordinator::Get().Send(handle, tick, to, buf, len);
 }
 
-bool RETRO_CALLCONV LinkRecvCb(retro_link_handle_t handle, uint64_t* tick, unsigned* from,
+bool RETRO_CALLCONV LinkRecvCb(retro_link_port_t *handle, uint64_t* tick, unsigned* from,
                                void* buf, size_t* len)
 {
     return LinkCoordinator::Get().Recv(handle, tick, from, buf, len);
 }
 
-uint64_t RETRO_CALLCONV LinkAdvanceCb(retro_link_handle_t handle, uint64_t local_tick,
+uint64_t RETRO_CALLCONV LinkAdvanceCb(retro_link_port_t *handle, uint64_t local_tick,
                                       uint64_t safe_tick, uint64_t request_tick)
 {
     return LinkCoordinator::Get().Advance(handle, local_tick, safe_tick, request_tick);
@@ -176,7 +176,7 @@ const retro_link_interface* LinkCoordinator::Interface()
 
 // ── Endpoint bookkeeping ────────────────────────────────────────────────────
 
-LinkCoordinator::Endpoint* LinkCoordinator::Resolve(retro_link_handle_t handle)
+LinkCoordinator::Endpoint* LinkCoordinator::Resolve(retro_link_port_t *handle)
 {
     const uint64_t id = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
     if (!id)
@@ -582,7 +582,7 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
 
 // ── Core side ───────────────────────────────────────────────────────────────
 
-retro_link_handle_t LinkCoordinator::Attach(Wrapper* owner, unsigned port,
+retro_link_port_t *LinkCoordinator::Attach(Wrapper* owner, unsigned port,
                                             const char* protocol_id, uint64_t clock_rate)
 {
     if (clock_rate == 0)
@@ -602,10 +602,10 @@ retro_link_handle_t LinkCoordinator::Attach(Wrapper* owner, unsigned port,
     LogBusesLocked("after attach");
 
     m_cv.notify_all();
-    return reinterpret_cast<retro_link_handle_t>(static_cast<uintptr_t>(ep.id));
+    return reinterpret_cast<retro_link_port_t *>(static_cast<uintptr_t>(ep.id));
 }
 
-void LinkCoordinator::Detach(retro_link_handle_t handle)
+void LinkCoordinator::Detach(retro_link_port_t *handle)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -627,7 +627,7 @@ void LinkCoordinator::Detach(retro_link_handle_t handle)
     m_cv.notify_all();
 }
 
-int LinkCoordinator::Peers(retro_link_handle_t handle, unsigned* count)
+int LinkCoordinator::Peers(retro_link_port_t *handle, unsigned* count)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -699,7 +699,7 @@ uint64_t LinkCoordinator::Delivered(Wrapper* owner, unsigned port)
     return ep ? ep->delivered : 0;
 }
 
-bool LinkCoordinator::Send(retro_link_handle_t handle, uint64_t tick, unsigned to, const void* buf,
+bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to, const void* buf,
                            size_t len)
 {
     if (len > MAX_PAYLOAD)
@@ -767,7 +767,7 @@ bool LinkCoordinator::Send(retro_link_handle_t handle, uint64_t tick, unsigned t
     return delivered;
 }
 
-bool LinkCoordinator::Recv(retro_link_handle_t handle, uint64_t* tick, unsigned* from, void* buf,
+bool LinkCoordinator::Recv(retro_link_port_t *handle, uint64_t* tick, unsigned* from, void* buf,
                            size_t* len)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -859,7 +859,7 @@ uint64_t LinkCoordinator::CeilingLocked(const Endpoint& ep) const
     return ceiling;
 }
 
-uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tick,
+uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick,
                                   uint64_t safe_tick, uint64_t request_tick)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -977,7 +977,7 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
         // counter. It decides nothing.
         ++ep->advance_waits;
         const auto parked_at = std::chrono::steady_clock::now();
-        const retro_link_handle_t waiting_on = handle;
+        retro_link_port_t *const waiting_on = handle;
         m_cv.wait(lock);
         const uint64_t slept = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(

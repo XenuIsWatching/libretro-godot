@@ -91,13 +91,13 @@ public:
     // (instance, port) pair it was found by. The core hands back what it was
     // handed, so nothing has to be worked out from the calling thread -- which
     // is the only way this survives a core that runs on more than one.
-    retro_link_handle_t Attach(Wrapper* owner, unsigned port, const char* protocol_id,
+    retro_link_port_t *Attach(Wrapper* owner, unsigned port, const char* protocol_id,
                                uint64_t clock_rate);
-    void     Detach(retro_link_handle_t handle);
-    int      Peers(retro_link_handle_t handle, unsigned* count);
-    bool     Send(retro_link_handle_t handle, uint64_t tick, unsigned to, const void* buf, size_t len);
-    bool     Recv(retro_link_handle_t handle, uint64_t* tick, unsigned* from, void* buf, size_t* len);
-    uint64_t Advance(retro_link_handle_t handle, uint64_t local_tick, uint64_t safe_tick,
+    void     Detach(retro_link_port_t *handle);
+    int      Peers(retro_link_port_t *handle, unsigned* count);
+    bool     Send(retro_link_port_t *handle, uint64_t tick, unsigned to, const void* buf, size_t len);
+    bool     Recv(retro_link_port_t *handle, uint64_t* tick, unsigned* from, void* buf, size_t* len);
+    uint64_t Advance(retro_link_port_t *handle, uint64_t local_tick, uint64_t safe_tick,
                      uint64_t request_tick);
 
     // Read by the ROOM rather than by a core, so these look an endpoint up by
@@ -237,7 +237,7 @@ private:
 
     /// The endpoint a handle names, or null if it has been torn down since.
     /// Caller holds m_mutex.
-    Endpoint* Resolve(retro_link_handle_t handle);
+    Endpoint* Resolve(retro_link_port_t *handle);
 
     /// Rebuild every bus from the wires. Called after any change to them.
     ///

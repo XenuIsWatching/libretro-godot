@@ -40,18 +40,18 @@ static int g_failures = 0;
  * A core keeps its own; the cases here talk about machines and ports, so they
  * are remembered on the side and looked up. Attaching twice on one port is not
  * something a core does, so a plain map is enough. */
-static std::map<std::pair<Wrapper*, unsigned>, retro_link_handle_t> g_handles;
+static std::map<std::pair<Wrapper*, unsigned>, retro_link_port_t *> g_handles;
 
-static retro_link_handle_t H(Wrapper* w, unsigned port)
+static retro_link_port_t *H(Wrapper* w, unsigned port)
 {
     auto it = g_handles.find({w, port});
     return it == g_handles.end() ? nullptr : it->second;
 }
 
-static retro_link_handle_t DoAttach(LinkCoordinator& c, Wrapper* w, unsigned port,
+static retro_link_port_t *DoAttach(LinkCoordinator& c, Wrapper* w, unsigned port,
                                     const char* protocol, uint64_t hz)
 {
-    retro_link_handle_t h = c.Attach(w, port, protocol, hz);
+    retro_link_port_t *h = c.Attach(w, port, protocol, hz);
     g_handles[{w, port}] = h;
     return h;
 }
