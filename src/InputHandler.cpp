@@ -91,8 +91,18 @@ int16_t InputHandler::StateCallback(uint32_t port, uint32_t device, uint32_t ind
         return instance->m_input_handler->ProcessPointerDevice(port, index, id);
     case RETRO_DEVICE_ANALOG:
         return instance->m_input_handler->ProcessAnalogDevice(port, index, id);
+    case RETRO_DEVICE_NONE:
+        // A port with nothing in it, which is an ordinary state and not a
+        // fault. It arrives here constantly: a core polls every port it has
+        // every frame whether or not anything is plugged into it, and a
+        // GameCube lead announces (7 << 8) | RETRO_DEVICE_NONE, so its base
+        // type IS none. Logged, this was 45 lines a second out of the
+        // EMULATION thread, each one a string build and an android log write,
+        // and it was audible: the sound crackled for as long as the port was
+        // polled. Silence is the correct answer, and zero is the correct value.
+        return 0;
     default:
-        LogError("Unhandled input device: " + std::to_string(device) + " for port: " + std::to_string(port) + " and id: " + std::to_string(id));
+        LogErrorOnce("Unhandled input device: " + std::to_string(device) + " for port: " + std::to_string(port) + " and id: " + std::to_string(id));
         break;
     }
 
