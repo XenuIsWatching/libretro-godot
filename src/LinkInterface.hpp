@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * Link interface (retroXR extension; candidate upstream environment 93).
+ * Link interface (retroXR extension; candidate upstream environment 94).
  *
  * Deliberately one contiguous block rather than following libretro.h's usual
  * split of "environment defines grouped near the top, structs further down".
@@ -46,12 +46,12 @@ extern "C" {
  * attaches, so a core has exactly one code path and still runs standalone.
  *
  * During development this is flagged EXPERIMENTAL so as not to squat on plain
- * 93 should upstream assign it elsewhere. A core should probe the experimental
+ * 94 should upstream assign it elsewhere. A core should probe the experimental
  * form first and fall back to the plain one, so a core built today keeps
  * working against a frontend that later adopts the unflagged number.
  */
-#define RETRO_ENVIRONMENT_GET_LINK_INTERFACE       (93 | RETRO_ENVIRONMENT_EXPERIMENTAL)
-#define RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL 93
+#define RETRO_ENVIRONMENT_GET_LINK_INTERFACE       (94 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+#define RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL 94
 
 /* Returned by retro_link_advance_t when nothing bounds this core: nothing is
  * attached to the port, or every peer has detached. The core must then run
