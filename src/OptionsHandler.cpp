@@ -105,8 +105,12 @@ bool OptionsHandler::SetVariables(const retro_variable* variables)
         auto value_list = parts[1].trim_prefix(" ").split("|");
         std::vector<OptionValue> values;
         for (int v = 0; v < value_list.size(); ++v)
+            // Brace init, not emplace_back(): OptionValue is an aggregate with
+            // no two-argument constructor, and emplace_back's parenthesized
+            // construction of aggregates (C++20 P0960) is not implemented by
+            // Xcode 15's libc++ construct_at - it fails to compile on macOS.
             if (!value_list[v].is_empty())
-                values.emplace_back(value_list[v].utf8().get_data(), "");
+                values.push_back({value_list[v].utf8().get_data(), ""});
         if (values.empty())
             continue;
 
