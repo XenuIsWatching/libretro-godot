@@ -115,6 +115,10 @@ public:
     /// Per-port joypad input. Replaces the hardcoded port-0 path in _process for
     /// physical controller objects that know their own port assignment.
     void SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog_lx, int16_t analog_ly, int16_t analog_rx, int16_t analog_ry);
+    /// Read the frontend's buffered joypad state without consuming it. This is
+    /// useful for diagnostics and no-core integration tests; values are
+    /// [buttons, left_x, left_y, right_x, right_y].
+    godot::PackedInt32Array PeekJoypadState(uint32_t port) const;
 
     /// Keyboard input: update the RETRO_DEVICE_KEYBOARD poll bitset AND fire
     /// the core's keyboard event callback (modifiers derived from held keys).
@@ -434,7 +438,10 @@ public:
     std::unique_ptr<EnvironmentHandler> m_environment_handler = nullptr;
     std::unique_ptr<VideoHandler> m_video_handler = nullptr;
     std::unique_ptr<AudioHandler> m_audio_handler = nullptr;
-    std::unique_ptr<InputHandler> m_input_handler = nullptr;
+    // Exists before a core starts so physical peripherals can already feed (and
+    // diagnostics can inspect) the frontend boundary. StartContent replaces it
+    // with a clean handler for the new core.
+    std::unique_ptr<InputHandler> m_input_handler = std::make_unique<InputHandler>();
     std::unique_ptr<OptionsHandler> m_options_handler = nullptr;
     std::unique_ptr<MessageHandler> m_message_handler = nullptr;
     std::unique_ptr<LogHandler> m_log_handler = nullptr;

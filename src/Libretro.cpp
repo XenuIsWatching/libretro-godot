@@ -155,6 +155,11 @@ void Libretro::SetJoypadState(int port, int button_mask, int analog_lx, int anal
         static_cast<int16_t>(analog_ry));
 }
 
+godot::PackedInt32Array Libretro::PeekJoypadState(int port) const
+{
+    return m_wrapper->PeekJoypadState(static_cast<uint32_t>(port));
+}
+
 void Libretro::SetMouseState(int port, int dx, int dy, int buttons)
 {
     m_wrapper->SetMouseState(static_cast<uint32_t>(port),
@@ -487,6 +492,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetLightgunIsOffscreen", "port", "offscreen"), &Libretro::SetLightgunIsOffscreen);
     ClassDB::bind_method(D_METHOD("SetLightgunButton", "port", "button_id", "pressed"), &Libretro::SetLightgunButton);
     ClassDB::bind_method(D_METHOD("SetJoypadState", "port", "button_mask", "analog_lx", "analog_ly", "analog_rx", "analog_ry"), &Libretro::SetJoypadState);
+    ClassDB::bind_method(D_METHOD("PeekJoypadState", "port"), &Libretro::PeekJoypadState);
     ClassDB::bind_method(D_METHOD("SetMouseState", "port", "dx", "dy", "buttons"), &Libretro::SetMouseState);
     ClassDB::bind_method(D_METHOD("SetKeyState", "port", "keycode", "down", "character"), &Libretro::SetKeyState);
     ClassDB::bind_method(D_METHOD("GodotKeyToRetroKey", "event"), &Libretro::GodotKeyToRetroKey);

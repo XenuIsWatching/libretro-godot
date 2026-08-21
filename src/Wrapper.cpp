@@ -662,6 +662,27 @@ void Wrapper::SetJoypadState(uint32_t port, uint16_t button_mask, int16_t analog
     m_input_handler->SetAnalogRight(port, analog_rx, analog_ry);
 }
 
+godot::PackedInt32Array Wrapper::PeekJoypadState(uint32_t port) const
+{
+    godot::PackedInt32Array out;
+    out.resize(5);
+    if (!m_input_handler)
+        return out;
+
+    const InputHandler::NetplayState state = m_input_handler->CaptureNetplayState();
+    const auto value_or_zero = [port](const auto& values) -> int32_t
+    {
+        const auto it = values.find(port);
+        return it == values.end() ? 0 : static_cast<int32_t>(it->second);
+    };
+    out[0] = value_or_zero(state.joypad_buttons);
+    out[1] = value_or_zero(state.analog_left_x);
+    out[2] = value_or_zero(state.analog_left_y);
+    out[3] = value_or_zero(state.analog_right_x);
+    out[4] = value_or_zero(state.analog_right_y);
+    return out;
+}
+
 void Wrapper::SetMouseState(uint32_t port, int32_t dx, int32_t dy, uint32_t buttons)
 {
     if (!m_input_handler)

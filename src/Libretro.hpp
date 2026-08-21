@@ -213,6 +213,9 @@ public:
 
     /// Per-port joypad input. Called from GDScript by physical retro controller objects.
     void SetJoypadState(int port, int button_mask, int analog_lx, int analog_ly, int analog_rx, int analog_ry);
+    /// Non-consuming view of the buffered joypad state:
+    /// [buttons, left_x, left_y, right_x, right_y].
+    godot::PackedInt32Array PeekJoypadState(int port) const;
     /// Relative mouse deltas (accumulated until the core's next read) + button
     /// bitmask of (1 << RETRO_DEVICE_ID_MOUSE_*) for a RETRO_DEVICE_MOUSE port.
     void SetMouseState(int port, int dx, int dy, int buttons);
