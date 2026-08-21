@@ -132,11 +132,14 @@ public:
 
     /// Accelerometer feed (g units, at-rest flat ≈ (0,0,1)) for the libretro
     /// sensor interface, so a held handheld's physical tilt drives tilt carts.
-    void SetSensorAccel(uint32_t port, float x, float y, float z);
+    ///
+    /// `index` names the sub-device on that port: 0 is the controller itself,
+    /// 1 is whatever is plugged into it, such as a Wii Nunchuk.
+    void SetSensorAccel(uint32_t port, float x, float y, float z, uint32_t index = 0);
 
     /// Gyroscope feed (radians/second about the device's own axes) for the same
     /// interface. Rotation rate, not orientation: a still device reads (0,0,0).
-    void SetSensorGyro(uint32_t port, float x, float y, float z);
+    void SetSensorGyro(uint32_t port, float x, float y, float z, uint32_t index = 0);
 
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y normalized to
     /// [-0x7FFF, 0x7FFF] across the WHOLE video output (the composite

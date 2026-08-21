@@ -26,6 +26,9 @@ ROOT = os.path.dirname(HERE)
 # test source -> extra sources it needs from src/
 TESTS = {
     "link_coordinator_test.cpp": ["LinkCoordinator.cpp"],
+    # Header-only: the encoding is the whole unit, and InputHandler.cpp is not
+    # Godot-free the way LinkCoordinator.cpp deliberately is.
+    "sensor_index_test.cpp": [],
 }
 
 INCLUDES = [

@@ -704,16 +704,16 @@ void Wrapper::SetKeyState(uint32_t port, uint32_t keycode, bool down, uint32_t c
         std::make_unique<EmuThreadCommandKeyboardEvent>(port, keycode, down, character));
 }
 
-void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z)
+void Wrapper::SetSensorAccel(uint32_t port, float x, float y, float z, uint32_t index)
 {
     if (m_input_handler && !IsNetplayPortManaged(port))
-        m_input_handler->SetSensorAccel(port, x, y, z);
+        m_input_handler->SetSensorAccel(port, x, y, z, index);
 }
 
-void Wrapper::SetSensorGyro(uint32_t port, float x, float y, float z)
+void Wrapper::SetSensorGyro(uint32_t port, float x, float y, float z, uint32_t index)
 {
     if (m_input_handler && !IsNetplayPortManaged(port))
-        m_input_handler->SetSensorGyro(port, x, y, z);
+        m_input_handler->SetSensorGyro(port, x, y, z, index);
 }
 
 void Wrapper::SetPointerState(uint32_t port, int16_t x, int16_t y, bool pressed)

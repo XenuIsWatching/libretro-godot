@@ -24,14 +24,7 @@ InputHandler::NetplayState InputHandler::CaptureNetplayState() const
     state.analog_left_y = m_analog_left_y;
     state.analog_right_x = m_analog_right_x;
     state.analog_right_y = m_analog_right_y;
-    state.sensor_accel_x = m_sensor_accel_x;
-    state.sensor_accel_y = m_sensor_accel_y;
-    state.sensor_accel_z = m_sensor_accel_z;
-    state.sensor_accel_enabled = m_sensor_accel_enabled;
-    state.sensor_gyro_x = m_sensor_gyro_x;
-    state.sensor_gyro_y = m_sensor_gyro_y;
-    state.sensor_gyro_z = m_sensor_gyro_z;
-    state.sensor_gyro_enabled = m_sensor_gyro_enabled;
+    state.sensors = m_sensors;
     return state;
 }
 
@@ -52,14 +45,7 @@ void InputHandler::RestoreNetplayState(const NetplayState& state)
     m_analog_left_y = state.analog_left_y;
     m_analog_right_x = state.analog_right_x;
     m_analog_right_y = state.analog_right_y;
-    m_sensor_accel_x = state.sensor_accel_x;
-    m_sensor_accel_y = state.sensor_accel_y;
-    m_sensor_accel_z = state.sensor_accel_z;
-    m_sensor_accel_enabled = state.sensor_accel_enabled;
-    m_sensor_gyro_x = state.sensor_gyro_x;
-    m_sensor_gyro_y = state.sensor_gyro_y;
-    m_sensor_gyro_z = state.sensor_gyro_z;
-    m_sensor_gyro_enabled = state.sensor_gyro_enabled;
+    m_sensors = state.sensors;
 }
 
 void InputHandler::PollCallback()
@@ -445,35 +431,43 @@ bool InputHandler::GetSensorInterface(retro_sensor_interface* sensor_interface)
     return true;
 }
 
-void InputHandler::SetSensorAccel(uint32_t port, float x, float y, float z)
+void InputHandler::SetSensorAccel(uint32_t port, float x, float y, float z, uint32_t index)
 {
+    if (index >= MAX_SENSOR_INDEX)
+        return;
+
     std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
-    m_sensor_accel_x[port] = x;
-    m_sensor_accel_y[port] = y;
-    m_sensor_accel_z[port] = z;
+    SensorState& state = m_sensors[port][index];
+    state.accel_x = x;
+    state.accel_y = y;
+    state.accel_z = z;
 }
 
 /// Angular velocity in radians/second about the device's own axes.
-void InputHandler::SetSensorGyro(uint32_t port, float x, float y, float z)
+void InputHandler::SetSensorGyro(uint32_t port, float x, float y, float z, uint32_t index)
 {
+    if (index >= MAX_SENSOR_INDEX)
+        return;
+
     std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
-    m_sensor_gyro_x[port] = x;
-    m_sensor_gyro_y[port] = y;
-    m_sensor_gyro_z[port] = z;
+    SensorState& state = m_sensors[port][index];
+    state.gyro_x = x;
+    state.gyro_y = y;
+    state.gyro_z = z;
 }
 
 bool InputHandler::IsSensorEnabled(uint32_t port) const
 {
     std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
-    auto it = m_sensor_accel_enabled.find(port);
-    return it != m_sensor_accel_enabled.end() && it->second;
+    auto it = m_sensors.find(port);
+    return it != m_sensors.end() && it->second[0].accel_enabled;
 }
 
 bool InputHandler::IsGyroEnabled(uint32_t port) const
 {
     std::lock_guard<std::recursive_mutex> lock(m_state_mutex);
-    auto it = m_sensor_gyro_enabled.find(port);
-    return it != m_sensor_gyro_enabled.end() && it->second;
+    auto it = m_sensors.find(port);
+    return it != m_sensors.end() && it->second[0].gyro_enabled;
 }
 
 std::vector<std::vector<InputHandler::RetroController>> InputHandler::GetControllers() const
@@ -503,25 +497,34 @@ bool InputHandler::SensorSetStateCallback(unsigned port, retro_sensor_action act
     if (!instance || !instance->m_input_handler)
         return false;
 
+    // Saying no to a sub-device this build does not carry IS the compatibility
+    // contract, not an error path: it is what a core probing for one is meant
+    // to be told, so that it falls back to whatever it does without one.
+    unsigned index = 0;
+    unsigned base = 0;
+    if (!RetroSensorSplit(static_cast<unsigned>(action), MAX_SENSOR_INDEX, index, base))
+        return false;
+
     InputHandler& handler = *instance->m_input_handler;
     std::lock_guard<std::recursive_mutex> lock(handler.m_state_mutex);
-    switch (action)
+    SensorState& state = handler.m_sensors[port][index];
+    switch (base)
     {
     case RETRO_SENSOR_ACCELEROMETER_ENABLE:
-        handler.m_sensor_accel_enabled[port] = true;
-        Log("Sensor: accelerometer enabled on port " + std::to_string(port) +
-            " rate=" + std::to_string(rate));
+        state.accel_enabled = true;
+        Log("Sensor: accelerometer enabled on port " + std::to_string(port) + " sub-device " +
+            std::to_string(index) + " rate=" + std::to_string(rate));
         return true;
     case RETRO_SENSOR_ACCELEROMETER_DISABLE:
-        handler.m_sensor_accel_enabled[port] = false;
+        state.accel_enabled = false;
         return true;
     case RETRO_SENSOR_GYROSCOPE_ENABLE:
-        handler.m_sensor_gyro_enabled[port] = true;
-        Log("Sensor: gyroscope enabled on port " + std::to_string(port) +
-            " rate=" + std::to_string(rate));
+        state.gyro_enabled = true;
+        Log("Sensor: gyroscope enabled on port " + std::to_string(port) + " sub-device " +
+            std::to_string(index) + " rate=" + std::to_string(rate));
         return true;
     case RETRO_SENSOR_GYROSCOPE_DISABLE:
-        handler.m_sensor_gyro_enabled[port] = false;
+        state.gyro_enabled = false;
         return true;
     default:
         return false;
@@ -535,44 +538,28 @@ float InputHandler::SensorGetInputCallback(unsigned port, unsigned id)
     if (!instance || !instance->m_input_handler)
         return 0.0f;
 
+    // Same contract as the enable call: a sub-device this build does not carry
+    // reads as zero, which is what the header documents for an invalid argument.
+    unsigned index = 0;
+    unsigned base = 0;
+    if (!RetroSensorSplit(id, MAX_SENSOR_INDEX, index, base))
+        return 0.0f;
+
     auto& handler = *instance->m_input_handler;
     std::lock_guard<std::recursive_mutex> lock(handler.m_state_mutex);
-    switch (id)
+    // A sub-device nothing has written to answers with SensorState's defaults,
+    // which are the at-rest pose: still, and feeling gravity on Z.
+    auto it = handler.m_sensors.find(port);
+    const SensorState state = it != handler.m_sensors.end() ? it->second[index] : SensorState{};
+    switch (base)
     {
-    case RETRO_SENSOR_ACCELEROMETER_X:
-    {
-        auto it = handler.m_sensor_accel_x.find(port);
-        return it != handler.m_sensor_accel_x.end() ? it->second : 0.0f;
-    }
-    case RETRO_SENSOR_ACCELEROMETER_Y:
-    {
-        auto it = handler.m_sensor_accel_y.find(port);
-        return it != handler.m_sensor_accel_y.end() ? it->second : 0.0f;
-    }
-    case RETRO_SENSOR_ACCELEROMETER_Z:
-    {
-        auto it = handler.m_sensor_accel_z.find(port);
-        return it != handler.m_sensor_accel_z.end() ? it->second : 1.0f;   // at-rest ≈ (0,0,1)
-    }
-    // A still device is not rotating, so every gyro axis rests at zero, unlike
-    // the accelerometer, which still feels gravity on Z.
-    case RETRO_SENSOR_GYROSCOPE_X:
-    {
-        auto it = handler.m_sensor_gyro_x.find(port);
-        return it != handler.m_sensor_gyro_x.end() ? it->second : 0.0f;
-    }
-    case RETRO_SENSOR_GYROSCOPE_Y:
-    {
-        auto it = handler.m_sensor_gyro_y.find(port);
-        return it != handler.m_sensor_gyro_y.end() ? it->second : 0.0f;
-    }
-    case RETRO_SENSOR_GYROSCOPE_Z:
-    {
-        auto it = handler.m_sensor_gyro_z.find(port);
-        return it != handler.m_sensor_gyro_z.end() ? it->second : 0.0f;
-    }
-    default:
-        return 0.0f;
+    case RETRO_SENSOR_ACCELEROMETER_X: return state.accel_x;
+    case RETRO_SENSOR_ACCELEROMETER_Y: return state.accel_y;
+    case RETRO_SENSOR_ACCELEROMETER_Z: return state.accel_z;
+    case RETRO_SENSOR_GYROSCOPE_X:     return state.gyro_x;
+    case RETRO_SENSOR_GYROSCOPE_Y:     return state.gyro_y;
+    case RETRO_SENSOR_GYROSCOPE_Z:     return state.gyro_z;
+    default:                           return 0.0f;
     }
 }
 

@@ -227,12 +227,16 @@ public:
 
     /// Accelerometer feed for tilt-sensor games (g units, at-rest ≈ (0,0,1)).
     /// Fed each frame from a held handheld's physical orientation.
-    void SetSensorAccel(int port, float x, float y, float z);
+    ///
+    /// `index` names the sub-device on that port and defaults to 0, the
+    /// controller itself. A Wii Remote sends its Nunchuk's motion on 1, which
+    /// is how one player on one port carries two accelerometers.
+    void SetSensorAccel(int port, float x, float y, float z, int index = 0);
 
     /// Gyroscope feed in radians/second about the device's own axes, fed each
     /// frame from how fast a held handheld is turning. This is what drives the
     /// Wii MotionPlus; a device sitting still reads (0, 0, 0).
-    void SetSensorGyro(int port, float x, float y, float z);
+    void SetSensorGyro(int port, float x, float y, float z, int index = 0);
 
     /// Touch/pointer feed (RETRO_DEVICE_POINTER): x/y in [-32767, 32767]
     /// across the whole video output. Drives the DS/3DS touch screen.

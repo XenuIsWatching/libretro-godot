@@ -10,6 +10,8 @@
 
 #include <libretro.h>
 
+#include "SensorIndex.hpp"
+
 namespace Xenu
 {
 class InputHandler
@@ -43,6 +45,26 @@ public:
         int16_t pressed = 0;
     };
 
+    /// Sub-devices addressable per port: 0 is the controller, 1 is whatever is
+    /// plugged into it. A Wii Remote with a Nunchuk is one player with two
+    /// accelerometers, which is what this exists for.
+    static constexpr uint32_t MAX_SENSOR_INDEX = 2;
+
+    /// One sensor set. The defaults are the at-rest pose, so a sub-device
+    /// nothing has ever written to reads as a device lying still on a table
+    /// rather than as one in freefall.
+    struct SensorState
+    {
+        float accel_x = 0.0f;
+        float accel_y = 0.0f;
+        float accel_z = 1.0f;   // g, and gravity is still felt at rest
+        float gyro_x = 0.0f;
+        float gyro_y = 0.0f;
+        float gyro_z = 0.0f;    // radians/second, and a still device is not turning
+        bool accel_enabled = false;
+        bool gyro_enabled = false;
+    };
+
     /// Input state owned by the frontend rather than the core. Core savestates
     /// do not contain this data, so rollback snapshots must preserve it too or
     /// a replay can poll keyboard/mouse/sensor state from the abandoned future.
@@ -62,14 +84,7 @@ public:
         std::unordered_map<uint32_t, int16_t> analog_left_y;
         std::unordered_map<uint32_t, int16_t> analog_right_x;
         std::unordered_map<uint32_t, int16_t> analog_right_y;
-        std::unordered_map<uint32_t, float> sensor_accel_x;
-        std::unordered_map<uint32_t, float> sensor_accel_y;
-        std::unordered_map<uint32_t, float> sensor_accel_z;
-        std::unordered_map<uint32_t, bool> sensor_accel_enabled;
-        std::unordered_map<uint32_t, float> sensor_gyro_x;
-        std::unordered_map<uint32_t, float> sensor_gyro_y;
-        std::unordered_map<uint32_t, float> sensor_gyro_z;
-        std::unordered_map<uint32_t, bool> sensor_gyro_enabled;
+        std::unordered_map<uint32_t, std::array<SensorState, MAX_SENSOR_INDEX>> sensors;
     };
 
     NetplayState CaptureNetplayState() const;
@@ -140,9 +155,13 @@ public:
     // The two are enabled separately because a core may want either alone.
     // Dolphin binds tilt and swing off the accelerometer but needs the gyro for
     // MotionPlus, and asks for them in two calls.
+    //
+    // `index` names the sub-device on that port: 0 is the controller, 1 is
+    // whatever is plugged into it. See SensorIndex.hpp for the encoding a core
+    // uses to ask for one.
     bool GetSensorInterface(retro_sensor_interface* sensor_interface);
-    void SetSensorAccel(uint32_t port, float x, float y, float z);
-    void SetSensorGyro(uint32_t port, float x, float y, float z);
+    void SetSensorAccel(uint32_t port, float x, float y, float z, uint32_t index = 0);
+    void SetSensorGyro(uint32_t port, float x, float y, float z, uint32_t index = 0);
     bool IsSensorEnabled(uint32_t port) const;
     bool IsGyroEnabled(uint32_t port) const;
 
@@ -188,19 +207,10 @@ private:
     std::unordered_map<uint32_t, uint16_t> m_rumble_weak;
     std::unordered_map<uint32_t, uint16_t> m_rumble_strong;
 
-    // Accelerometer state per port (g units), written by the main thread
-    // (benign race, same as the analog maps) and read by the emu-thread
-    // sensor callback.
-    std::unordered_map<uint32_t, float> m_sensor_accel_x;
-    std::unordered_map<uint32_t, float> m_sensor_accel_y;
-    std::unordered_map<uint32_t, float> m_sensor_accel_z;
-    std::unordered_map<uint32_t, bool> m_sensor_accel_enabled;
-
-    // Gyroscope state per port (radians/second), same threading story as above.
-    std::unordered_map<uint32_t, float> m_sensor_gyro_x;
-    std::unordered_map<uint32_t, float> m_sensor_gyro_y;
-    std::unordered_map<uint32_t, float> m_sensor_gyro_z;
-    std::unordered_map<uint32_t, bool> m_sensor_gyro_enabled;
+    // Sensor state per port, one entry per addressable sub-device. Accelerometer
+    // in g, gyroscope in radians/second. Written by the main thread (benign
+    // race, same as the analog maps) and read by the emu-thread sensor callback.
+    std::unordered_map<uint32_t, std::array<SensorState, MAX_SENSOR_INDEX>> m_sensors;
 
     std::vector<std::vector<RetroController>> m_controllers;
     std::unordered_map<uint32_t, uint32_t> m_port_devices;

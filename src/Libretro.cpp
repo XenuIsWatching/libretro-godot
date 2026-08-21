@@ -175,14 +175,16 @@ int Libretro::GodotKeyToRetroKey(const Ref<InputEventKey>& event) const
     return static_cast<int>(Wrapper::GodotKeyToRetroKey(event));
 }
 
-void Libretro::SetSensorAccel(int port, float x, float y, float z)
+void Libretro::SetSensorAccel(int port, float x, float y, float z, int index)
 {
-    m_wrapper->SetSensorAccel(static_cast<uint32_t>(port), x, y, z);
+    m_wrapper->SetSensorAccel(static_cast<uint32_t>(port), x, y, z,
+                              static_cast<uint32_t>(index));
 }
 
-void Libretro::SetSensorGyro(int port, float x, float y, float z)
+void Libretro::SetSensorGyro(int port, float x, float y, float z, int index)
 {
-    m_wrapper->SetSensorGyro(static_cast<uint32_t>(port), x, y, z);
+    m_wrapper->SetSensorGyro(static_cast<uint32_t>(port), x, y, z,
+                             static_cast<uint32_t>(index));
 }
 
 void Libretro::SetPointerState(int port, int x, int y, bool pressed)
@@ -478,8 +480,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetMouseState", "port", "dx", "dy", "buttons"), &Libretro::SetMouseState);
     ClassDB::bind_method(D_METHOD("SetKeyState", "port", "keycode", "down", "character"), &Libretro::SetKeyState);
     ClassDB::bind_method(D_METHOD("GodotKeyToRetroKey", "event"), &Libretro::GodotKeyToRetroKey);
-    ClassDB::bind_method(D_METHOD("SetSensorAccel", "port", "x", "y", "z"), &Libretro::SetSensorAccel);
-    ClassDB::bind_method(D_METHOD("SetSensorGyro", "port", "x", "y", "z"), &Libretro::SetSensorGyro);
+    ClassDB::bind_method(D_METHOD("SetSensorAccel", "port", "x", "y", "z", "index"), &Libretro::SetSensorAccel, DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("SetSensorGyro", "port", "x", "y", "z", "index"), &Libretro::SetSensorGyro, DEFVAL(0));
     ClassDB::bind_method(D_METHOD("SetPointerState", "port", "x", "y", "pressed"), &Libretro::SetPointerState);
     ClassDB::bind_method(D_METHOD("SetPointerIndexState", "port", "index", "x", "y", "pressed"), &Libretro::SetPointerIndexState);
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
