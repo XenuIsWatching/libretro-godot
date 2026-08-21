@@ -261,10 +261,10 @@ public:
     /// arrived. port_mask selects participating ports; start_frame resets the
     /// frame counter. Call before StartContent for a cold start.
     void SetNetplayMode(bool enabled, int port_mask, int64_t start_frame);
-    /// Agreed inputs for one frame: flat PackedInt32Array of 4 ports × 5 values
-    /// {button_mask, alx, aly, arx, ary}, optionally followed by the
-    /// sensor/pointer/keyboard auxiliary block. In rollback mode these are the
-    /// CONFIRMATIONS: a mismatch with what already ran triggers rewind+replay.
+    /// Agreed inputs for one frame: 4 device-aware five-int port blocks,
+    /// followed by per-port accelerometer/gyro/pointer state and keyboard
+    /// events. In rollback mode these are CONFIRMATIONS: a mismatch with what
+    /// already ran triggers rewind+replay.
     void PostNetplayInputs(int64_t frame, const godot::PackedInt32Array& inputs);
 
     /// Enable GGPO-style rollback within netplay mode: locally-owned ports

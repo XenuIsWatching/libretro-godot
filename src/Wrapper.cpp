@@ -596,21 +596,59 @@ void Wrapper::SetControllerPortDevice(uint32_t port, uint32_t device)
 
 void Wrapper::SetLightgunPosition(uint32_t port, int16_t x, int16_t y)
 {
-    if (m_input_handler)
-        m_input_handler->SetLightgunPosition(port, x, y);
+    if (!m_input_handler)
+        return;
+    if (IsNetplayPortManaged(port))
+    {
+        if (m_np_rollback.load(std::memory_order_acquire) &&
+            (m_np_local_mask.load(std::memory_order_relaxed) & (1u << port)))
+        {
+            std::lock_guard<std::mutex> lock(m_np_mutex);
+            m_np_live_local[port * 5 + 1] = x;
+            m_np_live_local[port * 5 + 2] = y;
+        }
+        return;
+    }
+    m_input_handler->SetLightgunPosition(port, x, y);
 }
 
 void Wrapper::SetLightgunIsOffscreen(uint32_t port, bool offscreen)
 {
-    if (m_input_handler)
-        m_input_handler->SetLightgunIsOffscreen(port, offscreen ? 1 : 0);
+    if (!m_input_handler)
+        return;
+    if (IsNetplayPortManaged(port))
+    {
+        if (m_np_rollback.load(std::memory_order_acquire) &&
+            (m_np_local_mask.load(std::memory_order_relaxed) & (1u << port)))
+        {
+            std::lock_guard<std::mutex> lock(m_np_mutex);
+            m_np_live_local[port * 5 + 3] = offscreen ? 1 : 0;
+        }
+        return;
+    }
+    m_input_handler->SetLightgunIsOffscreen(port, offscreen ? 1 : 0);
 }
 
 void Wrapper::SetLightgunButton(uint32_t port, int button_id, bool pressed)
 {
     if (!m_input_handler)
         return;
-    uint32_t buttons = m_input_handler->GetLightgunButtons(port);
+    uint32_t buttons = 0;
+    if (IsNetplayPortManaged(port))
+    {
+        if (!(m_np_rollback.load(std::memory_order_acquire) &&
+              (m_np_local_mask.load(std::memory_order_relaxed) & (1u << port))))
+            return;
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        buttons = static_cast<uint32_t>(m_np_live_local[port * 5]);
+        if (pressed)
+            buttons |= (1u << button_id);
+        else
+            buttons &= ~(1u << button_id);
+        m_np_live_local[port * 5] = static_cast<int32_t>(buttons);
+        return;
+    }
+    buttons = m_input_handler->GetLightgunButtons(port);
     if (pressed)
         buttons |= (1u << button_id);
     else
@@ -1417,41 +1455,71 @@ void Wrapper::ApplyNetplayInputs(const NpFrame& inputs, uint32_t mask)
             m_input_handler->SetMouseButtons(port, static_cast<uint32_t>(v[0]));
             continue;
         }
+        if (device == RETRO_DEVICE_LIGHTGUN)
+        {
+            m_input_handler->SetLightgunButtons(port, static_cast<uint32_t>(v[0]));
+            m_input_handler->SetLightgunPosition(port,
+                static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
+            m_input_handler->SetLightgunIsOffscreen(port, v[3] ? 1 : 0);
+            continue;
+        }
         m_input_handler->SetJoypadButtonStates(port, static_cast<uint16_t>(v[0]));
         m_input_handler->SetAnalogLeft(port, static_cast<int16_t>(v[1]), static_cast<int16_t>(v[2]));
         m_input_handler->SetAnalogRight(port, static_cast<int16_t>(v[3]), static_cast<int16_t>(v[4]));
     }
 }
 
-/// Apply the aux block of a netplay frame (sensor + pointer, port 0). Runs on
-/// the emulation thread strictly before the frame executes, so tilt and touch
-/// are part of the deterministic timeline on every peer.
+/// Apply every port's sensor and pointer block on the emulation thread, strictly
+/// before the frame executes, so motion and touch share the deterministic line.
 void Wrapper::ApplyNetplayAux(const NpFrame& inputs)
 {
-    const int32_t flags = inputs[20];
-    if (flags & 1)
-        m_input_handler->SetSensorAccel(0,
-            inputs[21] / 1000.0f, inputs[22] / 1000.0f, inputs[23] / 1000.0f);
-    if (flags & 2)
+    const uint32_t mask = m_np_port_mask.load(std::memory_order_relaxed);
+    for (uint32_t port = 0; port < NP_PORTS; ++port)
     {
-        // Index 0 only: the aux block has room for one point, so multi-point
-        // input (Wiimote IR passthrough) is not part of the netplay timeline.
-        m_input_handler->SetPointerPosition(0,
-            static_cast<int16_t>(inputs[24]), static_cast<int16_t>(inputs[25]));
-        m_input_handler->SetPointerPressed(0, inputs[26] ? 1 : 0);
-        m_input_handler->ClearPointersFrom(0, 1);
+        if (!(mask & (1u << port)))
+            continue;
+        const int base = NP_AUX_OFFSET + static_cast<int>(port) * NP_AUX_INTS_PER_PORT;
+        const int32_t flags = inputs[base];
+        for (uint32_t index = 0; index < NP_SENSOR_COUNT; ++index)
+        {
+            const int accel = base + 1 + static_cast<int>(index) * 3;
+            const int gyro = base + 7 + static_cast<int>(index) * 3;
+            if (flags & (1 << index))
+                m_input_handler->SetSensorAccel(port,
+                    inputs[accel] / 1000.0f, inputs[accel + 1] / 1000.0f,
+                    inputs[accel + 2] / 1000.0f, index);
+            else
+                m_input_handler->SetSensorAccel(port, 0.0f, 0.0f, 1.0f, index);
+            if (flags & (1 << (2 + index)))
+                m_input_handler->SetSensorGyro(port,
+                    inputs[gyro] / 100.0f, inputs[gyro + 1] / 100.0f,
+                    inputs[gyro + 2] / 100.0f, index);
+            else
+                m_input_handler->SetSensorGyro(port, 0.0f, 0.0f, 0.0f, index);
+        }
+        for (uint32_t index = 0; index < NP_POINTER_COUNT; ++index)
+        {
+            const int pointer = base + 13 + static_cast<int>(index) * 3;
+            if (flags & (1 << (4 + index)))
+                m_input_handler->SetPointerIndexState(port, index,
+                    static_cast<int16_t>(inputs[pointer]),
+                    static_cast<int16_t>(inputs[pointer + 1]),
+                    inputs[pointer + 2] != 0);
+            else
+                m_input_handler->SetPointerIndexState(port, index, 0, 0, false);
+        }
     }
     // Key events: applied in slot order on the emulation thread, so the poll
     // bitset AND the core's keyboard event callback see the identical sequence
     // on every peer.
     for (int slot = 0; slot < NP_KEY_SLOTS; ++slot)
     {
-        int32_t packed = inputs[27 + slot * 2];
+        int32_t packed = inputs[NP_KEY_OFFSET + slot * 2];
         uint32_t keycode = static_cast<uint32_t>(packed) & 0xFFFF;
         if (keycode == 0)
             continue;
         bool down = (static_cast<uint32_t>(packed) >> 16) & 1;
-        uint32_t character = static_cast<uint32_t>(inputs[27 + slot * 2 + 1]);
+        uint32_t character = static_cast<uint32_t>(inputs[NP_KEY_OFFSET + slot * 2 + 1]);
         m_input_handler->SetKeyState(0, keycode, down);
         m_input_handler->CallKeyboardEventCallback(down, keycode, character,
             m_input_handler->GetKeyModifiers(0));

@@ -372,16 +372,22 @@ public:
     bool SaveRollbackState(int64_t frame);
     void FailNetplayRollback(const std::string& reason);
     bool IsNetplayPortManaged(uint32_t port) const;
-    // Netplay frame payload: 4 ports × 5 ints (joypad btn/alx/aly/arx/ary, or
-    // for RETRO_DEVICE_MOUSE ports: buttons/dx/dy/-/-), then the aux block:
-    // [20] flags (bit0 sensor valid, bit1 pointer valid), [21..23] accel in
-    // milli-g, [24..25] pointer x/y, [26] pointer pressed, then up to 4 key
-    // events × 2 ints each: [keycode | down<<16, unicode character]
-    // (keycode 0 = empty slot). Legacy shorter frames are accepted (rest
-    // zeroed).
+    // Netplay frame payload: 4 ports × 5 ints. Joypads use btn/analogs, mice
+    // use buttons/dx/dy, and lightguns use buttons/x/y/offscreen. Each port is
+    // followed by an aux block: flags, accel[2]*xyz (milli-g), gyro[2]*xyz
+    // (centi-rad/s), pointer[4]*{x,y,pressed}. The tail has 4 keyboard events.
+    // Legacy shorter frames are accepted (the remainder is zeroed).
+    static constexpr int NP_PORTS = 4;
+    static constexpr int NP_INPUT_INTS_PER_PORT = 5;
+    static constexpr int NP_INPUT_INTS = NP_PORTS * NP_INPUT_INTS_PER_PORT;
+    static constexpr int NP_SENSOR_COUNT = 2;
+    static constexpr int NP_POINTER_COUNT = 4;
+    static constexpr int NP_AUX_INTS_PER_PORT = 25;
+    static constexpr int NP_AUX_INTS = NP_PORTS * NP_AUX_INTS_PER_PORT;
     static constexpr int NP_KEY_SLOTS = 4;
-    static constexpr int NP_FRAME_INTS = 27 + NP_KEY_SLOTS * 2;
-    static constexpr int NP_AUX_OFFSET = 20;
+    static constexpr int NP_AUX_OFFSET = NP_INPUT_INTS;
+    static constexpr int NP_KEY_OFFSET = NP_AUX_OFFSET + NP_AUX_INTS;
+    static constexpr int NP_FRAME_INTS = NP_KEY_OFFSET + NP_KEY_SLOTS * 2;
     static constexpr int64_t NP_ROLLBACK_HISTORY = 40;
     static constexpr int64_t NP_MAX_FUTURE_INPUTS = 600;
     using NpFrame = std::array<int32_t, NP_FRAME_INTS>;
