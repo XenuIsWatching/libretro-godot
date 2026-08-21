@@ -183,6 +183,33 @@ public:
         /// proves the guests are talking over it.
         uint64_t delivered = 0;
         uint64_t sent = 0;
+
+        /// What this endpoint costs the bus, reported when it is torn down.
+        ///
+        /// Diagnostic only, and it MUST stay that way: `blocked_ns` is wall
+        /// clock, and a grant that depended on wall clock would make two peers
+        /// replaying identical inputs diverge the first time one of them hit a
+        /// slow frame. Nothing here is ever read by a decision.
+        ///
+        /// It exists because the grain was sized for a PAIR of machines and
+        /// Four Swords Adventures puts five on one bus, and nobody could say
+        /// what that actually cost without counting it.
+        uint64_t advance_calls = 0;
+        uint64_t advance_waits = 0;
+        uint64_t blocked_ns = 0;
+        /// The single LONGEST park. The average says nothing about audio: a
+        /// sink holding 100 ms of samples survives any number of short stalls
+        /// and dies on one long one, so this is the number that decides whether
+        /// the sound breaks up.
+        uint64_t worst_block_ns = 0;
+        /// WHEN the worst one happened, as milliseconds since this coordinator
+        /// first saw anybody, and how many stalls were long enough to empty a
+        /// 100 ms audio sink. One long stall while a machine loads is a
+        /// different fault from a hundred of them spread through play, and the
+        /// totals cannot tell those apart.
+        uint64_t worst_at_ms = 0;
+        uint64_t stalls_over_100ms = 0;
+        uint64_t stalls_over_20ms = 0;
     };
 
     struct Bus
@@ -231,6 +258,8 @@ private:
     /// never joining the bus at all. The room cannot see that and reports the
     /// cable as seated. Here it reads as a member marked "off".
     void LogBusesLocked(const char* why) const;
+    /// One line of what an endpoint cost, written as it is torn down.
+    void ReportCostLocked(const Endpoint& ep) const;
 
     /// How many endpoints exist, used to number them for the log.
     unsigned m_next_label = 0;

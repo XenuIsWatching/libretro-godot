@@ -538,6 +538,26 @@ void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
     m_cv.notify_all();
 }
 
+void LinkCoordinator::ReportCostLocked(const Endpoint& ep) const
+{
+    if (!ep.advance_calls)
+    {
+        return;
+    }
+    const double ms = static_cast<double>(ep.blocked_ns) / 1e6;
+    const double per_call_us =
+        static_cast<double>(ep.blocked_ns) / 1e3 / static_cast<double>(ep.advance_calls);
+    Log("m" + std::to_string(ep.id) + ":" + std::to_string(ep.port) + " worst stall " +
+        std::to_string(static_cast<double>(ep.worst_block_ns) / 1e6) + " ms at " +
+        std::to_string(ep.worst_at_ms) + " ms in | over 100ms: " +
+        std::to_string(ep.stalls_over_100ms) + " | over 20ms: " +
+        std::to_string(ep.stalls_over_20ms) + " | cost: " +
+        std::to_string(ep.advance_calls) + " advance calls, " +
+        std::to_string(ep.advance_waits) + " of them parked, " +
+        std::to_string(ms) + " ms blocked (" + std::to_string(per_call_us) +
+        " us per call)");
+}
+
 void LinkCoordinator::DropOwner(Wrapper* owner)
 {
     {
@@ -547,6 +567,7 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
             if (ep->owner == owner)
             {
                 ep->shutting_down = true;
+                ReportCostLocked(*ep);
                 CutLinksAt(*ep);
             }
         }
@@ -878,8 +899,22 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
     // core has not run an instruction since it called in, so where it is parked
     // IS where it is. And it is a published tick rather than a clock reading, so
     // two peers replaying the same session anchor at the same place.
+    // Returns whether this publish changed anything a PEER could act on, which
+    // is the only reason to wake anybody.
+    //
+    // It used to return "did I re-anchor", and every call notified regardless.
+    // Measured on Four Swords Adventures with four handhelds: 77 million
+    // advance calls produced 126 million condvar wakeups, and the GameCube's
+    // ports were woken 59 times per call they made. Nearly all of it was
+    // threads waking, recomputing a ceiling that had not moved, and going back
+    // to sleep -- while the emulation they were supposed to be doing waited.
+    // That is what the crackling was.
+    //
+    // A peer's ceiling is a function of this endpoint's SAFE horizon and
+    // nothing else, so a publish that does not move it cannot unblock anyone.
     auto anchor = [&](Endpoint* e) -> bool
     {
+        const uint64_t safe_before = e->safe_delta;
         const bool fresh = !e->published;
         if (fresh)
         {
@@ -895,14 +930,21 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
         const uint64_t sd = (safe_tick > e->origin) ? (safe_tick - e->origin) : 0;
         e->local_delta = std::max(e->local_delta, ld);
         e->safe_delta = std::max(e->safe_delta, sd);
-        return fresh;
+        // Re-anchoring counts too: it moves the origin the horizon is measured
+        // from, so a peer's ceiling can change even if the delta did not.
+        return fresh || e->safe_delta != safe_before;
     };
 
-    anchor(ep);
+    const bool moved = anchor(ep);
+    ++ep->advance_calls;
 
     // Publish before waiting: a peer parked on this machine's horizon cannot
-    // move until it has been told the horizon moved.
-    m_cv.notify_all();
+    // move until it has been told the horizon moved. Only when it MOVED, and
+    // only when there is somebody on this wire to hear it.
+    if (moved && ep->bus)
+    {
+        m_cv.notify_all();
+    }
 
     for (;;)
     {
@@ -930,22 +972,51 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
         // No timeout, on purpose. Giving up after a while would make the grant
         // depend on wall-clock time, and two peers replaying identical inputs
         // would then diverge the first time one of them hit a slow frame.
+        //
+        // The clock either side of the wait is READ ONLY, and only added to a
+        // counter. It decides nothing.
+        ++ep->advance_waits;
+        const auto parked_at = std::chrono::steady_clock::now();
+        const retro_link_handle_t waiting_on = handle;
         m_cv.wait(lock);
+        const uint64_t slept = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - parked_at).count());
 
         // The endpoint may have been torn down while this thread slept, so it
         // is looked up again rather than held across the wait. By ID: the memory
         // is freed on teardown and may since have been handed to a different
         // endpoint, so an address would quietly resolve to a live stranger.
-        ep = Resolve(handle);
+        ep = Resolve(waiting_on);
         if (!ep || !ep->attached || ep->shutting_down)
         {
             return RETRO_LINK_UNBOUNDED;
+        }
+        ep->blocked_ns += slept;
+        if (slept > 20000000ull)
+        {
+            ++ep->stalls_over_20ms;
+        }
+        if (slept > 100000000ull)
+        {
+            ++ep->stalls_over_100ms;
+        }
+        if (slept > ep->worst_block_ns)
+        {
+            ep->worst_block_ns = slept;
+            // Wall clock, and diagnostic only, like everything else here. The
+            // zero is the first time anybody called in, so this reads as "how
+            // far into the session".
+            static const auto session_start = std::chrono::steady_clock::now();
+            ep->worst_at_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - session_start).count());
         }
 
         // Put back on a bus while this thread slept, which is what a cable being
         // seated anywhere on this wire does. Say where this machine is, or the
         // rest of the party waits on a member that never speaks again.
-        if (anchor(ep))
+        if (anchor(ep) && ep->bus)
         {
             m_cv.notify_all();
         }
