@@ -857,20 +857,48 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
         safe_tick = local_tick;
     }
 
-    if (!ep->published)
+    // Anchoring, which happens on the way in AND again after every wake.
+    //
+    // Doing it only on the way in is what froze a room. Cabling a third machine
+    // in rebuilds the buses, and a rebuild takes every endpoint off its bus and
+    // back on, which clears `published` so the whole party re-aligns from that
+    // instant. But the two machines already playing are asleep INSIDE this
+    // function, and this is the only place that re-anchors. Their flag was
+    // cleared under them, their deltas went to zero while their origins stayed
+    // where they were, and the loop below then measured them against a ceiling
+    // pinned to an origin they had left minutes ago. Both sat there for ever.
+    //
+    // From the room it looked exactly like what the user reported: plug in the
+    // third handheld and the other two freeze, unplug it and they carry on.
+    // Nothing was wrong with the third machine, and turning IT off is what let
+    // the other two go, because that rebuilt the buses again and handed them
+    // back an unbounded grant.
+    //
+    // Re-anchoring at `local_tick` is right rather than merely expedient: this
+    // core has not run an instruction since it called in, so where it is parked
+    // IS where it is. And it is a published tick rather than a clock reading, so
+    // two peers replaying the same session anchor at the same place.
+    auto anchor = [&](Endpoint* e) -> bool
     {
-        // First publish since joining a bus anchors this machine's timeline.
-        // Peers are aligned from this instant, which is what plugging a cable
-        // into a console that is already running actually means.
-        ep->published = true;
-        ep->origin = local_tick;
-        ep->last_grant = local_tick;
-    }
+        const bool fresh = !e->published;
+        if (fresh)
+        {
+            e->published = true;
+            e->origin = local_tick;
+            e->local_delta = 0;
+            e->safe_delta = 0;
+            // Never backwards. A grant that retreated would be asking a machine
+            // to un-run instructions it has already run.
+            e->last_grant = std::max(e->last_grant, local_tick);
+        }
+        const uint64_t ld = (local_tick > e->origin) ? (local_tick - e->origin) : 0;
+        const uint64_t sd = (safe_tick > e->origin) ? (safe_tick - e->origin) : 0;
+        e->local_delta = std::max(e->local_delta, ld);
+        e->safe_delta = std::max(e->safe_delta, sd);
+        return fresh;
+    };
 
-    const uint64_t local_delta = (local_tick > ep->origin) ? (local_tick - ep->origin) : 0;
-    const uint64_t safe_delta = (safe_tick > ep->origin) ? (safe_tick - ep->origin) : 0;
-    ep->local_delta = std::max(ep->local_delta, local_delta);
-    ep->safe_delta = std::max(ep->safe_delta, safe_delta);
+    anchor(ep);
 
     // Publish before waiting: a peer parked on this machine's horizon cannot
     // move until it has been told the horizon moved.
@@ -912,6 +940,14 @@ uint64_t LinkCoordinator::Advance(retro_link_handle_t handle, uint64_t local_tic
         if (!ep || !ep->attached || ep->shutting_down)
         {
             return RETRO_LINK_UNBOUNDED;
+        }
+
+        // Put back on a bus while this thread slept, which is what a cable being
+        // seated anywhere on this wire does. Say where this machine is, or the
+        // rest of the party waits on a member that never speaks again.
+        if (anchor(ep))
+        {
+            m_cv.notify_all();
         }
     }
 }

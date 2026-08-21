@@ -489,8 +489,102 @@ static void TestSeating()
     c.DropOwner(purple);
 }
 
+// ── T11: a third machine joining must not freeze the two already playing ────
+//
+// The fault this pins froze a room. Two handhelds are cabled and playing; a
+// third is cabled onto the same wire and switched on; both of the first two
+// stop dead and the newcomer never starts. Unplug the third and the other two
+// carry on as if nothing happened.
+//
+// Nothing was wrong with the third machine. Cabling it rebuilds the buses, and
+// a rebuild takes every endpoint off its bus and back on, which clears
+// `published` so the whole party re-aligns from that instant. But the two that
+// were playing were asleep INSIDE Advance, and the only code that re-anchors an
+// endpoint ran on the way in. Their flag was cleared under them, their deltas
+// went to zero while their origins stayed minutes in the past, and they then
+// measured themselves against a ceiling pinned to where they had been when the
+// cable was first seated. They never moved again.
+static void TestJoiningDoesNotFreezeThePlayers()
+{
+    std::printf("T11 a third machine joins two that are already playing\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x9001);
+    Wrapper* b = Fake(0x9002);
+    Wrapper* d = Fake(0x9003);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
+    c.Connect(a, 0, b, 0);
+
+    // Both have been playing for a while, which is the whole point of the case:
+    // their origins are a long way back and a newcomer's is not. Generous
+    // horizons so nothing here rendezvouses; the blocking is arranged below, on
+    // its own thread, deliberately.
+    const uint64_t T = 4000 * GRAIN;
+    const uint64_t FAR = T + 300 * GRAIN;
+    SetCurrent(a);
+    c.Advance(H(a, 0), 0, FAR, 0);
+    SetCurrent(b);
+    c.Advance(H(b, 0), 0, FAR, 0);
+    c.Advance(H(b, 0), T, FAR, T);
+
+    // A asks to run past what B has promised, so it parks. An ordinary
+    // rendezvous, and the state the two machines are in when a player picks up
+    // a third lead.
+    std::atomic<bool> a_back{false};
+    std::thread ta([&] {
+        SetCurrent(a);
+        c.Advance(H(a, 0), T, T + GRAIN, T + 400 * GRAIN);
+        a_back = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(!a_back.load(), "one machine is parked at a rendezvous");
+
+    // The third handheld is cabled onto the same wire, the way the room does
+    // it: one ConnectGroup naming the whole party in seat order.
+    DoAttach(c, d, 0, "gba-sio-1", GBA_HZ);
+    Check(c.ConnectGroup({{a, 0}, {b, 0}, {d, 0}}), "the third machine is cabled in");
+
+    // And now everyone says where they are. The newcomer is at nought, because
+    // its core has only just been switched on, and that is exactly the gap that
+    // used to strand the other two.
+    std::atomic<bool> b_back{false};
+    std::thread tb([&] {
+        SetCurrent(b);
+        c.Advance(H(b, 0), T, T + 600 * GRAIN, T);
+        b_back = true;
+    });
+    std::atomic<bool> d_back{false};
+    std::thread td([&] {
+        SetCurrent(d);
+        c.Advance(H(d, 0), 0, 600 * GRAIN, 0);
+        d_back = true;
+    });
+
+    for (int i = 0; i < 400 && !(a_back.load() && b_back.load() && d_back.load()); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    const bool freed = a_back.load();
+    const bool others = b_back.load() && d_back.load();
+    // Dropped before the joins, so a machine that is still parked cannot wedge
+    // the test run itself. This is what switching a machine off does.
+    c.DropOwner(a);
+    c.DropOwner(b);
+    c.DropOwner(d);
+    ta.join();
+    tb.join();
+    td.join();
+
+    Check(freed, "the parked machine is released rather than left behind");
+    Check(others, "and the rest of the party gets its grant too");
+}
+
+
 int main()
 {
+    // Unbuffered, because this binary is run with its output on a pipe and a
+    // crash would otherwise take every line it had already printed with it,
+    // leaving a failure with no output at all to say where it got to.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     TestUnbounded();
     TestPairProgress();
     TestDeterminism();
@@ -501,6 +595,7 @@ int main()
     TestPullingOneEndFreesBoth();
     TestChain();
     TestSeating();
+    TestJoiningDoesNotFreezeThePlayers();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;
