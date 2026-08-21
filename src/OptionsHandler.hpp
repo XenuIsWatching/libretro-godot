@@ -16,6 +16,12 @@ struct OptionCategory
 
 struct OptionValue
 {
+    // Constructors, not a bare aggregate: Apple clang's libc++ construct_at
+    // lacks C++20 P0960 parenthesized aggregate initialization, so
+    // vector<OptionValue>::emplace_back(...) fails to compile on macOS unless
+    // a real constructor exists. Brace init keeps working either way.
+    OptionValue() = default;
+    OptionValue(const std::string &v, const std::string &l) : value(v), label(l) {}
     std::string value;
     std::string label;
 };
