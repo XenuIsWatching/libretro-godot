@@ -112,6 +112,13 @@ godot::PackedInt32Array Libretro::GetAudioVoiceIds()
     return m_wrapper->m_audio_handler->GetVoiceIds();
 }
 
+bool Libretro::IsAudioReady() const
+{
+    if (!m_wrapper || !m_wrapper->m_audio_handler)
+        return false;
+    return m_wrapper->m_audio_handler->IsReady();
+}
+
 void Libretro::SetAudioChannelMode(int mode)
 {
     if (!m_wrapper || !m_wrapper->m_audio_handler)
@@ -510,6 +517,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_static_method("Libretro", D_METHOD("SetNoContentPassesNull", "passes_null"), &Libretro::SetNoContentPassesNull);
     ClassDB::bind_method(D_METHOD("GetControllerInfo"), &Libretro::GetControllerInfo);
     ClassDB::bind_method(D_METHOD("GetAudioVoiceIds"), &Libretro::GetAudioVoiceIds);
+    ClassDB::bind_method(D_METHOD("IsAudioReady"), &Libretro::IsAudioReady);
     ClassDB::bind_method(D_METHOD("SetAudioChannelMode", "mode"), &Libretro::SetAudioChannelMode);
     ClassDB::bind_method(D_METHOD("SetControllerPortDevice", "port", "device"), &Libretro::SetControllerPortDevice);
     ClassDB::bind_method(D_METHOD("SetLightgunPosition", "port", "x", "y"), &Libretro::SetLightgunPosition);

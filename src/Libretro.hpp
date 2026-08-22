@@ -207,6 +207,16 @@ public:
     /// empty when it is running on the fallback AudioStreamPlayer3D.
     godot::PackedInt32Array GetAudioVoiceIds();
 
+    /// True once the audio sink is up and a backend has actually been chosen.
+    ///
+    /// Until then GetAudioVoiceIds() answers empty for a reason that cannot be
+    /// told apart from the fallback backend's permanent empty, because
+    /// StartContent only ENQUEUES the audio init -- Wrapper posts a
+    /// ThreadCommandInitAudio that the node drains in a later _process. A caller
+    /// binding on that empty is guessing, and how long it has to wait is the
+    /// core's load time: a real Dolphin took EIGHT SECONDS to answer.
+    bool IsAudioReady() const;
+
     /// 0 stereo, 1 the left channel to both speakers, 2 the right to both.
     void SetAudioChannelMode(int mode);
 
