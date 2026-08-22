@@ -531,6 +531,15 @@ public:
     bool m_core_identity_ready = false;
     /// Emulation thread only, so a plain bool: the measurement is one-shot.
     bool m_core_serialize_size_published = false;
+    /// Has THIS content run a frame? Not the same question as a non-zero
+    /// m_frame_counter, which is what used to gate the measurement: the counter
+    /// is reset nowhere, so a second StartContent on a reused Wrapper inherited
+    /// the previous run's thousands and let the measurement fire on the first
+    /// loop pass, before the new core had run anything. Dolphin answers
+    /// retro_serialize_size by walking every subsystem, so on a machine that has
+    /// not booted it dereferences a null SI device and takes the process with it.
+    /// Set beside every retro_run, cleared by ClearCoreIdentity.
+    bool m_core_ran_frame = false;
     void PublishCoreIdentity();
     void PublishCoreSerializeSize();
     void ClearCoreIdentity();

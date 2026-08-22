@@ -1500,6 +1500,7 @@ void Wrapper::ClearCoreIdentity()
     m_core_serialize_size = 0;
     m_core_identity_ready = false;
     m_core_serialize_size_published = false;
+    m_core_ran_frame = false;
 }
 
 godot::Dictionary Wrapper::GetCoreIdentity() const
@@ -1764,6 +1765,7 @@ bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask)
         ApplyNetplayInputs(inputs, mask);
         ApplyNetplayAux(inputs);
         m_core->retro_run();
+        m_core_ran_frame = true;
         if (m_np_crc_interval > 0 && (x + 1) % m_np_crc_interval == 0)
         {
             bool ok = false;
@@ -1932,6 +1934,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
     ApplyNetplayAux(inputs);
     m_audio_handler->CallAudioBufferStatusCallback();
     m_core->retro_run();
+    m_core_ran_frame = true;
     const int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
 
     if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
@@ -2709,8 +2712,13 @@ void Wrapper::EmulationThreadLoop()
         // Here rather than beside a retro_run because the rollback path
         // continues past both of those, and it would never be measured at all
         // in the one mode that takes a state every single frame.
-        if (!m_core_serialize_size_published
-            && m_frame_counter.load(std::memory_order_relaxed) > 0)
+        //
+        // Gated on THIS content having run a frame, not on a non-zero frame
+        // counter: nothing resets that counter, so a restart on a reused Wrapper
+        // carried the previous run's value in and fired the measurement before
+        // the new core had run anything -- which is a segfault in Dolphin, not a
+        // wrong number. See m_core_ran_frame.
+        if (!m_core_serialize_size_published && m_core_ran_frame)
             PublishCoreSerializeSize();
 
         // Battery save: dirty-check flush roughly every 10 seconds of frames.
@@ -2778,6 +2786,7 @@ void Wrapper::EmulationThreadLoop()
             m_audio_handler->CallAudioBufferStatusCallback();
 
             m_core->retro_run();
+            m_core_ran_frame = true;
             m_frame_counter.fetch_add(1, std::memory_order_relaxed);
 
             // Achievements. Emulation thread, strictly after the frame the core
@@ -2839,6 +2848,7 @@ void Wrapper::EmulationThreadLoop()
 
         m_audio_handler->CallAudioBufferStatusCallback();
         m_core->retro_run();
+        m_core_ran_frame = true;
         int64_t frame_done = m_frame_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         accumulator -= frame_duration_ms;
 
