@@ -377,7 +377,12 @@ public:
     /// CRC32 of the core's system RAM, emitted as netplay_crc(frame, crc)
     /// every m_np_crc_interval frames while in netplay mode (desync detection).
     void EmitNetplayCrc(int64_t frame);
+    /// Whichever oracle this core is set to. See m_np_crc_from_state.
+    uint32_t ComputeNetplayCrc(bool& ok);
     uint32_t ComputeRamCrc(bool& ok) const;
+    /// CRC32 of a savestate taken right now, for cores whose RAM cannot be read
+    /// coherently from this thread. See m_np_crc_from_state.
+    uint32_t StateCrc(bool& ok);
 
     // Emulation-thread internals (rollback engine).
     void NetplayRollbackIteration(double frame_duration_ms, double& accumulator);
@@ -539,6 +544,22 @@ public:
     std::condition_variable m_np_cv;
     std::map<int64_t, NpFrame> m_np_inputs;
     int64_t m_np_crc_interval = 60;
+    /// Take the desync CRC from a SAVESTATE rather than from live RAM.
+    ///
+    /// Reading RAM straight off the pointer assumes the core is quiescent when
+    /// retro_run returns, and a core that emulates its CPU on a thread of its
+    /// own is not: Dolphin's retro_run comes back on a GPU field boundary while
+    /// its CPU thread keeps writing, so hashing 24 MB races that thread and two
+    /// instances disagree even when the emulation is identical. The hash is
+    /// then not an oracle, it is a coin toss with a good reputation.
+    ///
+    /// A savestate is the one snapshot libretro offers that such a core has to
+    /// make coherent -- Dolphin marshals retro_serialize onto its CPU thread and
+    /// waits for it -- so two of them can be compared. It costs far more than a
+    /// RAM hash, which is what m_np_crc_interval is for.
+    bool m_np_crc_from_state = false;
+    /// Reused between checkpoints so a 92 MB state is not reallocated each time.
+    std::vector<uint8_t> m_np_crc_state_buffer;
 
     /// How often a netplay RAM CRC is emitted, in frames. 60 for a session:
     /// often enough to catch a desync, rare enough that hashing the whole of
@@ -547,6 +568,12 @@ public:
     /// it diverged.
     void SetNetplayCrcInterval(int64_t frames) {
         m_np_crc_interval = frames > 0 ? frames : 1;
+    }
+
+    /// Choose which snapshot the desync CRC is taken from. See
+    /// m_np_crc_from_state for why a core can need the expensive one.
+    void SetNetplayCrcFromState(bool from_state) {
+        m_np_crc_from_state = from_state;
     }
 
     // Netplay-scheduled disc ops (eject / replace), applied on the emulation

@@ -1347,6 +1347,29 @@ static uint32_t Crc32(const uint8_t* data, size_t size)
     return Crc32Update(0xFFFFFFFFu, data, size) ^ 0xFFFFFFFFu;
 }
 
+uint32_t Wrapper::ComputeNetplayCrc(bool& ok)
+{
+    return m_np_crc_from_state ? StateCrc(ok) : ComputeRamCrc(ok);
+}
+
+uint32_t Wrapper::StateCrc(bool& ok)
+{
+    ok = false;
+    if (!m_core || !m_core->retro_serialize || !m_core->retro_serialize_size)
+        return 0;
+    // Asked each time rather than cached: a core may grow its state as a game
+    // loads more, and a stale size would hash a truncated one.
+    const size_t size = m_core->retro_serialize_size();
+    if (size == 0)
+        return 0;
+    if (m_np_crc_state_buffer.size() < size)
+        m_np_crc_state_buffer.resize(size);
+    if (!m_core->retro_serialize(m_np_crc_state_buffer.data(), size))
+        return 0;
+    ok = true;
+    return Crc32(m_np_crc_state_buffer.data(), size);
+}
+
 uint32_t Wrapper::ComputeRamCrc(bool& ok) const
 {
     ok = false;
@@ -1495,7 +1518,7 @@ godot::Dictionary Wrapper::GetCoreIdentity() const
 void Wrapper::EmitNetplayCrc(int64_t frame)
 {
     bool ok = false;
-    uint32_t crc = ComputeRamCrc(ok);
+    uint32_t crc = ComputeNetplayCrc(ok);
     if (!ok)
         return;
     godot::Array args;
@@ -1744,7 +1767,7 @@ bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask)
         if (m_np_crc_interval > 0 && (x + 1) % m_np_crc_interval == 0)
         {
             bool ok = false;
-            uint32_t crc = ComputeRamCrc(ok);
+            uint32_t crc = ComputeNetplayCrc(ok);
             if (ok)
                 m_np_crc_pending[x + 1] = crc;
         }
@@ -1914,7 +1937,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
     if (m_np_crc_interval > 0 && frame_done % m_np_crc_interval == 0)
     {
         bool ok = false;
-        uint32_t crc = ComputeRamCrc(ok);
+        uint32_t crc = ComputeNetplayCrc(ok);
         if (ok)
             m_np_crc_pending[frame_done] = crc;
     }

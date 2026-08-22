@@ -301,6 +301,12 @@ void Libretro::SetNetplayCrcInterval(int64_t frames)
         m_wrapper->SetNetplayCrcInterval(frames);
 }
 
+void Libretro::SetNetplayCrcFromState(bool from_state)
+{
+    if (m_wrapper)
+        m_wrapper->SetNetplayCrcFromState(from_state);
+}
+
 int64_t Libretro::GetFrameCount() const
 {
     return m_wrapper->GetFrameCount();
@@ -527,6 +533,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
     ClassDB::bind_method(D_METHOD("SnapshotMappedRam"), &Libretro::SnapshotMappedRam);
     ClassDB::bind_method(D_METHOD("SetNetplayCrcInterval", "frames"), &Libretro::SetNetplayCrcInterval);
+    ClassDB::bind_method(D_METHOD("SetNetplayCrcFromState", "from_state"), &Libretro::SetNetplayCrcFromState);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
     ClassDB::bind_method(D_METHOD("GetCoreIdentity"), &Libretro::GetCoreIdentity);
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);

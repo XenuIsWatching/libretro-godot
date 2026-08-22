@@ -332,6 +332,9 @@ public:
 
     /// How often a netplay RAM CRC is emitted, in frames. See Wrapper.
     void SetNetplayCrcInterval(int64_t frames);
+    /// Take the desync CRC from a savestate rather than live RAM, for a core
+    /// whose RAM cannot be read coherently between frames.
+    void SetNetplayCrcFromState(bool from_state);
 
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;
