@@ -327,6 +327,12 @@ public:
     /// op 0 = eject; op 1 = replace at `index` with `path` + close tray.
     void ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const godot::String& path);
 
+    /// Diagnostic: the bytes the netplay CRC hashes, plus region boundaries.
+    godot::Dictionary SnapshotMappedRam() const;
+
+    /// How often a netplay RAM CRC is emitted, in frames. See Wrapper.
+    void SetNetplayCrcInterval(int64_t frames);
+
     /// Frames executed since content start (or since the last state load).
     int64_t GetFrameCount() const;
 

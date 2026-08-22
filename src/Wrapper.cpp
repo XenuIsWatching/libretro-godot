@@ -1417,6 +1417,36 @@ void Wrapper::ApplyPendingCoreOptions()
     }
 }
 
+godot::Dictionary Wrapper::SnapshotMappedRam() const
+{
+    godot::Dictionary out;
+    godot::PackedByteArray data;
+    godot::Array regions;
+    int64_t offset = 0;
+    for (const retro_memory_descriptor& descriptor : m_memory_descriptors)
+    {
+        if (descriptor.ptr == nullptr || descriptor.len == 0)
+            continue;
+        if (descriptor.flags & RETRO_MEMDESC_CONST)
+            continue;
+        const uint8_t* base = static_cast<const uint8_t*>(descriptor.ptr) + descriptor.offset;
+        const int64_t len = static_cast<int64_t>(descriptor.len);
+        const int64_t at = data.size();
+        data.resize(at + len);
+        std::memcpy(data.ptrw() + at, base, static_cast<size_t>(len));
+        godot::Dictionary region;
+        region["offset"] = at;
+        region["len"] = len;
+        region["start"] = static_cast<int64_t>(descriptor.start);
+        region["addrspace"] = descriptor.addrspace ? godot::String(descriptor.addrspace) : godot::String();
+        regions.append(region);
+        offset += len;
+    }
+    out["data"] = data;
+    out["regions"] = regions;
+    return out;
+}
+
 void Wrapper::PublishCoreIdentity()
 {
     if (!m_core)

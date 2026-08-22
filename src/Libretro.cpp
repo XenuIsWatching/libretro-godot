@@ -290,6 +290,17 @@ void Libretro::ScheduleDiscOp(int64_t frame, int64_t op, int64_t index, const go
         static_cast<uint32_t>(index < 0 ? 0 : index), path);
 }
 
+Dictionary Libretro::SnapshotMappedRam() const
+{
+    return m_wrapper ? m_wrapper->SnapshotMappedRam() : Dictionary();
+}
+
+void Libretro::SetNetplayCrcInterval(int64_t frames)
+{
+    if (m_wrapper)
+        m_wrapper->SetNetplayCrcInterval(frames);
+}
+
 int64_t Libretro::GetFrameCount() const
 {
     return m_wrapper->GetFrameCount();
@@ -514,6 +525,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("TakeNetplayLocalRecords"), &Libretro::TakeNetplayLocalRecords);
     ClassDB::bind_method(D_METHOD("RequestSaveState"), &Libretro::RequestSaveState);
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
+    ClassDB::bind_method(D_METHOD("SnapshotMappedRam"), &Libretro::SnapshotMappedRam);
+    ClassDB::bind_method(D_METHOD("SetNetplayCrcInterval", "frames"), &Libretro::SetNetplayCrcInterval);
     ClassDB::bind_method(D_METHOD("GetFrameCount"), &Libretro::GetFrameCount);
     ClassDB::bind_method(D_METHOD("GetCoreIdentity"), &Libretro::GetCoreIdentity);
     ClassDB::bind_method(D_METHOD("GetNetplayRollbackCount"), &Libretro::GetNetplayRollbackCount);

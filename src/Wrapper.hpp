@@ -367,6 +367,13 @@ public:
     /// cores that do not answer RETRO_MEMORY_SYSTEM_RAM at all. Sets `ok` false
     /// when the core published no usable map either.
     uint32_t MappedRamCrc(bool& ok) const;
+
+    /// The exact bytes MappedRamCrc hashes, with the region boundaries, so a
+    /// divergence can be located instead of merely detected. A CRC says two
+    /// runs differ; this says WHERE, which for a savestate fault is the whole
+    /// question. Diagnostic only - it reads core memory from the calling
+    /// thread, so take it while the core is parked at a netplay gate.
+    godot::Dictionary SnapshotMappedRam() const;
     /// CRC32 of the core's system RAM, emitted as netplay_crc(frame, crc)
     /// every m_np_crc_interval frames while in netplay mode (desync detection).
     void EmitNetplayCrc(int64_t frame);
@@ -532,6 +539,16 @@ public:
     std::condition_variable m_np_cv;
     std::map<int64_t, NpFrame> m_np_inputs;
     int64_t m_np_crc_interval = 60;
+
+    /// How often a netplay RAM CRC is emitted, in frames. 60 for a session:
+    /// often enough to catch a desync, rare enough that hashing the whole of
+    /// RAM is not a per-frame cost. A vetting run sets it to 1 to find the
+    /// FIRST frame that diverges, which is a different question from whether
+    /// it diverged.
+    void SetNetplayCrcInterval(int64_t frames) {
+        m_np_crc_interval = frames > 0 ? frames : 1;
+    }
+
     // Netplay-scheduled disc ops (eject / replace), applied on the emulation
     // thread right before running their frame. Guarded by m_np_mutex.
     // A tray can be opened and closed before the same future boundary. Keep
