@@ -188,6 +188,12 @@ public:
     /// stalling. Call after SetNetplayMode, before StartContent.
     void SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahead);
 
+    /// Change which ports are locally sampled at an agreed future frame. This
+    /// is how a fixed controller receiver can be unplugged or reassigned while
+    /// rollback remains active without changing ownership at different times
+    /// on different peers.
+    bool ScheduleNetplayLocalMask(int64_t frame, uint32_t local_mask);
+
     /// Drain the per-frame local-input records the emulation thread produced:
     /// flat groups of 7 ints {frame, port, buttons, alx, aly, arx, ary}. These
     /// are the authoritative "what this peer pressed on frame N" values that
@@ -368,7 +374,9 @@ public:
 
     // Emulation-thread internals (rollback engine).
     void NetplayRollbackIteration(double frame_duration_ms, double& accumulator);
-    bool NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask);
+    bool NetplayRollbackReplay(int64_t to_frame, uint32_t mask);
+    uint32_t NetplayLocalMaskForFrameLocked(int64_t frame) const;
+    uint32_t ApplyScheduledNetplayLocalMask(int64_t frame);
     bool SaveRollbackState(int64_t frame);
     void FailNetplayRollback(const std::string& reason);
     bool IsNetplayPortManaged(uint32_t port) const;
@@ -540,6 +548,11 @@ public:
     // Rollback state. Everything below m_np_mutex-guarded unless noted.
     std::atomic<bool> m_np_rollback = false;
     std::atomic<uint32_t> m_np_local_mask = 0;
+    uint32_t m_np_initial_local_mask = 0;
+    /// Frame -> complete local ownership mask from that frame onward. Kept for
+    /// the rollback history so a replay crossing a handoff uses the owner that
+    /// was authoritative on each original frame.
+    std::map<int64_t, uint32_t> m_np_local_mask_schedule;
     std::atomic<int64_t> m_np_rollback_count = 0;   // rewind+replay corrections
     int m_np_max_ahead = 8;
     NpFrame m_np_live_local{};              // live local inputs (main thread writes)

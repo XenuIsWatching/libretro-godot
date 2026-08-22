@@ -139,6 +139,13 @@ public:
     /// LinkConnect, for when a chain of cables and junctions has joined three
     /// or four machines rather than two.
     bool LinkConnectGroup(const godot::Array& others, const godot::PackedInt32Array& ports);
+    /// Capture/restore the deterministic state outside the linked cores'
+    /// savestates. Used when a netplay peer joins a running linked session.
+    godot::Array LinkCaptureGroup(const godot::Array& others,
+                                  const godot::PackedInt32Array& ports);
+    bool LinkRestoreGroup(const godot::Array& others,
+                          const godot::PackedInt32Array& ports,
+                          const godot::Array& states);
     /// How many machines are attached to `port`'s bus, this one included.
     ///
     /// 0 when nothing is cabled to it, or when the core has not attached its
@@ -271,6 +278,7 @@ public:
     /// (local_mask) apply live with zero delay, remote ports are predicted and
     /// corrected via invisible rewind+replay. max_ahead caps speculation.
     void SetNetplayRollback(bool enabled, int local_mask, int max_ahead);
+    bool ScheduleNetplayLocalMask(int64_t frame, int local_mask);
 
     /// Drain per-frame local-input records: flat groups of 7 ints
     /// {frame, port, buttons, alx, aly, arx, ary}: what this peer actually

@@ -534,6 +534,96 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
     return true;
 }
 
+bool LinkCoordinator::CaptureGroup(
+    const std::vector<std::pair<Wrapper*, unsigned>>& ports,
+    std::vector<EndpointState>& out)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    out.clear();
+    if (ports.size() < 2)
+        return false;
+
+    Bus* bus = nullptr;
+    std::vector<Endpoint*> endpoints;
+    endpoints.reserve(ports.size());
+    for (const auto& p : ports)
+    {
+        Endpoint* ep = Find(p.first, p.second);
+        if (!ep || !ep->attached || !ep->bus)
+            return false;
+        if (!bus)
+            bus = ep->bus;
+        else if (ep->bus != bus)
+            return false;
+        endpoints.push_back(ep);
+    }
+    if (!bus || bus->members.size() != endpoints.size())
+        return false;
+
+    out.reserve(endpoints.size());
+    for (Endpoint* ep : endpoints)
+    {
+        EndpointState state;
+        state.published = ep->published;
+        state.origin = ep->origin;
+        state.local_delta = ep->local_delta;
+        state.safe_delta = ep->safe_delta;
+        state.last_grant = ep->last_grant;
+        state.inbox.assign(ep->inbox.begin(), ep->inbox.end());
+        out.push_back(std::move(state));
+    }
+    return true;
+}
+
+bool LinkCoordinator::RestoreGroup(
+    const std::vector<std::pair<Wrapper*, unsigned>>& ports,
+    const std::vector<EndpointState>& states)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (ports.size() < 2 || ports.size() != states.size())
+        return false;
+
+    Bus* bus = nullptr;
+    std::vector<Endpoint*> endpoints;
+    endpoints.reserve(ports.size());
+    for (const auto& p : ports)
+    {
+        Endpoint* ep = Find(p.first, p.second);
+        if (!ep || !ep->attached || !ep->bus)
+            return false;
+        if (!bus)
+            bus = ep->bus;
+        else if (ep->bus != bus)
+            return false;
+        endpoints.push_back(ep);
+    }
+    if (!bus || bus->members.size() != endpoints.size())
+        return false;
+
+    for (size_t i = 0; i < endpoints.size(); ++i)
+    {
+        for (const Message& message : states[i].inbox)
+        {
+            if (message.from >= endpoints.size() || message.data.size() > MAX_PAYLOAD)
+                return false;
+        }
+    }
+
+    for (size_t i = 0; i < endpoints.size(); ++i)
+    {
+        Endpoint& ep = *endpoints[i];
+        const EndpointState& state = states[i];
+        ep.published = state.published;
+        ep.origin = state.origin;
+        ep.local_delta = state.local_delta;
+        ep.safe_delta = state.safe_delta;
+        ep.last_grant = state.last_grant;
+        ep.inbox.assign(state.inbox.begin(), state.inbox.end());
+    }
+    m_cv.notify_all();
+    return true;
+}
+
 void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
 {
     {

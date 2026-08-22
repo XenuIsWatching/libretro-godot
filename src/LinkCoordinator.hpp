@@ -119,6 +119,24 @@ public:
         std::vector<uint8_t> data;
     };
 
+    /// Deterministic bus state that lives outside a core savestate. A linked
+    /// netplay late join copies one of these per endpoint after every core is
+    /// paused at the same frame boundary.
+    struct EndpointState
+    {
+        bool published = false;
+        uint64_t origin = 0;
+        uint64_t local_delta = 0;
+        uint64_t safe_delta = 0;
+        uint64_t last_grant = 0;
+        std::vector<Message> inbox;
+    };
+
+    bool CaptureGroup(const std::vector<std::pair<Wrapper*, unsigned>>& ports,
+                      std::vector<EndpointState>& out);
+    bool RestoreGroup(const std::vector<std::pair<Wrapper*, unsigned>>& ports,
+                      const std::vector<EndpointState>& states);
+
     struct Bus;
 
     struct Endpoint

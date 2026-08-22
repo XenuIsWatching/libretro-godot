@@ -626,6 +626,65 @@ static void TestProtocolMismatchIsNonDestructive()
     c.DropOwner(alien);
 }
 
+// ── T14: linked late join carries the state outside core savestates ─────────
+static void TestSnapshotRoundTrip()
+{
+    std::printf("T14 a link-bus snapshot restores clocks and queued messages\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0xC001);
+    Wrapper* b = Fake(0xC002);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
+    c.ConnectGroup({{a, 0}, {b, 0}});
+    SetCurrent(a); c.Advance(H(a, 0), 100, 300, 0);
+    SetCurrent(b); c.Advance(H(b, 0), 200, 400, 0);
+    const uint8_t ab[] = {1, 2, 3};
+    const uint8_t ba[] = {9, 8};
+    c.Send(H(a, 0), 250, 1, ab, sizeof ab);
+    c.Send(H(b, 0), 350, 0, ba, sizeof ba);
+
+    std::vector<LinkCoordinator::EndpointState> saved;
+    Check(c.CaptureGroup({{a, 0}, {b, 0}}, saved), "the live bus can be captured");
+    Check(saved.size() == 2 && saved[0].inbox.size() == 1 && saved[1].inbox.size() == 1,
+          "both in-flight directions are present");
+    c.DropOwner(a);
+    c.DropOwner(b);
+
+    Wrapper* joined_a = Fake(0xC101);
+    Wrapper* joined_b = Fake(0xC102);
+    DoAttach(c, joined_a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, joined_b, 0, "gba-sio-1", GBA_HZ);
+    c.ConnectGroup({{joined_a, 0}, {joined_b, 0}});
+    Check(c.RestoreGroup({{joined_a, 0}, {joined_b, 0}}, saved),
+          "the snapshot restores onto replacement cores");
+
+    std::vector<LinkCoordinator::EndpointState> restored;
+    Check(c.CaptureGroup({{joined_a, 0}, {joined_b, 0}}, restored),
+          "the restored bus can be inspected");
+    Check(restored.size() == saved.size() &&
+          restored[0].origin == saved[0].origin &&
+          restored[0].local_delta == saved[0].local_delta &&
+          restored[0].safe_delta == saved[0].safe_delta &&
+          restored[0].last_grant == saved[0].last_grant &&
+          restored[1].origin == saved[1].origin &&
+          restored[1].local_delta == saved[1].local_delta &&
+          restored[1].safe_delta == saved[1].safe_delta &&
+          restored[1].last_grant == saved[1].last_grant,
+          "every deterministic clock field round-trips");
+
+    uint8_t buf[8] = {}; size_t len = sizeof buf; uint64_t tick = 0; unsigned from = 99;
+    Check(c.Recv(H(joined_b, 0), &tick, &from, buf, &len) && tick == 350 && from == 0 &&
+          len == sizeof ab && std::memcmp(buf, ab, sizeof ab) == 0,
+          "an in-flight message to the second core survives");
+    len = sizeof buf; tick = 0; from = 99;
+    Check(c.Recv(H(joined_a, 0), &tick, &from, buf, &len) && tick == 250 && from == 1 &&
+          len == sizeof ba && std::memcmp(buf, ba, sizeof ba) == 0,
+          "and so does the reverse direction");
+
+    c.DropOwner(joined_a);
+    c.DropOwner(joined_b);
+}
+
 
 int main()
 {
@@ -646,6 +705,7 @@ int main()
     TestJoiningDoesNotFreezeThePlayers();
     TestLateAttachProtocolMismatch();
     TestProtocolMismatchIsNonDestructive();
+    TestSnapshotRoundTrip();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

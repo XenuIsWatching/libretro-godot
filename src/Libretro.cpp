@@ -219,6 +219,11 @@ void Libretro::SetNetplayRollback(bool enabled, int local_mask, int max_ahead)
     m_wrapper->SetNetplayRollback(enabled, static_cast<uint32_t>(local_mask), max_ahead);
 }
 
+bool Libretro::ScheduleNetplayLocalMask(int64_t frame, int local_mask)
+{
+    return m_wrapper->ScheduleNetplayLocalMask(frame, static_cast<uint32_t>(local_mask));
+}
+
 godot::PackedInt32Array Libretro::TakeNetplayLocalRecords()
 {
     return m_wrapper->TakeNetplayLocalRecords();
@@ -473,6 +478,8 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("LinkConnect", "other", "port", "other_port"), &Libretro::LinkConnect, DEFVAL(0u), DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkConnectGroup", "others", "ports"), &Libretro::LinkConnectGroup);
+    ClassDB::bind_method(D_METHOD("LinkCaptureGroup", "others", "ports"), &Libretro::LinkCaptureGroup);
+    ClassDB::bind_method(D_METHOD("LinkRestoreGroup", "others", "ports", "states"), &Libretro::LinkRestoreGroup);
     ClassDB::bind_method(D_METHOD("LinkPeerCount", "port"), &Libretro::LinkPeerCount, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkTraffic", "port"), &Libretro::LinkTraffic, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkSent", "port"), &Libretro::LinkSent, DEFVAL(0u));
@@ -503,6 +510,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetNetplayMode", "enabled", "port_mask", "start_frame"), &Libretro::SetNetplayMode);
     ClassDB::bind_method(D_METHOD("PostNetplayInputs", "frame", "inputs"), &Libretro::PostNetplayInputs);
     ClassDB::bind_method(D_METHOD("SetNetplayRollback", "enabled", "local_mask", "max_ahead"), &Libretro::SetNetplayRollback);
+    ClassDB::bind_method(D_METHOD("ScheduleNetplayLocalMask", "frame", "local_mask"), &Libretro::ScheduleNetplayLocalMask);
     ClassDB::bind_method(D_METHOD("TakeNetplayLocalRecords"), &Libretro::TakeNetplayLocalRecords);
     ClassDB::bind_method(D_METHOD("RequestSaveState"), &Libretro::RequestSaveState);
     ClassDB::bind_method(D_METHOD("RequestLoadState", "data", "frame"), &Libretro::RequestLoadState);
@@ -629,6 +637,111 @@ bool Libretro::LinkConnectGroup(const godot::Array& others, const godot::PackedI
     }
 
     return LinkCoordinator::Get().ConnectGroup(group);
+}
+
+godot::Array Libretro::LinkCaptureGroup(const godot::Array& others,
+                                        const godot::PackedInt32Array& ports)
+{
+    godot::Array result;
+    if (!m_wrapper || ports.size() != others.size() + 1)
+        return result;
+
+    std::vector<std::pair<Wrapper*, unsigned>> group;
+    group.emplace_back(m_wrapper.get(), static_cast<unsigned>(ports[0]));
+    for (int i = 0; i < others.size(); ++i)
+    {
+        Libretro* other = godot::Object::cast_to<Libretro>(others[i]);
+        if (!other || other == this || !other->m_wrapper)
+            return godot::Array();
+        group.emplace_back(other->m_wrapper.get(), static_cast<unsigned>(ports[i + 1]));
+    }
+
+    std::vector<LinkCoordinator::EndpointState> states;
+    if (!LinkCoordinator::Get().CaptureGroup(group, states))
+        return result;
+    for (const auto& state : states)
+    {
+        godot::Dictionary encoded;
+        encoded["published"] = state.published;
+        encoded["origin"] = static_cast<int64_t>(state.origin);
+        encoded["local_delta"] = static_cast<int64_t>(state.local_delta);
+        encoded["safe_delta"] = static_cast<int64_t>(state.safe_delta);
+        encoded["last_grant"] = static_cast<int64_t>(state.last_grant);
+        godot::Array inbox;
+        for (const auto& message : state.inbox)
+        {
+            godot::Dictionary item;
+            item["tick"] = static_cast<int64_t>(message.tick);
+            item["from"] = static_cast<int64_t>(message.from);
+            godot::PackedByteArray data;
+            data.resize(static_cast<int64_t>(message.data.size()));
+            if (!message.data.empty())
+                std::copy(message.data.begin(), message.data.end(), data.ptrw());
+            item["data"] = data;
+            inbox.append(item);
+        }
+        encoded["inbox"] = inbox;
+        result.append(encoded);
+    }
+    return result;
+}
+
+bool Libretro::LinkRestoreGroup(const godot::Array& others,
+                                const godot::PackedInt32Array& ports,
+                                const godot::Array& encoded_states)
+{
+    if (!m_wrapper || ports.size() != others.size() + 1 ||
+        encoded_states.size() != ports.size())
+        return false;
+
+    std::vector<std::pair<Wrapper*, unsigned>> group;
+    group.emplace_back(m_wrapper.get(), static_cast<unsigned>(ports[0]));
+    for (int i = 0; i < others.size(); ++i)
+    {
+        Libretro* other = godot::Object::cast_to<Libretro>(others[i]);
+        if (!other || other == this || !other->m_wrapper)
+            return false;
+        group.emplace_back(other->m_wrapper.get(), static_cast<unsigned>(ports[i + 1]));
+    }
+
+    std::vector<LinkCoordinator::EndpointState> states;
+    states.reserve(static_cast<size_t>(encoded_states.size()));
+    for (int i = 0; i < encoded_states.size(); ++i)
+    {
+        godot::Dictionary encoded = encoded_states[i];
+        const int64_t origin = encoded.get("origin", -1);
+        const int64_t local_delta = encoded.get("local_delta", -1);
+        const int64_t safe_delta = encoded.get("safe_delta", -1);
+        const int64_t last_grant = encoded.get("last_grant", -1);
+        if (origin < 0 || local_delta < 0 || safe_delta < 0 || last_grant < 0)
+            return false;
+        LinkCoordinator::EndpointState state;
+        state.published = encoded.get("published", false);
+        state.origin = static_cast<uint64_t>(origin);
+        state.local_delta = static_cast<uint64_t>(local_delta);
+        state.safe_delta = static_cast<uint64_t>(safe_delta);
+        state.last_grant = static_cast<uint64_t>(last_grant);
+        godot::Array inbox = encoded.get("inbox", godot::Array());
+        if (inbox.size() > 65536)
+            return false;
+        for (int j = 0; j < inbox.size(); ++j)
+        {
+            godot::Dictionary item = inbox[j];
+            const int64_t tick = item.get("tick", -1);
+            const int64_t from = item.get("from", -1);
+            godot::PackedByteArray data = item.get("data", godot::PackedByteArray());
+            if (tick < 0 || from < 0 || from >= encoded_states.size() ||
+                data.size() > static_cast<int64_t>(LinkCoordinator::MAX_PAYLOAD))
+                return false;
+            LinkCoordinator::Message message;
+            message.tick = static_cast<uint64_t>(tick);
+            message.from = static_cast<unsigned>(from);
+            message.data.assign(data.ptr(), data.ptr() + data.size());
+            state.inbox.push_back(std::move(message));
+        }
+        states.push_back(std::move(state));
+    }
+    return LinkCoordinator::Get().RestoreGroup(group, states);
 }
 
 void Libretro::ScheduleLinkOp(int64_t frame, int64_t op, const godot::Array& others,

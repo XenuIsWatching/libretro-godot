@@ -804,6 +804,7 @@ void Wrapper::SetNetplayMode(bool enabled, uint32_t port_mask, int64_t start_fra
         m_np_inputs.clear();
         m_disc_schedule.clear();
         m_reset_schedule.clear();
+        m_np_local_mask_schedule.clear();
         // Link operations retain Wrapper pointers until they land.  They must
         // not survive a stopped session or reach a later core invocation.
         m_link_schedule.clear();
@@ -858,6 +859,8 @@ void Wrapper::SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahea
         std::lock_guard<std::mutex> lock(m_np_mutex);
         m_np_live_local.fill(0);
         m_np_local_records.clear();
+        m_np_initial_local_mask = local_mask;
+        m_np_local_mask_schedule.clear();
     }
     m_np_local_mask.store(local_mask, std::memory_order_relaxed);
     m_np_max_ahead = std::clamp(max_ahead, 2, 24);
@@ -866,6 +869,22 @@ void Wrapper::SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahea
     Log("Netplay rollback " + std::string(enabled ? "ON" : "OFF") +
         " local_mask=" + std::to_string(local_mask) +
         " max_ahead=" + std::to_string(max_ahead));
+}
+
+bool Wrapper::ScheduleNetplayLocalMask(int64_t frame, uint32_t local_mask)
+{
+    if (!m_np_rollback.load(std::memory_order_acquire))
+        return false;
+    {
+        std::lock_guard<std::mutex> lock(m_np_mutex);
+        if (frame < m_frame_counter.load(std::memory_order_relaxed))
+            return false;
+        m_np_local_mask_schedule[frame] = local_mask;
+    }
+    m_np_cv.notify_all();
+    Log("Netplay local ownership mask=" + std::to_string(local_mask) +
+        " @frame " + std::to_string(frame));
+    return true;
 }
 
 godot::PackedInt32Array Wrapper::TakeNetplayLocalRecords()
@@ -1575,10 +1594,33 @@ void Wrapper::FlushNetplayCrcs()
     }
 }
 
+uint32_t Wrapper::NetplayLocalMaskForFrameLocked(int64_t frame) const
+{
+    auto next = m_np_local_mask_schedule.upper_bound(frame);
+    if (next == m_np_local_mask_schedule.begin())
+        return m_np_initial_local_mask;
+    return std::prev(next)->second;
+}
+
+uint32_t Wrapper::ApplyScheduledNetplayLocalMask(int64_t frame)
+{
+    std::lock_guard<std::mutex> lock(m_np_mutex);
+    const uint32_t next = NetplayLocalMaskForFrameLocked(frame);
+    const uint32_t previous = m_np_local_mask.exchange(next, std::memory_order_acq_rel);
+    const uint32_t changed = previous ^ next;
+    for (uint32_t port = 0; port < NP_PORTS; ++port)
+    {
+        if (changed & (1u << port))
+            std::fill_n(m_np_live_local.data() + port * NP_INPUT_INTS_PER_PORT,
+                        NP_INPUT_INTS_PER_PORT, 0);
+    }
+    return next;
+}
+
 /// Rewind to `to_frame` and silently replay up to the current frame with
 /// corrected inputs. Audio from replayed frames is dropped (it already played
 /// from the mispredicted run); video is skipped except for the final frame.
-bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t local_mask)
+bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask)
 {
     auto state_it = std::find_if(m_np_states.begin(), m_np_states.end(),
         [&](const auto& s) { return s.frame == to_frame; });
@@ -1606,6 +1648,7 @@ bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t lo
         NpFrame inputs{};
         {
             std::lock_guard<std::mutex> lock(m_np_mutex);
+            const uint32_t local_mask = NetplayLocalMaskForFrameLocked(x) & mask;
             auto confirmed = m_np_inputs.find(x);
             auto& prev_used = m_np_used;
             for (uint32_t port = 0; port < 4; ++port)
@@ -1667,7 +1710,6 @@ bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask, uint32_t lo
 void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumulator)
 {
     const uint32_t mask = m_np_port_mask.load(std::memory_order_relaxed);
-    const uint32_t local_mask = m_np_local_mask.load(std::memory_order_relaxed) & mask;
     int64_t frame = m_frame_counter.load(std::memory_order_relaxed);
 
     // 1. Advance the confirmed watermark and verify executed frames against
@@ -1680,6 +1722,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
         const int64_t verify_upto = std::min(m_np_watermark, frame - 1);
         for (int64_t x = m_np_verified + 1; x <= verify_upto; ++x)
         {
+            const uint32_t local_mask = NetplayLocalMaskForFrameLocked(x) & mask;
             auto confirmed = m_np_inputs.find(x);
             auto used = m_np_used.find(x);
             if (confirmed == m_np_inputs.end() || used == m_np_used.end())
@@ -1710,7 +1753,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
             m_np_verified = x;
         }
     }
-    if (rollback_to >= 0 && !NetplayRollbackReplay(rollback_to, mask, local_mask))
+    if (rollback_to >= 0 && !NetplayRollbackReplay(rollback_to, mask))
     {
         FailNetplayRollback("failed to restore frame " + std::to_string(rollback_to));
         return;
@@ -1757,6 +1800,7 @@ void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumul
 
     ApplyScheduledDiscOps(frame);
     ApplyScheduledResets(frame);
+    const uint32_t local_mask = ApplyScheduledNetplayLocalMask(frame) & mask;
     if (!SaveRollbackState(frame))
     {
         FailNetplayRollback("core failed to serialize frame " + std::to_string(frame));
