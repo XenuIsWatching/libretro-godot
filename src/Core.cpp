@@ -7,6 +7,8 @@
 #include <sstream>
 #include <mutex>
 #include <random>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 
 #include "Debug.hpp"
@@ -118,6 +120,16 @@ bool Core::Load(CallbackTrampolines* trampolines)
     // error_code overload: the throwing overload would abort the emulation thread
     // (no try/catch around the raw std::thread) on any copy failure.
     std::error_code copy_ec;
+    // Timed, because this is the one part of a core start that scales with the
+    // FILE rather than with the machine being emulated, and the two numbers below
+    // are meant to be read against each other. An unstripped core is mostly debug
+    // info that no PT_LOAD covers, so the loader never touches it and only this
+    // copy pays for it: Dolphin's 246 MB here is 15 MB of loadable segments and
+    // 231 MB of DWARF, moved in and out again on every single power-on. A slow
+    // console start is worth blaming on the core only after reading this line.
+    std::error_code size_ec;
+    const auto source_bytes = std::filesystem::file_size(m_path, size_ec);
+    const auto copy_started = std::chrono::steady_clock::now();
     if (!std::filesystem::copy_file(m_path, temp_path, std::filesystem::copy_options::overwrite_existing, copy_ec) || copy_ec)
     {
         LogError("Failed to copy core file: " + m_path + " to " + temp_path.string() + " - " + copy_ec.message());
@@ -126,6 +138,17 @@ bool Core::Load(CallbackTrampolines* trampolines)
         std::filesystem::remove(temp_path, remove_ec);
         return false;
     }
+
+    const double copy_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - copy_started).count();
+    const double copy_mib = size_ec
+        ? 0.0 : static_cast<double>(source_bytes) / (1024.0 * 1024.0);
+    char copy_report[192];
+    std::snprintf(copy_report, sizeof(copy_report),
+        "Core copy: %s %.1f MiB in %.0f ms (%.0f MiB/s)",
+        name.c_str(), copy_mib, copy_ms,
+        copy_ms > 0.0 ? copy_mib * 1000.0 / copy_ms : 0.0);
+    Log(std::string(copy_report));
 
     m_temporary_path = temp_path.string();
     m_path = m_temporary_path;
