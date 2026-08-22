@@ -502,6 +502,15 @@ public:
     // plain mutex rather than atomics: the strings are read a handful of times
     // per session, and a release flag cannot stop a reader mid-string when the
     // emulation thread clears them at teardown.
+    // Core options set before the core existed. SetCoreOption is a main-thread
+    // call and callers configure a machine BEFORE starting it, so dropping
+    // these made a pre-start setter a silent no-op: the log said "core is not
+    // running, skipping" and the caller believed it had set something.
+    // Buffered here and applied once the core has declared its options.
+    std::mutex m_pending_options_mutex;
+    std::vector<std::pair<std::string, std::string>> m_pending_core_options;
+    void ApplyPendingCoreOptions();
+
     mutable std::mutex m_core_identity_mutex;
     std::string m_core_library_name;
     std::string m_core_library_version;

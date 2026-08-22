@@ -1397,6 +1397,26 @@ uint32_t Wrapper::MappedRamCrc(bool& ok) const
     return ok ? (crc ^ 0xFFFFFFFFu) : 0;
 }
 
+/// Emulation thread, once the core has been loaded and has declared its
+/// options, and strictly before retro_load_game: a core reads the options that
+/// decide what machine it even is - mGBA's gb_model among them - while loading
+/// the game, so applying them afterwards would be applying them too late.
+void Wrapper::ApplyPendingCoreOptions()
+{
+    std::vector<std::pair<std::string, std::string>> pending;
+    {
+        std::lock_guard<std::mutex> lock(m_pending_options_mutex);
+        pending.swap(m_pending_core_options);
+    }
+    if (!m_options_handler)
+        return;
+    for (const auto& option : pending)
+    {
+        m_options_handler->SetVariable(option.first, option.second);
+        Log("Applied held core option " + option.first + " = " + option.second);
+    }
+}
+
 void Wrapper::PublishCoreIdentity()
 {
     if (!m_core)
@@ -1878,7 +1898,20 @@ void Wrapper::SetCoreOption(const std::string& key, const std::string& value)
     if (!m_options_handler || !m_running.load(std::memory_order_acquire)
         || m_stopping.load(std::memory_order_acquire))
     {
-        Log("SetCoreOption: core is not running, skipping");
+        // Not "skipping". A caller sets options and THEN starts content, so
+        // this is the ordinary path, not an error one. Hold them until the
+        // core has declared what it understands.
+        std::lock_guard<std::mutex> lock(m_pending_options_mutex);
+        for (auto& pending : m_pending_core_options)
+        {
+            if (pending.first == key)
+            {
+                pending.second = value;
+                return;
+            }
+        }
+        m_pending_core_options.emplace_back(key, value);
+        Log("SetCoreOption: core not up yet; held for start");
         return;
     }
 
@@ -2324,6 +2357,10 @@ void Wrapper::EmulationThreadLoop()
         return;
     }
     core_initialized = true;
+
+    // Before retro_load_game: options set while the core did not yet exist are
+    // exactly the ones that decide how it loads.
+    ApplyPendingCoreOptions();
 
     if (m_game_path.empty())
     {
