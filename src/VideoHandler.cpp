@@ -17,6 +17,8 @@
 #include "D3D12Context.hpp"
 #endif
 
+#include "PixelSwizzle.hpp"
+
 #include <gfx/scaler/pixconv.h>
 
 #include <atomic>
@@ -73,9 +75,9 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
         if (instance->m_video_handler->m_vulkan_ctx)
         {
             // Vulkan path: readback from Vulkan image via staging buffer.
-            // False is a dropped frame, and pixel_data is then still the
-            // uninitialized buffer resized above, and uploading it would put heap
-            // garbage on the screen. Keep the last good frame instead.
+            // False is a dropped frame, and pixel_data is then still the buffer
+            // resized above, which Godot zero-fills - so uploading it would
+            // black the screen for a frame. Keep the last good frame instead.
             if (!instance->m_video_handler->m_vulkan_ctx->ReadbackToPixels(width, height, pixel_data))
                 return;
         }
@@ -147,23 +149,10 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
     {
         pixel_data.resize(width * height * 4);
 
-        const uint8_t* src = static_cast<const uint8_t*>(data);
         uint8_t* dst = pixel_data.ptrw();
-        for (uint32_t y = 0; y < height; ++y)
-        {
-            const uint16_t* row = reinterpret_cast<const uint16_t*>(src + y * pitch);
-            for (uint32_t x = 0; x < width; ++x)
-            {
-                const uint16_t pixel = row[x];
-                const uint8_t r5 = static_cast<uint8_t>((pixel >> 10) & 0x1f);
-                const uint8_t g5 = static_cast<uint8_t>((pixel >> 5) & 0x1f);
-                const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
-                *dst++ = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
-                *dst++ = static_cast<uint8_t>((g5 << 3) | (g5 >> 2));
-                *dst++ = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
-                *dst++ = 0xff;
-            }
-        }
+
+        Xrgb1555ToRgba8(dst, data, width, height,
+                        static_cast<size_t>(width) * 4, pitch);
 
         instance->m_video_handler->QueueFrame(instance, pixel_data, width, height, false);
     }
@@ -200,38 +189,71 @@ void VideoHandler::QueueFrame(Wrapper* wrapper, PackedByteArray pixel_data,
         const uint8_t* src = pixel_data.ptr();
         uint8_t* dst = transformed.ptrw();
 
-        for (uint32_t y = 0; y < output_height; ++y)
+        // Unrotated, the transform only reorders whole rows - it never moves a
+        // pixel within its row - so it is a row-order reversal rather than a
+        // per-pixel walk. Worth separating: HwFrameNeedsFlip() is true for the
+        // GL and EGL paths, so this is the case every OpenGL hardware frame
+        // takes, and a 1280x720 frame is 720 memcpys instead of 921,600 trips
+        // through the loop below.
+        if (rotation == 0)
         {
-            for (uint32_t x = 0; x < output_width; ++x)
+            const size_t row_bytes = static_cast<size_t>(width) * 4;
+            for (uint32_t y = 0; y < height; ++y)
+                memcpy(dst + static_cast<size_t>(y) * row_bytes,
+                       src + static_cast<size_t>(height - 1 - y) * row_bytes,
+                       row_bytes);
+        }
+        else
+        {
+            // A rotation genuinely gathers, so this stays a per-pixel walk. Two
+            // things it no longer does: switch on the rotation in its innermost
+            // body, where the branch was loop-invariant and blocked any widening
+            // of the copy, and move the pixel a byte at a time when it is 32 bits
+            // that are already 4-byte aligned on both sides.
+            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+            uint32_t*       d32 = reinterpret_cast<uint32_t*>(dst);
+
+            for (uint32_t y = 0; y < output_height; ++y)
             {
-                uint32_t src_x = x;
-                uint32_t src_y = y;
+                uint32_t* out_row = d32 + static_cast<size_t>(y) * output_width;
+
+                // Per row, one of the two source coordinates is fixed; only the
+                // other tracks x. Hoisted so the inner loop is a plain stride.
                 switch (rotation)
                 {
                 case 1: // 90 degrees counter-clockwise in libretro coordinates
-                    src_x = width - 1 - y;
-                    src_y = x;
+                {
+                    const uint32_t sx = width - 1 - y;
+                    for (uint32_t x = 0; x < output_width; ++x)
+                    {
+                        const uint32_t sy = flip_y ? height - 1 - x : x;
+                        out_row[x] = s32[static_cast<size_t>(sy) * width + sx];
+                    }
                     break;
+                }
                 case 2:
-                    src_x = width - 1 - x;
-                    src_y = height - 1 - y;
+                {
+                    const uint32_t ry = height - 1 - y;
+                    const uint32_t sy = flip_y ? height - 1 - ry : ry;
+                    const uint32_t* in_row = s32 + static_cast<size_t>(sy) * width;
+                    for (uint32_t x = 0; x < output_width; ++x)
+                        out_row[x] = in_row[width - 1 - x];
                     break;
+                }
                 case 3:
-                    src_x = y;
-                    src_y = height - 1 - x;
+                {
+                    const uint32_t sx = y;
+                    for (uint32_t x = 0; x < output_width; ++x)
+                    {
+                        const uint32_t ry = height - 1 - x;
+                        const uint32_t sy = flip_y ? height - 1 - ry : ry;
+                        out_row[x] = s32[static_cast<size_t>(sy) * width + sx];
+                    }
                     break;
+                }
                 default:
                     break;
                 }
-                if (flip_y)
-                    src_y = height - 1 - src_y;
-
-                const uint8_t* source = src + (static_cast<size_t>(src_y) * width + src_x) * 4;
-                uint8_t* target = dst + (static_cast<size_t>(y) * output_width + x) * 4;
-                target[0] = source[0];
-                target[1] = source[1];
-                target[2] = source[2];
-                target[3] = source[3];
             }
         }
         pixel_data = std::move(transformed);

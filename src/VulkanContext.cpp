@@ -1,5 +1,6 @@
 #include "VulkanContext.hpp"
 #include "Debug.hpp"
+#include "PixelSwizzle.hpp"
 
 #include <cstring>
 #include <utility>
@@ -1533,14 +1534,7 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     if (format == VK_FORMAT_B8G8R8A8_UNORM ||
         format == VK_FORMAT_B8G8R8A8_SRGB)
     {
-        const uint32_t pixel_count = width * height;
-        for (uint32_t i = 0; i < pixel_count; ++i)
-        {
-            dst[i * 4 + 0] = src[i * 4 + 2]; // R ← B
-            dst[i * 4 + 1] = src[i * 4 + 1]; // G ← G
-            dst[i * 4 + 2] = src[i * 4 + 0]; // B ← R
-            dst[i * 4 + 3] = src[i * 4 + 3]; // A ← A
-        }
+        SwizzleBgraToRgba(dst, src, width * height);
     }
     else if (format == VK_FORMAT_R8G8B8A8_UNORM ||
              format == VK_FORMAT_R8G8B8A8_SRGB)
@@ -1552,18 +1546,8 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     {
         // SNORM bytes are signed values, not display-ready UNORM bytes. Shift
         // [-128, 127] to [0, 255], swapping R/B for the BGRA variant.
-        const int8_t* signed_src = reinterpret_cast<const int8_t*>(src);
-        const bool bgra = format == VK_FORMAT_B8G8R8A8_SNORM;
-        const uint32_t pixel_count = width * height;
-        for (uint32_t i = 0; i < pixel_count; ++i)
-        {
-            const uint32_t r = bgra ? 2u : 0u;
-            const uint32_t b = bgra ? 0u : 2u;
-            dst[i * 4 + 0] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + r]) + 128);
-            dst[i * 4 + 1] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + 1]) + 128);
-            dst[i * 4 + 2] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + b]) + 128);
-            dst[i * 4 + 3] = static_cast<uint8_t>(static_cast<int>(signed_src[i * 4 + 3]) + 128);
-        }
+        SnormToRgba8(dst, src, width * height,
+                     format == VK_FORMAT_B8G8R8A8_SNORM);
     }
     // 10-bit packed, which is what a modern surface hands back when it can
     // (Dolphin's swapchain on this GPU is A2B10G10R10). Still 32 bits a pixel,
@@ -1575,31 +1559,13 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
     // 2 bits rather than forced opaque, and 0b11 maps to 255 exactly.
     else if (format == VK_FORMAT_A2B10G10R10_UNORM_PACK32)
     {
-        const uint32_t  pixel_count = width * height;
-        const uint32_t* src32       = reinterpret_cast<const uint32_t*>(src);
-        for (uint32_t i = 0; i < pixel_count; ++i)
-        {
-            const uint32_t p = src32[i];
-            dst[i * 4 + 0] = static_cast<uint8_t>(((p >>  0) & 0x3FFu) >> 2);
-            dst[i * 4 + 1] = static_cast<uint8_t>(((p >> 10) & 0x3FFu) >> 2);
-            dst[i * 4 + 2] = static_cast<uint8_t>(((p >> 20) & 0x3FFu) >> 2);
-            dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
-        }
+        A2b10g10r10ToRgba8(dst, src, width * height);
     }
     // The same layout with red and blue the other way round; the driver chooses
     // between the two, not us.
     else if (format == VK_FORMAT_A2R10G10B10_UNORM_PACK32)
     {
-        const uint32_t  pixel_count = width * height;
-        const uint32_t* src32       = reinterpret_cast<const uint32_t*>(src);
-        for (uint32_t i = 0; i < pixel_count; ++i)
-        {
-            const uint32_t p = src32[i];
-            dst[i * 4 + 0] = static_cast<uint8_t>(((p >> 20) & 0x3FFu) >> 2);
-            dst[i * 4 + 1] = static_cast<uint8_t>(((p >> 10) & 0x3FFu) >> 2);
-            dst[i * 4 + 2] = static_cast<uint8_t>(((p >>  0) & 0x3FFu) >> 2);
-            dst[i * 4 + 3] = static_cast<uint8_t>((((p >> 30) & 0x3u) * 255u) / 3u);
-        }
+        A2r10g10b10ToRgba8(dst, src, width * height);
     }
     vkUnmapMemory(m_device, m_staging_mem);
     return true;

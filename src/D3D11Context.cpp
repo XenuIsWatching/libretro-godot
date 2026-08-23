@@ -3,6 +3,7 @@
 #ifdef _WIN32
 
 #include "Debug.hpp"
+#include "PixelSwizzle.hpp"
 
 #include <windows.h>
 
@@ -69,25 +70,9 @@ bool IsBgraD3DFormat(DXGI_FORMAT format)
 void ConvertRowToRgba8(uint8_t* dst, const uint8_t* src, uint32_t pixels, bool bgra)
 {
     if (bgra)
-    {
-        for (uint32_t x = 0; x < pixels; ++x)
-        {
-            dst[x * 4 + 0] = src[x * 4 + 2];
-            dst[x * 4 + 1] = src[x * 4 + 1];
-            dst[x * 4 + 2] = src[x * 4 + 0];
-            dst[x * 4 + 3] = 255;
-        }
-    }
+        SwizzleBgraToRgbaOpaque(dst, src, pixels);
     else
-    {
-        for (uint32_t x = 0; x < pixels; ++x)
-        {
-            dst[x * 4 + 0] = src[x * 4 + 0];
-            dst[x * 4 + 1] = src[x * 4 + 1];
-            dst[x * 4 + 2] = src[x * 4 + 2];
-            dst[x * 4 + 3] = 255;
-        }
-    }
+        CopyRgbaOpaque(dst, src, pixels);
 }
 
 bool D3D11Context::Init()
