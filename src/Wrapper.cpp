@@ -863,7 +863,7 @@ void Wrapper::SetNetplayRollback(bool enabled, uint32_t local_mask, int max_ahea
         m_np_local_mask_schedule.clear();
     }
     m_np_local_mask.store(local_mask, std::memory_order_relaxed);
-    m_np_max_ahead = std::clamp(max_ahead, 2, 24);
+    m_np_max_ahead = std::clamp(max_ahead, 2, NP_MAX_AHEAD_LIMIT);
     m_np_rollback.store(enabled, std::memory_order_release);
     m_np_cv.notify_all();
     Log("Netplay rollback " + std::string(enabled ? "ON" : "OFF") +
@@ -1640,17 +1640,7 @@ bool Wrapper::SaveRollbackState(int64_t frame)
         std::move(buffer),
         m_input_handler->CaptureNetplayState()
     });
-    // Sized from the rewind depth actually observed, not from the input
-    // pruning window. NP_ROLLBACK_HISTORY bounds the INPUT schedule; the state
-    // ring only has to reach back as far as a rewind can go, and the
-    // speculation throttle caps that at max_ahead. Measured on Street Fighter II
-    // and Sonic 2, desktop and Quest, the deepest rewind was 5 frames against a
-    // ring of 40 — so 40 states were held to serve 5. The margin above
-    // max_ahead is for the anchor scan, which starts one frame past the last
-    // verified frame rather than at the current one.
-    const size_t ring = static_cast<size_t>(
-        std::clamp(m_np_max_ahead + 8, 12, static_cast<int>(NP_ROLLBACK_HISTORY)));
-    while (m_np_states.size() > ring)
+    while (m_np_states.size() > static_cast<size_t>(StateRingDepth()))
         m_np_states.pop_front();
     m_np_state_slots.store(static_cast<int64_t>(m_np_states.size()),
                            std::memory_order_relaxed);
@@ -1835,8 +1825,7 @@ godot::Dictionary Wrapper::GetNetplayRollbackStats() const
     d["max_depth"] = m_np_max_depth.load(std::memory_order_relaxed);
     d["state_bytes"] = m_np_state_bytes.load(std::memory_order_relaxed);
     d["state_slots"] = m_np_state_slots.load(std::memory_order_relaxed);
-    d["ring_limit"] = static_cast<int64_t>(
-        std::clamp(m_np_max_ahead + 8, 12, static_cast<int>(NP_ROLLBACK_HISTORY)));
+    d["ring_limit"] = static_cast<int64_t>(StateRingDepth());
     d["max_ahead"] = static_cast<int64_t>(m_np_max_ahead);
     return d;
 }

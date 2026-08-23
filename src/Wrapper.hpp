@@ -9,6 +9,7 @@
 #include <godot_cpp/classes/input_event.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
 
+#include <algorithm>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -328,6 +329,16 @@ public:
     /// separate questions and are counted separately.
     godot::Dictionary GetNetplayRollbackStats() const;
 
+    /// How many core states to keep. Tracks the speculation window, because
+    /// that is exactly how far back a rollback anchor can be: the throttle
+    /// refuses to run past watermark + max_ahead, so a deeper ring holds
+    /// states no rewind can reach. Raise max_ahead and this follows.
+    int StateRingDepth() const
+    {
+        return std::clamp(m_np_max_ahead + NP_STATE_RING_MARGIN,
+                          12, static_cast<int>(NP_ROLLBACK_HISTORY));
+    }
+
     /// Who the running core says it is: library_name, library_version, the
     /// libretro API version it was built against, and the size of one savestate.
     /// EMPTY until content has finished loading, and empty again once it stops,
@@ -414,7 +425,20 @@ public:
     static constexpr int NP_AUX_OFFSET = NP_INPUT_INTS;
     static constexpr int NP_KEY_OFFSET = NP_AUX_OFFSET + NP_AUX_INTS;
     static constexpr int NP_FRAME_INTS = NP_KEY_OFFSET + NP_KEY_SLOTS * 2;
+    /// How far back the INPUT schedule is kept. Not the state ring: see
+    /// StateRingDepth().
     static constexpr int64_t NP_ROLLBACK_HISTORY = 40;
+    /// The furthest a peer may run past the last confirmed frame. This is the
+    /// same quantity RetroArch calls NETPLAY_MAX_STALL_FRAMES (60 there, for
+    /// internet play; this is a LAN session, where 24 frames is 400 ms).
+    static constexpr int NP_MAX_AHEAD_LIMIT = 24;
+    /// Slack above max_ahead for the anchor scan, which starts one frame past
+    /// the last VERIFIED frame rather than at the current one.
+    static constexpr int NP_STATE_RING_MARGIN = 8;
+    static_assert(NP_MAX_AHEAD_LIMIT + NP_STATE_RING_MARGIN <= NP_ROLLBACK_HISTORY,
+        "the state ring must fit inside the input window: raising max_ahead "
+        "past it would let a rollback anchor fall off the ring, which stops "
+        "the session rather than degrading it");
     static constexpr int64_t NP_MAX_FUTURE_INPUTS = 600;
     using NpFrame = std::array<int32_t, NP_FRAME_INTS>;
 
