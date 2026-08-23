@@ -57,6 +57,35 @@ if is_windows:
     # so it is vendored rather than taken from an installed Vulkan SDK. vulkan-1.dll
     # still comes from the user's graphics driver at runtime.
     env.Append(LIBPATH=[r"external/vulkan-loader/lib/x64"])
+    # libretro-common carries an MSVC shim that defines __SSE__/__SSE2__ on x64
+    # (retro_environment.h), but only three files in the SDK include it. That is
+    # why sinc_resampler.c already got the SSE resampler on Windows while
+    # pixconv.c and s16_to_float.c did not - their include chains never reach the
+    # shim, so their "#if defined(__SSE2__)" bodies compiled out, and Windows ran
+    # scalar where Linux and macOS got SSE2 from the compiler's own x86-64
+    # predefines. This define closes that gap; conv_rgb565_abgr8888
+    # (VideoHandler's RGB565 path) is the one that matters.
+    #
+    # Unlike the NEON case below, ONE define is enough: these files gate at
+    # compile time only, with no runtime mask to satisfy. No baseline change
+    # either - SSE2 is unconditional on x86-64. The only other file in the tree
+    # reading these macros is SDL3's SDL_intrin.h, whose conditions already
+    # accept _MSC_VER, so nothing there moves.
+    #
+    # This define REQUIRES the libretro-common submodule at 6268916 (2026-05-01)
+    # or later. Before that resync, conv_rgb565_abgr8888's SSE2 body stored
+    # [b,g,r,a] where its own scalar tail stored [r,g,b,a] - byte-for-byte what
+    # conv_rgb565_argb8888 returns - so turning SSE2 on swapped red and blue on
+    # every RGB565 core at any width >= 8. Upstream fixed it in RetroArch
+    # 940371933f and libretro-common 6268916. If the submodule is ever rolled
+    # back past that, drop this define with it. The check is cheap: compile
+    # pixconv.c twice, once with /D__SSE2__, and diff the converted output.
+    #
+    # Separately, do NOT reach for /arch:AVX to light up the resampler's AVX
+    # kernel: it is dead twice over, because enable_avx is only set for
+    # RESAMPLER_QUALITY_HIGHER/HIGHEST and AudioHandler asks for NORMAL, and
+    # sinc_resampler.c's own comment says SSE1 beats AVX at these tap counts.
+    env.Append(CPPDEFINES=["__SSE__", "__SSE2__"])
 
 if is_android:
     env.Append(CXXFLAGS=["-std=c++20"])
