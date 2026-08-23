@@ -358,6 +358,7 @@ public:
 
     /// Rewind+replay corrections performed so far (rollback diagnostics).
     int64_t GetNetplayRollbackCount() const;
+    godot::Dictionary GetNetplayRollbackStats() const;
 
     /// Performance HUD readings. Every one is a relaxed atomic load, so they are
     /// safe to poll from _process on any number of instances at once — each node

@@ -1628,15 +1628,36 @@ bool Wrapper::SaveRollbackState(int64_t frame)
     if (size == 0)
         return false;
     std::vector<uint8_t> buffer(size);
-    if (!m_core->retro_serialize(buffer.data(), size))
+    const auto ser_t0 = std::chrono::steady_clock::now();
+    const bool ser_ok = m_core->retro_serialize(buffer.data(), size);
+    m_np_serialize_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - ser_t0).count(), std::memory_order_relaxed);
+    m_np_serialize_n.fetch_add(1, std::memory_order_relaxed);
+    if (!ser_ok)
         return false;
     m_np_states.push_back(RollbackState{
         frame,
         std::move(buffer),
         m_input_handler->CaptureNetplayState()
     });
-    while (m_np_states.size() > NP_ROLLBACK_HISTORY)
+    // Sized from the rewind depth actually observed, not from the input
+    // pruning window. NP_ROLLBACK_HISTORY bounds the INPUT schedule; the state
+    // ring only has to reach back as far as a rewind can go, and the
+    // speculation throttle caps that at max_ahead. Measured on Street Fighter II
+    // and Sonic 2, desktop and Quest, the deepest rewind was 5 frames against a
+    // ring of 40 — so 40 states were held to serve 5. The margin above
+    // max_ahead is for the anchor scan, which starts one frame past the last
+    // verified frame rather than at the current one.
+    const size_t ring = static_cast<size_t>(
+        std::clamp(m_np_max_ahead + 8, 12, static_cast<int>(NP_ROLLBACK_HISTORY)));
+    while (m_np_states.size() > ring)
         m_np_states.pop_front();
+    m_np_state_slots.store(static_cast<int64_t>(m_np_states.size()),
+                           std::memory_order_relaxed);
+    int64_t resident = 0;
+    for (const auto& s : m_np_states)
+        resident += static_cast<int64_t>(s.core.size());
+    m_np_state_bytes.store(resident, std::memory_order_relaxed);
     return true;
 }
 
@@ -1696,6 +1717,7 @@ uint32_t Wrapper::ApplyScheduledNetplayLocalMask(int64_t frame)
 /// from the mispredicted run); video is skipped except for the final frame.
 bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask)
 {
+    const auto rb_t0 = std::chrono::steady_clock::now();
     auto state_it = std::find_if(m_np_states.begin(), m_np_states.end(),
         [&](const auto& s) { return s.frame == to_frame; });
     if (state_it == m_np_states.end())
@@ -1779,7 +1801,44 @@ bool Wrapper::NetplayRollbackReplay(int64_t to_frame, uint32_t mask)
     // Every replayed frame ≤ watermark ran with confirmed inputs.
     m_np_verified = std::min(m_np_watermark, current - 1);
     m_np_rollback_count.fetch_add(1, std::memory_order_relaxed);
+    const int64_t depth = current - to_frame;
+    m_np_replay_frames.fetch_add(depth, std::memory_order_relaxed);
+    m_np_replay_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - rb_t0).count(), std::memory_order_relaxed);
+    // How deep a rewind actually goes is what the ring has to be sized for,
+    // and it is a measurement rather than a thing to reason about.
+    int64_t seen = m_np_max_depth.load(std::memory_order_relaxed);
+    while (depth > seen
+           && !m_np_max_depth.compare_exchange_weak(seen, depth,
+                                                    std::memory_order_relaxed))
+    {
+    }
     return true;
+}
+
+/// What rollback costs here. Read by a probe; safe to call at any time.
+godot::Dictionary Wrapper::GetNetplayRollbackStats() const
+{
+    godot::Dictionary d;
+    const int64_t ser_n = m_np_serialize_n.load(std::memory_order_relaxed);
+    const int64_t ser_us = m_np_serialize_us.load(std::memory_order_relaxed);
+    const int64_t rb_n = m_np_rollback_count.load(std::memory_order_relaxed);
+    const int64_t rb_us = m_np_replay_us.load(std::memory_order_relaxed);
+    const int64_t rb_f = m_np_replay_frames.load(std::memory_order_relaxed);
+    d["serialize_count"] = ser_n;
+    d["serialize_us_total"] = ser_us;
+    d["serialize_us_mean"] = ser_n > 0 ? double(ser_us) / double(ser_n) : 0.0;
+    d["rollback_count"] = rb_n;
+    d["replay_us_total"] = rb_us;
+    d["replay_us_mean"] = rb_n > 0 ? double(rb_us) / double(rb_n) : 0.0;
+    d["replay_frames"] = rb_f;
+    d["max_depth"] = m_np_max_depth.load(std::memory_order_relaxed);
+    d["state_bytes"] = m_np_state_bytes.load(std::memory_order_relaxed);
+    d["state_slots"] = m_np_state_slots.load(std::memory_order_relaxed);
+    d["ring_limit"] = static_cast<int64_t>(
+        std::clamp(m_np_max_ahead + 8, 12, static_cast<int>(NP_ROLLBACK_HISTORY)));
+    d["max_ahead"] = static_cast<int64_t>(m_np_max_ahead);
+    return d;
 }
 
 void Wrapper::NetplayRollbackIteration(double frame_duration_ms, double& accumulator)

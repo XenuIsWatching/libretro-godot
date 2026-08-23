@@ -322,6 +322,12 @@ public:
     /// How many rewind+replay corrections have happened (diagnostics/HUD).
     int64_t GetNetplayRollbackCount() const { return m_np_rollback_count.load(std::memory_order_relaxed); }
 
+    /// What rollback actually costs on this machine, for a probe to read.
+    /// Rollback pays a full retro_serialize per frame whether or not a rewind
+    /// ever happens, so the per-frame cost and the per-rewind cost are
+    /// separate questions and are counted separately.
+    godot::Dictionary GetNetplayRollbackStats() const;
+
     /// Who the running core says it is: library_name, library_version, the
     /// libretro API version it was built against, and the size of one savestate.
     /// EMPTY until content has finished loading, and empty again once it stops,
@@ -616,6 +622,13 @@ public:
     /// was authoritative on each original frame.
     std::map<int64_t, uint32_t> m_np_local_mask_schedule;
     std::atomic<int64_t> m_np_rollback_count = 0;   // rewind+replay corrections
+    std::atomic<int64_t> m_np_serialize_us = 0;     // time in retro_serialize for the ring
+    std::atomic<int64_t> m_np_serialize_n = 0;      // states taken
+    std::atomic<int64_t> m_np_replay_us = 0;        // time rewinding and replaying
+    std::atomic<int64_t> m_np_replay_frames = 0;    // frames re-run across all rewinds
+    std::atomic<int64_t> m_np_max_depth = 0;        // deepest single rewind, in frames
+    std::atomic<int64_t> m_np_state_bytes = 0;      // bytes resident in the ring
+    std::atomic<int64_t> m_np_state_slots = 0;      // states resident in the ring
     int m_np_max_ahead = 8;
     NpFrame m_np_live_local{};              // live local inputs (main thread writes)
     std::vector<int32_t> m_np_local_records;                // flat {frame,port,5 vals} drained by main thread
