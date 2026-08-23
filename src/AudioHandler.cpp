@@ -162,11 +162,7 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
         Object* mx = LiveMx();
         if (mx == nullptr || m_voice_l < 0)
             return;
-        if (static_cast<size_t>(m_push_buf.size()) != frames)
-            m_push_buf.resize(static_cast<int64_t>(frames));
-        Vector2* dst = m_push_buf.ptrw();
-        for (size_t i = 0; i < frames; ++i)
-            dst[i] = Vector2(interleaved[i * 2], interleaved[i * 2 + 1]);
+        FillPushBuffer(interleaved, frames);
         mx->call("push_stereo_frames", m_voice_l, m_voice_r, m_push_buf,
                    m_channel_mode.load(std::memory_order_relaxed));
         return;
@@ -174,8 +170,45 @@ void AudioHandler::PushFrames(const float* interleaved, size_t frames)
 
     if (m_audio_stream_generator_playback.is_null())
         return;
-    for (size_t i = 0; i < frames; ++i)
-        m_audio_stream_generator_playback->push_frame(Vector2(interleaved[i * 2], interleaved[i * 2 + 1]));
+
+    // One push_buffer rather than a push_frame per sample-frame. Each push_frame
+    // is a ptrcall across the GDExtension boundary, so a 44.1 kHz core was making
+    // about 44,100 of them a second where this makes one per batch - and
+    // m_push_buf, which the SDK path above already stages into, was sitting
+    // unused on this branch.
+    //
+    // The one behavioural difference: push_frame was called in a loop with its
+    // result ignored, so a full sink dropped individual frames, whereas
+    // push_buffer drops the whole batch. Overflow is what the rate control in
+    // SampleBatchCallback exists to prevent, and a partial batch is a click
+    // either way.
+    FillPushBuffer(interleaved, frames);
+    m_audio_stream_generator_playback->push_buffer(m_push_buf);
+}
+
+void AudioHandler::FillPushBuffer(const float* interleaved, size_t frames)
+{
+    // Sized to the batch exactly, because both sinks consume the whole array -
+    // this cannot become a grow-only buffer without slicing, which would
+    // allocate the saving straight back.
+    if (static_cast<size_t>(m_push_buf.size()) != frames)
+        m_push_buf.resize(static_cast<int64_t>(frames));
+
+    Vector2* dst = m_push_buf.ptrw();
+
+    // A Vector2 is two reals laid out exactly like one interleaved stereo frame,
+    // so in the ordinary single-precision build this is a copy, not a
+    // conversion. Guarded rather than asserted: godot-cpp can be built with
+    // precision=double, where real_t is 8 bytes and the copy would be wrong.
+    if constexpr (sizeof(Vector2) == 2 * sizeof(float))
+    {
+        memcpy(dst, interleaved, frames * sizeof(Vector2));
+    }
+    else
+    {
+        for (size_t i = 0; i < frames; ++i)
+            dst[i] = Vector2(interleaved[i * 2], interleaved[i * 2 + 1]);
+    }
 }
 
 uint32_t AudioHandler::QueuedFrames() const

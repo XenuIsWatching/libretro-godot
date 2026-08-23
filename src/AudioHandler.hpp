@@ -180,6 +180,9 @@ private:
     uint32_t m_minimum_audio_latency = 0;
 
     void PushFrames(const float* interleaved, size_t frames);
+    /// Stages one batch of interleaved stereo into m_push_buf. Both sinks take
+    /// the array whole, so it is always sized to the batch.
+    void FillPushBuffer(const float* interleaved, size_t frames);
     uint32_t QueuedFrames() const;
     /// Measure the sink and return how long until it wants audio. Touches the sink,
     /// so it belongs off the pacing loop's hot path.
