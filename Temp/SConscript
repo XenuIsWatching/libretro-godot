@@ -110,7 +110,12 @@ if is_android:
     # Do NOT define HAVE_ARM_NEON_ASM_OPTIMIZATIONS: that selects
     # sinc_resampler_neon.S, which is ARMv7 assembly (.arm, push {r4, lr},
     # vmov.f32 q0) and cannot assemble for arm64 at all.
-    env.Append(CPPDEFINES=["HAVE_NEON", "__ARM_NEON__"])
+    #
+    # Guarded by arch: godot-cpp's android.py also accepts x86_64 and x86_32,
+    # and defining __ARM_NEON__ there sends s16_to_float.c and sinc_resampler.c
+    # into "#include <arm_neon.h>" on an x86 toolchain, which does not compile.
+    if env["arch"] in ("arm64", "arm32"):
+        env.Append(CPPDEFINES=["HAVE_NEON", "__ARM_NEON__"])
     env.Append(LIBS=["dl", "log", "EGL", "GLESv3", "vulkan"])
 
 if is_linux:
@@ -149,6 +154,32 @@ if is_macos:
     # standalone diagnostics, but is deliberately not a GDExtension dependency.
     env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup",
                           "-framework", "Metal", "-framework", "QuartzCore"])
+
+# The same two defines the Android block sets, and for the same reason: Clang
+# for aarch64 defines __ARM_NEON, never the ARMv7-era __ARM_NEON__. The gates
+# are not spelled consistently upstream -
+#   pixconv.c        keys off (__ARM_NEON__ || __ARM_NEON)  -> already NEON here
+#   sinc_resampler.c keys off (__ARM_NEON__ || HAVE_NEON)   -> was scalar here
+# so Apple Silicon and Linux arm64 got the NEON pixel converters and the SCALAR
+# resampler.
+#
+# It failed silently, and in the mirror image of the Android case: features_cpu.c
+# sets RETRO_SIMD_NEON from sysctlbyname("hw.optional.neon") with no
+# __ARM_NEON__ needed, so the dispatch in resampler_sinc_new DOES enter the
+# "mask & RESAMPLER_SIMD_NEON" branch and finds the body compiled out. process
+# stays on resampler_sinc_process_c and nothing is logged.
+#
+# This has to be a build-time define rather than a runtime re-dispatch: the same
+# gate picks the filter table's tap alignment (8 with NEON, 4 without), so the
+# table itself is built differently.
+#
+# Guarded on an explicit arch. macOS defaults to arch=universal, which compiles
+# both slices from one set of CPPDEFINES, so defining __ARM_NEON__ there would
+# send the x86_64 slice into <arm_neon.h>. Tools/build.py always passes a
+# concrete arch; a bare "scons platform=macos" still leaves its arm64 slice
+# scalar.
+if (is_macos or is_linux) and env["arch"] == "arm64":
+    env.Append(CPPDEFINES=["HAVE_NEON", "__ARM_NEON__"])
 
 # Vulkan headers (bundled submodule, used on both platforms)
 env.Append(CPPPATH=["external/vulkan-headers/include/"])
