@@ -686,6 +686,64 @@ static void TestSnapshotRoundTrip()
 }
 
 
+// -- two consoles switched on a long way apart -------------------------------
+static void TestBootedApartAlign()
+{
+    std::printf("T15 a machine joining a live wire re-aligns it\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x3401);
+    Wrapper* b = Fake(0x3402);
+
+    // The lead is seated before either guest attaches, which is what a room
+    // does: the cable is part of the scene and the machines are switched on
+    // afterwards, one at a time.
+    c.Connect(a, 0, b, 0);
+
+    // A is switched on and runs for a while with nobody to talk to.
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    SetCurrent(a);
+    const uint64_t GAP = 1000000;
+    for (uint64_t t = 0; t <= GAP; t += GRAIN)
+    {
+        c.Advance(H(a, 0), t, t + GRAIN, 0);
+    }
+
+    // B is switched on now, and its clock starts where every core's does.
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
+    SetCurrent(b);
+    c.Advance(H(b, 0), 0, GRAIN, 0);
+    SetCurrent(a);
+    c.Advance(H(a, 0), GAP, GAP + GRAIN, 0);
+
+    const uint8_t payload[2] = {0x5A, 0xA5};
+    SetCurrent(a);
+    Check(c.Send(H(a, 0), GAP, RETRO_LINK_BROADCAST, payload, sizeof payload),
+          "A speaks as soon as B appears");
+
+    uint8_t buf[16];
+    size_t len = sizeof buf;
+    uint64_t tick = 0;
+    unsigned from = 99;
+    SetCurrent(b);
+    Check(c.Recv(H(b, 0), &tick, &from, buf, &len), "B is told");
+
+    // The tick is in B's own clock, and B's clock is at zero. A message placed
+    // a whole GAP into B's future is one B will not act on until it has run as
+    // long as A already had -- for ever, in the sense that matters, because a
+    // handshake times out. Everything A says would land that far ahead, so the
+    // lag never closes.
+    //
+    // Which is what a player used to hit: switch on the first console, switch
+    // on the second, and the link is up at one end only until the lead is
+    // pulled out and pushed back in. That works because a re-seat rebuilds the
+    // bus and a rebuild re-anchors everybody; joining a live wire now does the
+    // same thing, so it never comes to that.
+    Check(tick < GRAIN * 4, "and told a moment it is about to reach, not one a gap away");
+
+    c.DropOwner(a);
+    c.DropOwner(b);
+}
+
 int main()
 {
     // Unbuffered, because this binary is run with its output on a pipe and a
@@ -706,6 +764,7 @@ int main()
     TestLateAttachProtocolMismatch();
     TestProtocolMismatchIsNonDestructive();
     TestSnapshotRoundTrip();
+    TestBootedApartAlign();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

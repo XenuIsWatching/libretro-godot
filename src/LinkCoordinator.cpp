@@ -718,6 +718,54 @@ retro_link_port_t *LinkCoordinator::Attach(Wrapper* owner, unsigned port,
     ep.clock_rate = clock_rate;
     ep.attached = true;
 
+    // A machine joining a live wire resets "now" for everybody on it.
+    //
+    // A message is placed on a peer at that peer's origin plus the delta the
+    // SENDER has run since its own, so two endpoints only agree about when
+    // something happened if their origins mean the same moment. They do when a
+    // bus is built, because a rebuild takes every endpoint off and back on and
+    // the whole party re-anchors together. They do not when a core attaches to
+    // a bus that is already carrying one: the newcomer anchors at zero while
+    // the machine already running is a long way past it, so everything that
+    // machine says lands that far into the newcomer's future.
+    //
+    // Which is exactly a console switched on second. The first console raises
+    // DTR into a bus with nobody on it, the announcement is dropped, and the
+    // repeat it sends once the newcomer appears is stamped for a moment the
+    // newcomer will not reach for another half-second of emulated time. The
+    // early console sees DSR at once -- the newcomer's own announcement is in
+    // ITS past -- and the late one sees nothing at all, which is a link that is
+    // up at one end and down at the other. Measured on two cabled PlayStations
+    // booted thirty frames apart: eight runs out of eight.
+    //
+    // Pulling the cable and putting it back is what a player finds, and it
+    // works for the wrong reason: it rebuilds the bus, and the rebuild is what
+    // re-aligns them. Doing it here means they never have to.
+    if (ep.bus)
+    {
+        bool joined_a_live_wire = false;
+        for (Endpoint* peer : ep.bus->members)
+        {
+            if (peer != &ep && peer->attached)
+            {
+                joined_a_live_wire = true;
+                break;
+            }
+        }
+        if (joined_a_live_wire)
+        {
+            for (Endpoint* peer : ep.bus->members)
+            {
+                // Not the inbox: a message already placed carries an absolute
+                // tick in the receiver's own clock, which a moved origin does
+                // not invalidate.
+                peer->published = false;
+                peer->local_delta = 0;
+                peer->safe_delta = 0;
+            }
+        }
+    }
+
     Log(ep.label + " attached, protocol '" + ep.protocol_id + "', " + std::to_string(clock_rate) + " Hz");
     LogBusesLocked("after attach");
 
