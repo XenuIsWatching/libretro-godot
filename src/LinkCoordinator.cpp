@@ -380,12 +380,75 @@ void LinkCoordinator::RebuildBuses()
         m_buses.push_back(std::make_unique<Bus>());
         Bus& bus = *m_buses.back();
         bus.members = component;
+        bus.cv_slot = m_buses.size() - 1;
         for (size_t i = 0; i < bus.members.size(); ++i)
         {
             bus.members[i]->bus = &bus;
             bus.members[i]->index = static_cast<int>(i);
         }
     }
+
+    EnsureCvSlotsLocked(m_buses.size());
+}
+
+void LinkCoordinator::EnsureCvSlotsLocked(size_t count)
+{
+    while (m_cv_slots.size() < count)
+    {
+        m_cv_slots.push_back(std::make_unique<std::condition_variable>());
+        m_cv_parked.push_back(0);
+    }
+}
+
+void LinkCoordinator::WakeBusLocked(const Endpoint& ep)
+{
+    if (!ep.bus)
+    {
+        return;
+    }
+
+    // One broadcast for the whole wire, NOT a notify_one per ready peer.
+    //
+    // Waking each peer individually was tried and measured worse: a broadcast is
+    // a single FUTEX_WAKE naming a count, so it releases the whole party in one
+    // syscall, while N targeted wakes cost N. It also has to work out who is
+    // ready, and the ceiling scan is O(members) inside a loop over members --
+    // O(N^2) under the lock on every publish.
+    //
+    // The bench (tests/link_bench.cpp) says what that trade is worth: at four
+    // machines the targeted version cut wasted parks by 42% and still ran 61%
+    // SLOWER, because in lockstep almost every peer genuinely is ready, so the
+    // scan bought nothing and the extra syscalls cost real time. The wasteful
+    // wake was never the expensive part; the RATE of rendezvous is.
+    const size_t slot = ep.bus->cv_slot;
+    if (slot < m_cv_slots.size() && m_cv_parked[slot] > 0)
+    {
+        ++m_counters.wakes;
+        m_cv_slots[slot]->notify_all();
+    }
+}
+void LinkCoordinator::WakeAllLocked()
+{
+    for (size_t i = 0; i < m_cv_slots.size(); ++i)
+    {
+        if (m_cv_parked[i] > 0)
+        {
+            ++m_counters.wakes;
+            m_cv_slots[i]->notify_all();
+        }
+    }
+}
+
+LinkCoordinator::Counters LinkCoordinator::CountersSnapshot() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_counters;
+}
+
+void LinkCoordinator::ResetCounters()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_counters = Counters{};
 }
 
 // ── Host side ───────────────────────────────────────────────────────────────
@@ -436,7 +499,7 @@ bool LinkCoordinator::Connect(Wrapper* a, unsigned port_a, Wrapper* b, unsigned 
     RebuildBuses();
     LogBusesLocked(("cabled " + ea.label + " to " + eb.label).c_str());
 
-    m_cv.notify_all();
+    WakeAllLocked();
     return true;
 }
 
@@ -471,7 +534,7 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
         // but the caller has to hear that nothing was joined or it will record a
         // link the bus never made.
         RebuildBuses();
-        m_cv.notify_all();
+        WakeAllLocked();
         return false;
     }
 
@@ -530,7 +593,7 @@ bool LinkCoordinator::ConnectGroup(const std::vector<std::pair<Wrapper*, unsigne
         }
         LogBusesLocked(("cabled " + who).c_str());
     }
-    m_cv.notify_all();
+    WakeAllLocked();
     return true;
 }
 
@@ -620,7 +683,7 @@ bool LinkCoordinator::RestoreGroup(
         ep.last_grant = state.last_grant;
         ep.inbox.assign(state.inbox.begin(), state.inbox.end());
     }
-    m_cv.notify_all();
+    WakeAllLocked();
     return true;
 }
 
@@ -636,10 +699,15 @@ void LinkCoordinator::Disconnect(Wrapper* owner, unsigned port)
             RebuildBuses();
             LogBusesLocked(("pulled the cable at " + label).c_str());
         }
+        // Whoever was waiting on the other end may now be unbounded, and a chain
+        // that has just been cut in the middle has two halves to wake.
+        //
+        // Inside the lock now, because the wake has to read which slots exist
+        // and that vector is guarded like everything else here. Notifying with
+        // the mutex held costs the woken thread one more trip round the lock;
+        // a cable being pulled is rare enough for that not to matter.
+        WakeAllLocked();
     }
-    // Whoever was waiting on the other end may now be unbounded, and a chain
-    // that has just been cut in the middle has two halves to wake.
-    m_cv.notify_all();
 }
 
 void LinkCoordinator::ReportCostLocked(const Endpoint& ep) const
@@ -680,8 +748,8 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
                           m_endpoints.end());
         RebuildBuses();
         LogBusesLocked("after a machine was switched off");
+        WakeAllLocked();
     }
-    m_cv.notify_all();
 }
 
 // ── Core side ───────────────────────────────────────────────────────────────
@@ -769,7 +837,7 @@ retro_link_port_t *LinkCoordinator::Attach(Wrapper* owner, unsigned port,
     Log(ep.label + " attached, protocol '" + ep.protocol_id + "', " + std::to_string(clock_rate) + " Hz");
     LogBusesLocked("after attach");
 
-    m_cv.notify_all();
+    WakeAllLocked();
     return reinterpret_cast<retro_link_port_t *>(static_cast<uintptr_t>(ep.id));
 }
 
@@ -791,8 +859,8 @@ void LinkCoordinator::Detach(retro_link_port_t *handle)
             Log(ep->label + " detached; the guest stopped driving its serial port");
             LogBusesLocked("after detach");
         }
+        WakeAllLocked();
     }
-    m_cv.notify_all();
 }
 
 int LinkCoordinator::Peers(retro_link_port_t *handle, unsigned* count)
@@ -931,7 +999,16 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
         delivered = true;
     }
 
-    m_cv.notify_all();
+    // Deliberately no wake. Placing a message cannot release anybody: the only
+    // thing that ever parks in this coordinator is Advance, and what it waits on
+    // is its ceiling, which is computed from the bus members' safe horizons and
+    // does not consult an inbox. recv never blocks -- a core drains what is
+    // there and carries on -- so a peer that has just been handed a byte has
+    // nothing to be woken FOR.
+    //
+    // This ran on every message a linked game sent, which in a four-handheld
+    // session is most of the traffic there is, and every one of them woke every
+    // parked thread in the room to have it recompute an unchanged ceiling.
     return delivered;
 }
 
@@ -1105,13 +1182,14 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
 
     const bool moved = anchor(ep);
     ++ep->advance_calls;
+    ++m_counters.advance_calls;
 
     // Publish before waiting: a peer parked on this machine's horizon cannot
     // move until it has been told the horizon moved. Only when it MOVED, and
     // only when there is somebody on this wire to hear it.
-    if (moved && ep->bus)
+    if (moved)
     {
-        m_cv.notify_all();
+        WakeBusLocked(*ep);
     }
 
     for (;;)
@@ -1144,9 +1222,24 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         // The clock either side of the wait is READ ONLY, and only added to a
         // counter. It decides nothing.
         ++ep->advance_waits;
+        ++m_counters.advance_waits;
         const auto parked_at = std::chrono::steady_clock::now();
         retro_link_port_t *const waiting_on = handle;
-        m_cv.wait(lock);
+
+        // The slot is read now and remembered, not looked up again after the
+        // wait: the bus this endpoint is on may be gone by then, and the count
+        // has to come back off the same slot it went on to.
+        //
+        // A bus is guaranteed here -- CeilingLocked returns unbounded without
+        // one, and that path has already returned above -- but the pool is
+        // grown defensively so a slot always exists to park on.
+        EnsureCvSlotsLocked(ep->bus ? ep->bus->cv_slot + 1 : 1);
+        const size_t slot = ep->bus ? ep->bus->cv_slot : 0;
+
+        ++m_cv_parked[slot];
+        m_cv_slots[slot]->wait(lock);
+        --m_cv_parked[slot];
+
         const uint64_t slept = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - parked_at).count());
@@ -1184,9 +1277,9 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         // Put back on a bus while this thread slept, which is what a cable being
         // seated anywhere on this wire does. Say where this machine is, or the
         // rest of the party waits on a member that never speaks again.
-        if (anchor(ep) && ep->bus)
+        if (anchor(ep))
         {
-            m_cv.notify_all();
+            WakeBusLocked(*ep);
         }
     }
 }

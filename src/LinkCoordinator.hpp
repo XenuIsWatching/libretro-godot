@@ -193,6 +193,7 @@ public:
         uint64_t last_grant = 0;
         bool shutting_down = false;
 
+
         std::deque<Message> inbox;
 
         /// Messages this endpoint has taken off the bus. Only ever counted up,
@@ -233,6 +234,14 @@ public:
     struct Bus
     {
         std::vector<Endpoint*> members;
+
+        /// Which condvar in the coordinator's pool this wire's members park on.
+        ///
+        /// An index rather than a condvar of its own, because a Bus is destroyed
+        /// and rebuilt every time a cable moves, and a thread parked on a condvar
+        /// that is then destroyed is undefined behaviour. The pool outlives every
+        /// bus; see m_cv_slots.
+        size_t cv_slot = 0;
     };
 
     /// One seated cable. The wires are what the room actually tells us about;
@@ -289,8 +298,70 @@ private:
     /// bounds it. Caller holds m_mutex.
     uint64_t CeilingLocked(const Endpoint& ep) const;
 
+public:
+    /// Coordinator-wide totals, for a bench rather than for a decision.
+    ///
+    /// Same rule as the per-endpoint numbers: diagnostic only, never read by
+    /// anything that decides a grant. `wakes` is the one that matters — a
+    /// condvar broadcast is a syscall per sleeping thread, and on a four-handheld
+    /// bus it was measured at 23.67% of all CPU cycles, against 6.49% for the
+    /// four emulators put together.
+    struct Counters
+    {
+        uint64_t advance_calls = 0;
+        uint64_t advance_waits = 0;
+        uint64_t wakes = 0;
+    };
+
+    Counters CountersSnapshot() const;
+    void ResetCounters();
+
+private:
+    Counters m_counters;
+
+    /// Wake the machines on `ep`'s wire, and nobody else. Caller holds m_mutex.
+    ///
+    /// The only thing that ever parks in here is Advance, and the only thing it
+    /// is waiting for is its ceiling to rise -- which is a function of its own
+    /// bus members' safe horizons and of nothing else. So a publish can only
+    /// ever unblock somebody on the same wire, and waking anyone else is work
+    /// spent to have a thread recompute a ceiling that did not move and park
+    /// again.
+    ///
+    /// That used to be the whole room. One process-wide condvar meant every
+    /// publish woke every parked emulation thread there was, each of which then
+    /// queued for the one global mutex and rescanned its bus. With N machines on
+    /// a wire rendezvousing every 256 cycles that is N-squared wakeups per
+    /// grain, all of it serialised, which is why a party got slower with each
+    /// handheld that joined it rather than merely busier.
+    void WakeBusLocked(const Endpoint& ep);
+
+    /// Wake every parked thread, wherever it is. Caller holds m_mutex.
+    ///
+    /// For the topology changes only. A rebuild reassigns slots, so a thread
+    /// parked under the old arrangement can be waiting on a slot that no longer
+    /// belongs to its bus; broadcasting is what guarantees it is heard and gets
+    /// to re-park on the right one. Rare enough that the cost does not matter,
+    /// and skipping it would strand exactly the machine whose cable just moved.
+    void WakeAllLocked();
+
+    /// Grow the condvar pool to cover `count` buses. Caller holds m_mutex.
+    void EnsureCvSlotsLocked(size_t count);
+
     mutable std::mutex m_mutex;
-    std::condition_variable m_cv;
+
+    /// One condvar per bus, held by the coordinator rather than by the bus.
+    ///
+    /// Only ever appended to: a slot is never destroyed while this singleton
+    /// lives, so a thread that parked on one before a cable moved still has a
+    /// valid condvar to be woken on afterwards. Slots ARE reused across
+    /// rebuilds, which can wake a straggler that has moved to another wire --
+    /// harmless, it rechecks and parks again.
+    std::vector<std::unique_ptr<std::condition_variable>> m_cv_slots;
+
+    /// How many threads are parked on each slot, so a publish with nobody
+    /// listening can skip the notify altogether. Same index as m_cv_slots.
+    std::vector<unsigned> m_cv_parked;
     std::vector<std::unique_ptr<Endpoint>> m_endpoints;
     std::vector<std::unique_ptr<Bus>> m_buses;
     std::vector<Link> m_links;
