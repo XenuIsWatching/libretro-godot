@@ -29,6 +29,10 @@ TESTS = {
     # Header-only: the encoding is the whole unit, and InputHandler.cpp is not
     # Godot-free the way LinkCoordinator.cpp deliberately is.
     "sensor_index_test.cpp": [],
+    # A benchmark rather than a test: it prints a cost curve and only fails if
+    # the bus cannot be set up. Run it on its own (--only link_bench), because
+    # it is slow by design and its numbers want reading, not gating.
+    "link_bench.cpp": ["LinkCoordinator.cpp"],
 }
 
 INCLUDES = [
@@ -90,6 +94,9 @@ def main():
                     help="run each test N times; the threaded tests can only be "
                          "trusted after a few passes")
     ap.add_argument("--only", help="run just this test source")
+    ap.add_argument("--args", default="",
+                    help="extra arguments passed through to the test binary, "
+                         "which is how link_bench is swept (e.g. --args='--grain=2048')")
     args = ap.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="libretro-godot-tests-")
@@ -116,7 +123,7 @@ def main():
                 continue
 
             for run in range(args.repeat):
-                result = subprocess.run([out_exe], capture_output=True, text=True)
+                result = subprocess.run([out_exe] + args.args.split(), capture_output=True, text=True)
                 if result.returncode != 0:
                     print(result.stdout)
                     failures.append("%s (run %d)" % (name, run + 1))
