@@ -5,6 +5,12 @@
 
 #include "Debug.hpp"
 
+#if !defined(NDEBUG) || defined(XENU_LINK_WAIT_DIAGNOSTICS)
+#define XENU_MEASURE_LINK_WAITS 1
+#else
+#define XENU_MEASURE_LINK_WAITS 0
+#endif
+
 #if defined(_MSC_VER) && defined(_M_X64)
 #include <intrin.h>
 #endif
@@ -716,6 +722,11 @@ void LinkCoordinator::ReportCostLocked(const Endpoint& ep) const
     {
         return;
     }
+#if !XENU_MEASURE_LINK_WAITS
+    Log("m" + std::to_string(ep.id) + ":" + std::to_string(ep.port) + " cost: " +
+        std::to_string(ep.advance_calls) + " advance calls, " +
+        std::to_string(ep.advance_waits) + " of them parked (release wait timing disabled)");
+#else
     const double ms = static_cast<double>(ep.blocked_ns) / 1e6;
     const double per_call_us =
         static_cast<double>(ep.blocked_ns) / 1e3 / static_cast<double>(ep.advance_calls);
@@ -728,6 +739,7 @@ void LinkCoordinator::ReportCostLocked(const Endpoint& ep) const
         std::to_string(ep.advance_waits) + " of them parked, " +
         std::to_string(ms) + " ms blocked (" + std::to_string(per_call_us) +
         " us per call)");
+#endif
 }
 
 void LinkCoordinator::DropOwner(Wrapper* owner)
@@ -1223,7 +1235,9 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         // counter. It decides nothing.
         ++ep->advance_waits;
         ++m_counters.advance_waits;
+#if XENU_MEASURE_LINK_WAITS
         const auto parked_at = std::chrono::steady_clock::now();
+#endif
         retro_link_port_t *const waiting_on = handle;
 
         // The slot is read now and remembered, not looked up again after the
@@ -1240,9 +1254,11 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         m_cv_slots[slot]->wait(lock);
         --m_cv_parked[slot];
 
+#if XENU_MEASURE_LINK_WAITS
         const uint64_t slept = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - parked_at).count());
+#endif
 
         // The endpoint may have been torn down while this thread slept, so it
         // is looked up again rather than held across the wait. By ID: the memory
@@ -1253,6 +1269,7 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         {
             return RETRO_LINK_UNBOUNDED;
         }
+#if XENU_MEASURE_LINK_WAITS
         ep->blocked_ns += slept;
         if (slept > 20000000ull)
         {
@@ -1273,6 +1290,7 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - session_start).count());
         }
+#endif
 
         // Put back on a bus while this thread slept, which is what a cable being
         // seated anywhere on this wire does. Say where this machine is, or the
