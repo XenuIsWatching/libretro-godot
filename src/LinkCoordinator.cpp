@@ -980,6 +980,7 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
 
     const uint64_t sender_delta = (tick > sender->origin) ? (tick - sender->origin) : 0;
     bool delivered = false;
+    bool actionable = false;
 
     for (Endpoint* member : sender->bus->members)
     {
@@ -1002,6 +1003,7 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
         msg.from = static_cast<unsigned>(sender->index);
         msg.tick = member->origin + ConvertDelta(sender_delta, sender->clock_rate, member->clock_rate);
         msg.Assign(buf, len);
+        const uint64_t delivery_tick = msg.tick;
 
         // Keep each inbox ordered by delivery tick. Two peers can hand a third
         // machine traffic stamped out of order, and a serial port that reads
@@ -1010,14 +1012,20 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
                                    [](uint64_t t, const Message& m) { return t < m.tick; });
         member->inbox.insert(at, std::move(msg));
 		++member->inbox_events;
+        // A future-stamped message cannot let this endpoint through the clock
+        // barrier yet. Waking it only makes it leave and immediately re-enter
+        // the same wait, which turns busy multiplayer traffic into an N-way
+        // condition-variable storm. The pending inbox edge is retained and is
+        // reported with the ordinary horizon grant that reaches its timestamp.
+        actionable |= member->origin + member->local_delta >= delivery_tick;
         ++sender->sent;   // counted where a message is actually QUEUED, not attempted
         delivered = true;
     }
 
-	/* The draft interface now lets Advance return specifically because an inbox
-	 * became readable. Wake once for the bus after all recipients have been
-	 * queued; each recipient observes its own inbox under the same mutex. */
-	if (delivered)
+	/* The draft interface lets Advance return specifically for an actionable
+	 * inbox edge. Wake once after all recipients have been queued; future edges
+	 * remain recorded and ride the next horizon grant instead. */
+	if (actionable)
 	{
 		WakeBusLocked(*sender);
 	}
