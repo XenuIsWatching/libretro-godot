@@ -671,7 +671,7 @@ bool LinkCoordinator::RestoreGroup(
     {
         for (const Message& message : states[i].inbox)
         {
-            if (message.from >= endpoints.size() || message.data.size() > MAX_PAYLOAD)
+            if (message.from >= endpoints.size() || message.size > MAX_PAYLOAD)
                 return false;
         }
     }
@@ -998,7 +998,7 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
         Message msg;
         msg.from = static_cast<unsigned>(sender->index);
         msg.tick = member->origin + ConvertDelta(sender_delta, sender->clock_rate, member->clock_rate);
-        msg.data.assign(static_cast<const uint8_t*>(buf), static_cast<const uint8_t*>(buf) + len);
+        msg.Assign(buf, len);
 
         // Keep each inbox ordered by delivery tick. Two peers can hand a third
         // machine traffic stamped out of order, and a serial port that reads
@@ -1050,10 +1050,10 @@ bool LinkCoordinator::Recv(retro_link_port_t *handle, uint64_t* tick, unsigned* 
     const Message& head = ep->inbox.front();
 
     const size_t capacity = len ? *len : 0;
-    if (head.data.size() > capacity)
+    if (head.size > capacity)
     {
         LogError("Recv: buffer of " + std::to_string(capacity) + " bytes is too small for a " +
-                 std::to_string(head.data.size()) + " byte message; dropping it.");
+                 std::to_string(head.size) + " byte message; dropping it.");
         ep->inbox.pop_front();
         return false;
     }
@@ -1066,13 +1066,13 @@ bool LinkCoordinator::Recv(retro_link_port_t *handle, uint64_t* tick, unsigned* 
     {
         *from = head.from;
     }
-    if (!head.data.empty() && buf)
+    if (head.size > 0 && buf)
     {
-        std::copy(head.data.begin(), head.data.end(), static_cast<uint8_t*>(buf));
+        std::copy_n(head.Data(), head.size, static_cast<uint8_t*>(buf));
     }
     if (len)
     {
-        *len = head.data.size();
+        *len = head.size;
     }
 
     ep->inbox.pop_front();

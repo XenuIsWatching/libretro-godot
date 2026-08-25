@@ -708,9 +708,9 @@ godot::Array Libretro::LinkCaptureGroup(const godot::Array& others,
             item["tick"] = static_cast<int64_t>(message.tick);
             item["from"] = static_cast<int64_t>(message.from);
             godot::PackedByteArray data;
-            data.resize(static_cast<int64_t>(message.data.size()));
-            if (!message.data.empty())
-                std::copy(message.data.begin(), message.data.end(), data.ptrw());
+            data.resize(static_cast<int64_t>(message.size));
+            if (message.size > 0)
+                std::copy_n(message.Data(), message.size, data.ptrw());
             item["data"] = data;
             inbox.append(item);
         }
@@ -770,7 +770,7 @@ bool Libretro::LinkRestoreGroup(const godot::Array& others,
             LinkCoordinator::Message message;
             message.tick = static_cast<uint64_t>(tick);
             message.from = static_cast<unsigned>(from);
-            message.data.assign(data.ptr(), data.ptr() + data.size());
+            message.Assign(data.ptr(), static_cast<size_t>(data.size()));
             state.inbox.push_back(std::move(message));
         }
         states.push_back(std::move(state));

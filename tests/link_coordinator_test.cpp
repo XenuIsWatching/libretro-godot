@@ -234,6 +234,19 @@ static void TestSendRecv()
     Check(tick == 500 && from == 0, "and told which tick it lands on");
     Check(len == 4 && std::memcmp(buf, payload, 4) == 0, "payload survives");
 
+    uint8_t large_payload[64];
+    for (size_t i = 0; i < sizeof large_payload; ++i)
+        large_payload[i] = static_cast<uint8_t>(i);
+    SetCurrent(a);
+    Check(c.Send(H(a, 0), 600, RETRO_LINK_BROADCAST, large_payload, sizeof large_payload),
+          "payloads larger than the inline buffer still send");
+    uint8_t large_buf[sizeof large_payload]{};
+    len = sizeof large_buf;
+    SetCurrent(b);
+    Check(c.Recv(H(b, 0), &tick, &from, large_buf, &len) && len == sizeof large_payload &&
+              std::memcmp(large_buf, large_payload, sizeof large_payload) == 0,
+          "large payloads use the allocation fallback");
+
     len = sizeof buf;
     Check(!c.Recv(H(b, 0), &tick, &from, buf, &len), "inbox is drained");
 

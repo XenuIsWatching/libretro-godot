@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -114,9 +116,33 @@ public:
 
     struct Message
     {
+        static constexpr size_t INLINE_CAPACITY = 32;
+
         uint64_t tick = 0;   ///< already converted into the RECEIVER's ticks
         unsigned from = 0;   ///< sender's index on the bus
-        std::vector<uint8_t> data;
+        size_t size = 0;
+        std::array<uint8_t, INLINE_CAPACITY> inline_data{};
+        std::vector<uint8_t> heap_data;
+
+        void Assign(const void* source, size_t length)
+        {
+            size = length;
+            const auto* first = static_cast<const uint8_t*>(source);
+            if (length <= INLINE_CAPACITY)
+            {
+                std::copy_n(first, length, inline_data.begin());
+                heap_data.clear();
+            }
+            else
+            {
+                heap_data.assign(first, first + length);
+            }
+        }
+
+        const uint8_t* Data() const
+        {
+            return size <= INLINE_CAPACITY ? inline_data.data() : heap_data.data();
+        }
     };
 
     /// Deterministic bus state that lives outside a core savestate. A linked
