@@ -757,6 +757,47 @@ static void TestBootedApartAlign()
     c.DropOwner(b);
 }
 
+// -- queued traffic wakes a core parked on clock progress -------------------
+static void TestMessageWake()
+{
+    std::printf("T16 a message wakes Advance before its clock request\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x3501);
+    Wrapper* b = Fake(0x3502);
+    DoAttach(c, a, 0, "gba-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "gba-sio-1", GBA_HZ);
+    c.Connect(a, 0, b, 0);
+
+    uint32_t wake = 0;
+    c.Advance(H(a, 0), 0, GRAIN, 0, &wake);
+    c.Advance(H(b, 0), 0, GRAIN, 0, &wake);
+
+    std::atomic<bool> entered{false};
+    uint64_t grant = RETRO_LINK_UNBOUNDED;
+    uint32_t reasons = 0;
+    std::thread waiter([&] {
+        entered = true;
+        grant = c.Advance(H(a, 0), 0, GRAIN, 10 * GRAIN, &reasons);
+    });
+    while (!entered.load())
+        std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    const uint8_t byte = 0x5A;
+    Check(c.Send(H(b, 0), GRAIN, RETRO_LINK_BROADCAST, &byte, 1),
+          "peer queues a byte while Advance is parked");
+    waiter.join();
+    Check((reasons & RETRO_LINK_WAKE_MESSAGE) != 0,
+          "Advance reports that recv is readable");
+    Check(grant < 10 * GRAIN, "the wake does not invent the requested clock grant");
+
+    uint8_t got = 0; size_t len = 1;
+    Check(c.Recv(H(a, 0), nullptr, nullptr, &got, &len) && got == byte,
+          "the waking message remains queued until recv");
+    c.DropOwner(a);
+    c.DropOwner(b);
+}
+
 int main()
 {
     // Unbuffered, because this binary is run with its output on a pipe and a
@@ -778,6 +819,7 @@ int main()
     TestProtocolMismatchIsNonDestructive();
     TestSnapshotRoundTrip();
     TestBootedApartAlign();
+    TestMessageWake();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

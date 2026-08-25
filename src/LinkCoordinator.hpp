@@ -100,7 +100,7 @@ public:
     bool     Send(retro_link_port_t *handle, uint64_t tick, unsigned to, const void* buf, size_t len);
     bool     Recv(retro_link_port_t *handle, uint64_t* tick, unsigned* from, void* buf, size_t* len);
     uint64_t Advance(retro_link_port_t *handle, uint64_t local_tick, uint64_t safe_tick,
-                     uint64_t request_tick);
+                     uint64_t request_tick, uint32_t* wake_flags = nullptr);
 
     // Read by the ROOM rather than by a core, so these look an endpoint up by
     // machine and port the way everything else on the host side does. A cable
@@ -218,6 +218,12 @@ public:
 
         uint64_t last_grant = 0;
         bool shutting_down = false;
+
+        /* Incremented whenever the room rebuilds this endpoint's wire. Advance
+         * consumes it so a core blocked on an otherwise idle cable can refresh
+         * membership immediately. */
+        uint64_t topology_generation = 0;
+        uint64_t observed_topology_generation = 0;
 
 
         std::deque<Message> inbox;

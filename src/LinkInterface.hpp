@@ -62,6 +62,14 @@ extern "C" {
 /* Peer id meaning "every other peer on this port's bus". */
 #define RETRO_LINK_BROADCAST 0xFF
 
+/* Why advance returned before request_tick became available. Multiple reasons
+ * may be present. The core should drain recv on MESSAGE and refresh peers on
+ * TOPOLOGY before asking to advance again. */
+#define RETRO_LINK_WAKE_NONE     0u
+#define RETRO_LINK_WAKE_MESSAGE  (1u << 0)
+#define RETRO_LINK_WAKE_TOPOLOGY (1u << 1)
+#define RETRO_LINK_WAKE_DETACHED (1u << 2)
+
 /* An attached port, as the frontend knows it.
  *
  * Handed back by attach and passed to every other call, the way a file handle
@@ -179,7 +187,8 @@ typedef bool (RETRO_CALLCONV *retro_link_recv_t)(retro_link_port_t *handle, uint
  * Thread-safe. Cores generally run on their own emulation threads, and this
  * call is the rendezvous between them. */
 typedef uint64_t (RETRO_CALLCONV *retro_link_advance_t)(retro_link_port_t *handle,
-      uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick);
+      uint64_t local_tick, uint64_t safe_tick, uint64_t request_tick,
+      uint32_t *wake_flags);
 
 /* @see RETRO_ENVIRONMENT_GET_LINK_INTERFACE */
 struct retro_link_interface

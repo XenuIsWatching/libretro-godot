@@ -161,9 +161,10 @@ bool RETRO_CALLCONV LinkRecvCb(retro_link_port_t *handle, uint64_t* tick, unsign
 }
 
 uint64_t RETRO_CALLCONV LinkAdvanceCb(retro_link_port_t *handle, uint64_t local_tick,
-                                      uint64_t safe_tick, uint64_t request_tick)
+                                      uint64_t safe_tick, uint64_t request_tick,
+                                      uint32_t* wake_flags)
 {
-    return LinkCoordinator::Get().Advance(handle, local_tick, safe_tick, request_tick);
+    return LinkCoordinator::Get().Advance(handle, local_tick, safe_tick, request_tick, wake_flags);
 }
 }
 
@@ -226,6 +227,7 @@ LinkCoordinator::Endpoint& LinkCoordinator::FindOrCreate(Wrapper* owner, unsigne
 
 void LinkCoordinator::Detached(Endpoint& ep)
 {
+	++ep.topology_generation;
     ep.bus = nullptr;
     ep.index = -1;
     // A pulled cable is a pulled cable: anything still queued was addressed to
@@ -389,6 +391,7 @@ void LinkCoordinator::RebuildBuses()
         {
             bus.members[i]->bus = &bus;
             bus.members[i]->index = static_cast<int>(i);
+			++bus.members[i]->topology_generation;
         }
     }
 
@@ -1010,16 +1013,13 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
         delivered = true;
     }
 
-    // Deliberately no wake. Placing a message cannot release anybody: the only
-    // thing that ever parks in this coordinator is Advance, and what it waits on
-    // is its ceiling, which is computed from the bus members' safe horizons and
-    // does not consult an inbox. recv never blocks -- a core drains what is
-    // there and carries on -- so a peer that has just been handed a byte has
-    // nothing to be woken FOR.
-    //
-    // This ran on every message a linked game sent, which in a four-handheld
-    // session is most of the traffic there is, and every one of them woke every
-    // parked thread in the room to have it recompute an unchanged ceiling.
+	/* The draft interface now lets Advance return specifically because an inbox
+	 * became readable. Wake once for the bus after all recipients have been
+	 * queued; each recipient observes its own inbox under the same mutex. */
+	if (delivered)
+	{
+		WakeBusLocked(*sender);
+	}
     return delivered;
 }
 
@@ -1116,13 +1116,22 @@ uint64_t LinkCoordinator::CeilingLocked(const Endpoint& ep) const
 }
 
 uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick,
-                                  uint64_t safe_tick, uint64_t request_tick)
+                                  uint64_t safe_tick, uint64_t request_tick,
+	                              uint32_t* wake_flags)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
+	if (wake_flags)
+	{
+		*wake_flags = RETRO_LINK_WAKE_NONE;
+	}
 
     Endpoint* ep = Resolve(handle);
     if (!ep || !ep->attached)
     {
+		if (wake_flags)
+		{
+			*wake_flags = RETRO_LINK_WAKE_DETACHED;
+		}
         return RETRO_LINK_UNBOUNDED;
     }
 
@@ -1205,6 +1214,28 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
 
     for (;;)
     {
+		uint32_t reasons = RETRO_LINK_WAKE_NONE;
+		if (wake_flags)
+		{
+			if (!ep->inbox.empty())
+			{
+				reasons |= RETRO_LINK_WAKE_MESSAGE;
+			}
+			if (ep->observed_topology_generation != ep->topology_generation)
+			{
+				ep->observed_topology_generation = ep->topology_generation;
+				reasons |= RETRO_LINK_WAKE_TOPOLOGY;
+			}
+		}
+		if (reasons != RETRO_LINK_WAKE_NONE)
+		{
+			if (wake_flags)
+			{
+				*wake_flags = reasons;
+			}
+			return std::max(local_tick, ep->last_grant);
+		}
+
         const uint64_t ceiling = CeilingLocked(*ep);
         if (ceiling == RETRO_LINK_UNBOUNDED)
         {
@@ -1266,6 +1297,10 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         ep = Resolve(waiting_on);
         if (!ep || !ep->attached || ep->shutting_down)
         {
+			if (wake_flags)
+			{
+				*wake_flags = RETRO_LINK_WAKE_DETACHED;
+			}
             return RETRO_LINK_UNBOUNDED;
         }
 #if XENU_MEASURE_LINK_WAITS
