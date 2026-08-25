@@ -784,8 +784,8 @@ static void TestMessageWake()
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     const uint8_t byte = 0x5A;
-    Check(c.Send(H(b, 0), GRAIN, RETRO_LINK_BROADCAST, &byte, 1),
-          "peer queues a byte while Advance is parked");
+    Check(c.Send(H(b, 0), 0, RETRO_LINK_BROADCAST, &byte, 1),
+          "peer queues an actionable byte while Advance is parked");
     waiter.join();
     Check((reasons & RETRO_LINK_WAKE_MESSAGE) != 0,
           "Advance reports that recv is readable");
@@ -794,6 +794,45 @@ static void TestMessageWake()
     uint8_t got = 0; size_t len = 1;
     Check(c.Recv(H(a, 0), nullptr, nullptr, &got, &len) && got == byte,
           "the waking message remains queued until recv");
+    c.DropOwner(a);
+    c.DropOwner(b);
+}
+
+static void TestFutureMessageKeepsBarrier()
+{
+    std::printf("T17 a future message does not bypass the clock barrier\n");
+    auto& c = LinkCoordinator::Get();
+    Wrapper* a = Fake(0x3601);
+    Wrapper* b = Fake(0x3602);
+    DoAttach(c, a, 0, "psx-sio-1", GBA_HZ);
+    DoAttach(c, b, 0, "psx-sio-1", GBA_HZ);
+    c.Connect(a, 0, b, 0);
+
+    uint32_t wake = 0;
+    c.Advance(H(a, 0), 0, GRAIN, 0, &wake);
+    c.Advance(H(b, 0), 0, GRAIN, 0, &wake);
+
+    std::atomic<bool> done{false};
+    uint64_t grant = 0;
+    uint32_t reasons = 0;
+    std::thread waiter([&] {
+        grant = c.Advance(H(a, 0), 0, GRAIN, 2 * GRAIN, &reasons);
+        done = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    const uint8_t byte = 0xA5;
+    Check(c.Send(H(b, 0), GRAIN, RETRO_LINK_BROADCAST, &byte, 1),
+          "peer queues a future byte");
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    Check(!done.load(), "future traffic leaves Advance behind the horizon barrier");
+
+    c.Advance(H(b, 0), 0, 2 * GRAIN, GRAIN, &wake);
+    waiter.join();
+    Check(grant == 2 * GRAIN, "the receiver gets its requested synchronized grant");
+    Check((reasons & RETRO_LINK_WAKE_MESSAGE) != 0,
+          "and the queued-message edge is reported with that grant");
+
     c.DropOwner(a);
     c.DropOwner(b);
 }
@@ -820,6 +859,7 @@ int main()
     TestSnapshotRoundTrip();
     TestBootedApartAlign();
     TestMessageWake();
+    TestFutureMessageKeepsBarrier();
     std::printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL PASS",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

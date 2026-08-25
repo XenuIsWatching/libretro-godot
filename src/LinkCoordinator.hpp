@@ -225,6 +225,8 @@ public:
          * membership immediately. */
         uint64_t topology_generation = 0;
         uint64_t observed_topology_generation = 0;
+		uint64_t inbox_events = 0;
+		uint64_t observed_inbox_events = 0;
 
 
         std::deque<Message> inbox;

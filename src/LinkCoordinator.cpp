@@ -1009,6 +1009,7 @@ bool LinkCoordinator::Send(retro_link_port_t *handle, uint64_t tick, unsigned to
         auto at = std::upper_bound(member->inbox.begin(), member->inbox.end(), msg.tick,
                                    [](uint64_t t, const Message& m) { return t < m.tick; });
         member->inbox.insert(at, std::move(msg));
+		++member->inbox_events;
         ++sender->sent;   // counted where a message is actually QUEUED, not attempted
         delivered = true;
     }
@@ -1220,34 +1221,42 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         WakeBusLocked(*ep);
     }
 
+	auto report = [&](uint32_t reasons, uint64_t grant) -> uint64_t
+	{
+		if (reasons & RETRO_LINK_WAKE_MESSAGE)
+		{
+			ep->observed_inbox_events = ep->inbox_events;
+		}
+		if (reasons & RETRO_LINK_WAKE_TOPOLOGY)
+		{
+			ep->observed_topology_generation = ep->topology_generation;
+		}
+		if (wake_flags)
+		{
+			*wake_flags = reasons;
+		}
+		return grant;
+	};
+
     for (;;)
     {
 		uint32_t reasons = RETRO_LINK_WAKE_NONE;
 		if (wake_flags)
 		{
-			if (!ep->inbox.empty())
+			if (!ep->inbox.empty() && ep->observed_inbox_events != ep->inbox_events)
 			{
 				reasons |= RETRO_LINK_WAKE_MESSAGE;
 			}
 			if (ep->observed_topology_generation != ep->topology_generation)
 			{
-				ep->observed_topology_generation = ep->topology_generation;
 				reasons |= RETRO_LINK_WAKE_TOPOLOGY;
 			}
-		}
-		if (reasons != RETRO_LINK_WAKE_NONE)
-		{
-			if (wake_flags)
-			{
-				*wake_flags = reasons;
-			}
-			return std::max(local_tick, ep->last_grant);
 		}
 
         const uint64_t ceiling = CeilingLocked(*ep);
         if (ceiling == RETRO_LINK_UNBOUNDED)
         {
-            return RETRO_LINK_UNBOUNDED;
+			return report(reasons, RETRO_LINK_UNBOUNDED);
         }
         if (ceiling >= request_tick)
         {
@@ -1262,8 +1271,21 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
             // machine to un-run instructions it has already run.
             const uint64_t grant = std::max({request_tick, local_tick, ep->last_grant});
             ep->last_grant = grant;
-            return grant;
+			return report(reasons, grant);
         }
+
+		/* A queued event is a reason to stop waiting only once this core can act
+		 * on it. Future-stamped serial traffic remains in the inbox while the
+		 * ordinary horizon barrier advances the receiver toward its timestamp;
+		 * treating mere queue occupancy as progress starves the peer that must
+		 * publish that clearance. Topology is actionable immediately. */
+		const bool actionable_message =
+			(reasons & RETRO_LINK_WAKE_MESSAGE) && !ep->inbox.empty() &&
+			ep->inbox.front().tick <= local_tick;
+		if ((reasons & RETRO_LINK_WAKE_TOPOLOGY) || actionable_message)
+		{
+			return report(reasons, std::max(local_tick, ep->last_grant));
+		}
 
         // No timeout, on purpose. Giving up after a while would make the grant
         // depend on wall-clock time, and two peers replaying identical inputs
