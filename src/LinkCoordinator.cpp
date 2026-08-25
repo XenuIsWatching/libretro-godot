@@ -189,14 +189,7 @@ LinkCoordinator::Endpoint* LinkCoordinator::Resolve(retro_link_port_t *handle)
     {
         return nullptr;
     }
-    for (auto& ep : m_endpoints)
-    {
-        if (ep->id == id)
-        {
-            return ep.get();
-        }
-    }
-    return nullptr;
+    return id < m_handles.size() ? m_handles[static_cast<size_t>(id)] : nullptr;
 }
 
 LinkCoordinator::Endpoint* LinkCoordinator::Find(Wrapper* owner, unsigned port)
@@ -223,6 +216,11 @@ LinkCoordinator::Endpoint& LinkCoordinator::FindOrCreate(Wrapper* owner, unsigne
     ep.port = port;
     ep.id = m_next_id++;
     ep.label = "m" + std::to_string(++m_next_label) + ":" + std::to_string(port);
+    if (m_handles.size() <= ep.id)
+    {
+        m_handles.resize(static_cast<size_t>(ep.id + 1), nullptr);
+    }
+    m_handles[static_cast<size_t>(ep.id)] = &ep;
     return ep;
 }
 
@@ -753,6 +751,7 @@ void LinkCoordinator::DropOwner(Wrapper* owner)
                 ep->shutting_down = true;
                 ReportCostLocked(*ep);
                 CutLinksAt(*ep);
+                m_handles[static_cast<size_t>(ep->id)] = nullptr;
             }
         }
         m_endpoints.erase(std::remove_if(m_endpoints.begin(), m_endpoints.end(),

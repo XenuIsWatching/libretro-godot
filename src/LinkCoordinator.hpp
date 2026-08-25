@@ -363,6 +363,10 @@ private:
     /// listening can skip the notify altogether. Same index as m_cv_slots.
     std::vector<unsigned> m_cv_parked;
     std::vector<std::unique_ptr<Endpoint>> m_endpoints;
+    /// Endpoint id -> live endpoint. IDs are never reused, so a removed entry
+    /// stays null and a stale core handle cannot resolve to a later machine.
+    /// The table trades one pointer per attachment for O(1) core-facing calls.
+    std::vector<Endpoint*> m_handles{nullptr};
     std::vector<std::unique_ptr<Bus>> m_buses;
     std::vector<Link> m_links;
 };
