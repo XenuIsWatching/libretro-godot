@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -325,6 +326,18 @@ private:
 
     /// Next endpoint id. Starts at 1 so that a zero handle is always invalid.
     uint64_t m_next_id = 1;
+
+    /// When the first core called into the bus, so worst_at_ms reads as "how far
+    /// into the session". Diagnostic only, like everything it feeds.
+    ///
+    /// This used to be a static local declared inside the branch that records a
+    /// new worst block, so it was initialised by the first STALL rather than the
+    /// first call -- while its comment claimed otherwise. Every "at N ms in"
+    /// figure was therefore measured from an unknown origin, which is worse than
+    /// no figure: it invites exactly the correlation with a log timestamp that it
+    /// cannot support, and one was drawn from it and had to be retracted.
+    bool m_session_started = false;
+    std::chrono::steady_clock::time_point m_session_start;
 
     /// Ceiling for `ep` in its own ticks, or RETRO_LINK_UNBOUNDED when nothing
     /// bounds it. Caller holds m_mutex.

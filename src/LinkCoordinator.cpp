@@ -1200,6 +1200,14 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         return fresh || e->safe_delta != safe_before;
     };
 
+#if XENU_MEASURE_LINK_WAITS
+    if (!m_session_started)
+    {
+        m_session_started = true;
+        m_session_start = std::chrono::steady_clock::now();
+    }
+#endif
+
     const bool moved = anchor(ep);
     ++ep->advance_calls;
     ++m_counters.advance_calls;
@@ -1317,12 +1325,11 @@ uint64_t LinkCoordinator::Advance(retro_link_port_t *handle, uint64_t local_tick
         {
             ep->worst_block_ns = slept;
             // Wall clock, and diagnostic only, like everything else here. The
-            // zero is the first time anybody called in, so this reads as "how
-            // far into the session".
-            static const auto session_start = std::chrono::steady_clock::now();
+            // zero is the first time anybody called in (see m_session_start), so
+            // this reads as "how far into the session".
             ep->worst_at_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - session_start).count());
+                    std::chrono::steady_clock::now() - m_session_start).count());
         }
 #endif
 
