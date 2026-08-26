@@ -97,6 +97,10 @@ public:
     /// Whether a hardware-rendered frame arrives bottom-up and has to be
     /// flipped for Godot. True only for GL, whose framebuffers are bottom-left
     /// origin; Vulkan and both D3D APIs are already top-down.
+    ///
+    /// This is only correct as long as the readback reads the framebuffer the
+    /// frontend handed the core -- see the bind in RefreshCallback. A picture
+    /// that comes out upside down on GL is that binding, not this rule.
     bool HwFrameNeedsFlip() const;
 
     /// The render interface for whichever hardware context this core got, as

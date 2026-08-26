@@ -5,6 +5,7 @@
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_opengl.h>
+#include <SDL3/SDL_video.h>
 #elif defined(__ANDROID__)
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -107,6 +108,27 @@ void VideoHandler::RefreshCallback(const void* data, uint32_t width, uint32_t he
             // every pixel would not notice; ScummVM updates only dirty
             // rectangles, so its picture would alternate between two half-stale
             // images.
+            // Read the framebuffer we HANDED the core, not whichever one it
+            // happened to leave bound. A core is under no obligation to restore
+            // the binding, and GLideN64 (ParaLLEl N64) returns from retro_run
+            // with one of its own FBOs still current. Reading that gave a
+            // top-down image, which the bottom-up flip below then turned upside
+            // down -- the same game was correct on that core's software and
+            // Vulkan renderers, which take neither this path nor the flip.
+            //
+            // Desktop GL: glBindFramebuffer is not in the GL 1.1 headers
+            // SDL_opengl.h exposes, so it is resolved once at runtime. A failed
+            // lookup reads whatever is bound -- the old behaviour, not a black
+            // screen. GLES3 on Android declares it outright.
+#if defined(__ANDROID__)
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+#else
+            using BindFbo = void(APIENTRY*)(GLenum, GLuint);
+            static BindFbo bind_fbo =
+                reinterpret_cast<BindFbo>(SDL_GL_GetProcAddress("glBindFramebuffer"));
+            if (bind_fbo)
+                bind_fbo(0x8CA8 /* GL_READ_FRAMEBUFFER */, 0);
+#endif
             glReadPixels(0, 0, (int)width, (int)height, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data.ptrw());
 #endif
         }
@@ -747,6 +769,13 @@ bool VideoHandler::SetHwRender(retro_hw_render_callback* hw_render_callback)
     Log("Setting hardware render callback...");
 
     Log("Context type: " + std::to_string(hw_render_callback->context_type));
+
+    // Logged, not acted on. Every GL core here declares bottom-left, which is
+    // the GL default and what the readback assumes; it is worth printing
+    // because a core that ever declares otherwise would make an upside-down
+    // picture explainable in one line instead of a rebuild.
+    Log(std::string("Declared frame origin: ")
+        + (hw_render_callback->bottom_left_origin ? "bottom-left" : "top-left"));
 
     bool supported = false;
     switch (hw_render_callback->context_type)
