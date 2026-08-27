@@ -71,6 +71,14 @@ public:
     static std::string ResolveCorePath(const std::string& root_directory, const std::string& core_name);
 
     void StartContent(const std::string& root_directory, const std::string& core_name, const std::string& game_path);
+
+    /// As StartContent, plus a libretro subsystem load: multi-file content the
+    /// core takes as one unit. game_path keeps its usual meaning as the identity
+    /// path; subsystem_paths is the ordered list handed to
+    /// retro_load_game_special. An empty ident behaves exactly like StartContent.
+    void StartSubsystemContent(const std::string& root_directory, const std::string& core_name,
+                               const std::string& game_path, const std::string& subsystem_ident,
+                               const std::vector<std::string>& subsystem_paths);
     void StopContent();
     /// Silence, then stop the emulation thread, waiting at most `budget_ms` for it
     /// to leave the core. True when it exited and teardown finished. False means
@@ -688,6 +696,24 @@ public:
     std::string m_game_path;
 
     std::vector<unsigned char> m_game_buffer;
+
+    /// Non-empty only for a subsystem run: the ident the core published via
+    /// SET_SUBSYSTEM_INFO ("ndd", ...), which selects retro_load_game_special
+    /// over retro_load_game. Written by StartSubsystemContent before the
+    /// emulation thread exists, and read only on that thread.
+    std::string m_subsystem_ident;
+
+    /// Ordered content paths for a subsystem run, one per rom the core declared,
+    /// in the core's order. m_game_path remains the single identity path that
+    /// saves, save states, achievements and netplay hashing key off; these are
+    /// used for nothing but the load call itself.
+    std::vector<std::string> m_subsystem_paths;
+
+    /// One buffer per subsystem rom that is not need_fullpath. Sized once to the
+    /// rom count before any element is filled, so the retro_game_info data
+    /// pointers taken from each element cannot move under the core -- the same
+    /// discipline the memory descriptors below need, for the same reason.
+    std::vector<std::vector<unsigned char>> m_subsystem_buffers;
 
     /// Backing store for SetMemoryDescriptors. The strings are held separately so
     /// the char* inside each descriptor keeps pointing at storage we own; a

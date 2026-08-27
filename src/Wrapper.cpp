@@ -368,6 +368,13 @@ std::string Wrapper::ResolveCorePath(const std::string& root_directory, const st
 
 void Wrapper::StartContent(const std::string& root_directory, const std::string& core_name, const std::string& game_path)
 {
+    StartSubsystemContent(root_directory, core_name, game_path, std::string(), {});
+}
+
+void Wrapper::StartSubsystemContent(const std::string& root_directory, const std::string& core_name,
+                                    const std::string& game_path, const std::string& subsystem_ident,
+                                    const std::vector<std::string>& subsystem_paths)
+{
     // Nothing is told where to render. The core draws into its own texture and a
     // display samples it, so a machine with nowhere to show its picture is not a
     // case this has to know about.
@@ -377,6 +384,10 @@ void Wrapper::StartContent(const std::string& root_directory, const std::string&
     // A cartridge run owns an in-memory ROM image. Do not retain or reuse it
     // when this Wrapper is restarted with disc/full-path content.
     std::vector<uint8_t>().swap(m_game_buffer);
+
+    // Same reasoning for a subsystem set: a restart must not inherit the last
+    // run's ROM images.
+    std::vector<std::vector<unsigned char>>().swap(m_subsystem_buffers);
 
     auto audio_stream_player = memnew(AudioStreamPlayer3D);
     audio_stream_player->set_name("AudioStreamPlayer3D");
@@ -410,6 +421,11 @@ void Wrapper::StartContent(const std::string& root_directory, const std::string&
     m_root_directory = root_directory;
     m_temp_directory = std::filesystem::path(root_directory).append("temp").string();
     m_game_path = game_path;
+    // Set before the emulation thread is constructed, like everything else here:
+    // the std::thread constructor is the synchronisation edge, and these are read
+    // only on that thread.
+    m_subsystem_ident = subsystem_ident;
+    m_subsystem_paths = subsystem_paths;
     // Per-content, and a restart reuses this Wrapper, so the descriptors belong to
     // the core instance that is about to be torn down and re-created.
     m_memory_descriptors.clear();
@@ -2466,7 +2482,140 @@ void Wrapper::EmulationThreadLoop()
     // exactly the ones that decide how it loads.
     ApplyPendingCoreOptions();
 
-    if (m_game_path.empty())
+    if (!m_subsystem_ident.empty())
+    {
+        // SET_SUBSYSTEM_INFO arrives during retro_set_environment, inside
+        // Core::Load above, so the published table is already in hand here.
+        const EnvironmentHandler::SubsystemInfo* subsystem = m_environment_handler->FindSubsystem(m_subsystem_ident);
+        if (!subsystem)
+        {
+            LogError("Core does not publish subsystem '" + m_subsystem_ident + "'.");
+            NotifyContentLoadFailed("This system cannot be started this way.");
+            return;
+        }
+
+        // Resolved by name, so a core can publish a subsystem it did not export
+        // an entry point for. Calling through the null pointer would be a crash
+        // rather than a load failure.
+        if (!m_core->retro_load_game_special)
+        {
+            LogError("Core publishes subsystem '" + m_subsystem_ident + "' but exports no retro_load_game_special.");
+            NotifyContentLoadFailed("This system cannot be started this way.");
+            return;
+        }
+
+        // A short list would leave a retro_game_info zeroed, and a core reading
+        // it would fault. Hard stop rather than a best effort.
+        if (m_subsystem_paths.size() != subsystem->roms.size())
+        {
+            LogError("Subsystem '" + m_subsystem_ident + "' expects " + std::to_string(subsystem->roms.size())
+                     + " file(s) but " + std::to_string(m_subsystem_paths.size()) + " were given.");
+            NotifyContentLoadFailed("The wrong number of files was given for this system.");
+            return;
+        }
+
+        const size_t rom_count = m_subsystem_paths.size();
+
+        // Sized ONCE, before a single data pointer is taken out of it. Growing
+        // this later would invite a per-element resize after the game infos
+        // already point into them.
+        m_subsystem_buffers.clear();
+        m_subsystem_buffers.resize(rom_count);
+
+        std::vector<retro_game_info> game_infos(rom_count);
+
+        // Shared across all the files rather than per file: the point of the cap
+        // is the process memory budget, and N cartridges cost N times as much.
+        constexpr size_t MAX_GAME_BUFFER_BYTES = 512ull * 1024ull * 1024ull;
+        size_t total_buffered = 0;
+
+        for (size_t i = 0; i < rom_count; ++i)
+        {
+            const std::string& path = m_subsystem_paths[i];
+            const EnvironmentHandler::SubsystemRomInfo& rom = subsystem->roms[i];
+
+            game_infos[i] = {};
+
+            if (path.empty())
+            {
+                // An optional slot the player left empty is legal -- a console
+                // with nothing in one of its bays. A required one is not.
+                if (rom.required)
+                {
+                    LogError("Subsystem '" + m_subsystem_ident + "' rom " + std::to_string(i)
+                             + " (" + rom.desc + ") is required but no file was given.");
+                    NotifyContentLoadFailed("A required file for this system is missing.");
+                    return;
+                }
+                continue;
+            }
+
+            if (!std::filesystem::is_regular_file(path))
+            {
+                LogError("Subsystem file not found (rom " + std::to_string(i) + ", " + rom.desc + "): " + path);
+                NotifyContentLoadFailed("One of the files for this system is missing.");
+                return;
+            }
+
+            // m_subsystem_paths is not touched again for the life of the run, so
+            // this pointer stays valid as long as the core needs it.
+            game_infos[i].path = path.c_str();
+            game_infos[i].meta = nullptr;
+
+            // PER ROM, not Core::GetNeedFullpath(). A 64DD run is exactly the
+            // case that differs between the two.
+            if (rom.need_fullpath)
+            {
+                Log("Subsystem rom " + std::to_string(i) + " (" + rom.desc + ") needs fullpath: " + path);
+                continue;
+            }
+
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file)
+            {
+                LogError("Failed to open subsystem file: " + path);
+                NotifyContentLoadFailed("One of the files for this system could not be opened.");
+                return;
+            }
+
+            const size_t game_size = static_cast<size_t>(file.tellg());
+            file.seekg(0, std::ios::beg);
+
+            if (game_size > MAX_GAME_BUFFER_BYTES - total_buffered)
+            {
+                LogError("Subsystem content needs " + std::to_string((total_buffered + game_size) / (1024 * 1024))
+                         + " MB in memory (limit " + std::to_string(MAX_GAME_BUFFER_BYTES / (1024 * 1024))
+                         + " MB), at " + path);
+                NotifyContentLoadFailed("These files are too large for this core to load.");
+                return;
+            }
+
+            m_subsystem_buffers[i].resize(game_size);
+            if (game_size != 0 && !file.read(reinterpret_cast<char*>(m_subsystem_buffers[i].data()), game_size))
+            {
+                LogError("Failed to read subsystem file: " + path);
+                NotifyContentLoadFailed("One of the files for this system could not be read.");
+                return;
+            }
+
+            total_buffered += game_size;
+            // Taken after the only resize this element will ever see.
+            game_infos[i].data = reinterpret_cast<const void*>(m_subsystem_buffers[i].data());
+            game_infos[i].size = game_size;
+        }
+
+        Log("Loading subsystem '" + m_subsystem_ident + "' (id=" + std::to_string(subsystem->id) + ") with "
+            + std::to_string(rom_count) + " file(s).");
+
+        if (!m_core->retro_load_game_special(subsystem->id, game_infos.data(), rom_count))
+        {
+            LogError("retro_load_game_special failed for subsystem '" + m_subsystem_ident + "'.");
+            NotifyContentLoadFailed("This core refused these files.");
+            return;
+        }
+        game_loaded = true;
+    }
+    else if (m_game_path.empty())
     {
         // Kept as a floor. Measured 2026-08-20 over sixteen cores: not one stock
         // core starts without content, and six take the process down when asked
@@ -2643,10 +2792,17 @@ void Wrapper::EmulationThreadLoop()
     // need_fullpath cores never read the file, so rc_hash opens the path itself.
     if (RetroAchievements* ra = RetroAchievements::GetSingleton())
     {
+        // rc_hash takes one file. A subsystem run has several, and the identity
+        // of the run -- what saves, states and netplay already key off -- is
+        // m_game_path, so that is the one to hash. The bytes are deliberately
+        // not passed: on a subsystem run m_game_buffer is empty by construction
+        // (the images live in m_subsystem_buffers), and rc_hash opens the path
+        // itself, which is the same arrangement disc cores already use.
+        const bool subsystem_run = !m_subsystem_ident.empty();
         if (ra->HoldsSession(this))
             ra->BeginLoadGame(this, m_game_path,
-                !m_core->GetNeedFullpath() && !m_game_buffer.empty() ? m_game_buffer.data() : nullptr,
-                !m_core->GetNeedFullpath() ? m_game_buffer.size() : 0);
+                !subsystem_run && !m_core->GetNeedFullpath() && !m_game_buffer.empty() ? m_game_buffer.data() : nullptr,
+                !subsystem_run && !m_core->GetNeedFullpath() ? m_game_buffer.size() : 0);
     }
 
     double frame_duration_ms = 1000.0 / m_system_av_info.timing.fps;

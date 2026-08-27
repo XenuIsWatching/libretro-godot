@@ -454,31 +454,88 @@ bool EnvironmentHandler::SetSystemAvInfo(const retro_system_av_info* av_info)
 
 bool EnvironmentHandler::SetSubsystemInfo(const retro_subsystem_info* subsystem_info)
 {
+    // A core may legally publish this more than once; last call wins, which is
+    // what RetroArch does.
+    m_subsystems.clear();
+
+    // Publishing nothing is a valid answer, not a failure.
     if (!subsystem_info)
-        return false;
+        return true;
 
-    // auto subsystemInfo = static_cast<const retro_subsystem_info*>(data);
-    // for (int i = 0; subsystemInfo[i].desc; ++i)
-    // {
-    //     Log("desc: " + String(subsystemInfo[i].desc));
-    //     Log("ident: " + String(subsystemInfo[i].ident));
-    //     for (int j = 0; j < subsystemInfo[i].num_roms; ++j)
-    //     {
-    //         Log("rom desc: " + String(subsystemInfo[i].roms[j].desc));
-    //         Log("rom valid_extensions: " + String(subsystemInfo[i].roms[j].valid_extensions));
-    //         Log("rom need_fullpath: " + String::num_int64(subsystemInfo[i].roms[j].need_fullpath));
-    //         Log("rom block_extract: " + String::num_int64(subsystemInfo[i].roms[j].block_extract));
-    //         Log("rom required: " + String::num_int64(subsystemInfo[i].roms[j].required));
-    //         for (size_t k = 0; k < subsystemInfo[i].roms[j].num_memory; ++k)
-    //         {
-    //             Log("rom memory extension: " + String(subsystemInfo[i].roms[j].memory[k].extension));
-    //             Log("rom memory type: " + String::num_int64(subsystemInfo[i].roms[j].memory[k].type));
-    //         }
-    //     }
-    //     Log("id: " + String::num_int64(subsystemInfo[i].id));
-    // }
+    // The outer array is terminated by a null desc, the same shape
+    // SET_CONTROLLER_INFO uses. num_roms and num_memory are counts WITHIN an
+    // entry, not the bound of the array itself.
+    for (int i = 0; subsystem_info[i].desc; ++i)
+    {
+        const retro_subsystem_info& src = subsystem_info[i];
 
-    return false;
+        // ident is the only field content is ever looked up by. An entry with
+        // none can never be selected, and storing it under an empty key would
+        // let an empty ident match it by accident.
+        if (!src.ident)
+        {
+            LogWarning("SET_SUBSYSTEM_INFO: entry " + std::to_string(i) + " has no ident, skipping");
+            continue;
+        }
+
+        SubsystemInfo entry;
+        entry.desc = src.desc;
+        entry.ident = src.ident;
+        entry.id = src.id;
+
+        if (src.roms)
+        {
+            entry.roms.reserve(src.num_roms);
+            for (unsigned j = 0; j < src.num_roms; ++j)
+            {
+                const retro_subsystem_rom_info& rom_src = src.roms[j];
+
+                SubsystemRomInfo rom;
+                // Null-guarded the way SetControllerInfo guards a null desc:
+                // cores do miscount these.
+                rom.desc = rom_src.desc ? rom_src.desc : "";
+                rom.valid_extensions = rom_src.valid_extensions ? rom_src.valid_extensions : "";
+                rom.need_fullpath = rom_src.need_fullpath;
+                rom.block_extract = rom_src.block_extract;
+                rom.required = rom_src.required;
+
+                if (rom_src.memory)
+                {
+                    rom.memory.reserve(rom_src.num_memory);
+                    for (unsigned k = 0; k < rom_src.num_memory; ++k)
+                    {
+                        SubsystemMemoryInfo memory;
+                        memory.extension = rom_src.memory[k].extension ? rom_src.memory[k].extension : "";
+                        memory.type = rom_src.memory[k].type;
+                        rom.memory.emplace_back(std::move(memory));
+                    }
+                }
+
+                entry.roms.emplace_back(std::move(rom));
+            }
+        }
+
+        Log("Subsystem '" + entry.ident + "' (" + entry.desc + "): "
+            + std::to_string(entry.roms.size()) + " rom(s), id=" + std::to_string(entry.id));
+
+        m_subsystems.emplace_back(std::move(entry));
+    }
+
+    // This used to return false, which tells a core the frontend cannot do
+    // subsystems at all -- and a core told that may then legitimately refuse
+    // retro_load_game_special.
+    return true;
+}
+
+const EnvironmentHandler::SubsystemInfo* EnvironmentHandler::FindSubsystem(const std::string& ident) const
+{
+    for (const SubsystemInfo& entry : m_subsystems)
+    {
+        if (entry.ident == ident)
+            return &entry;
+    }
+
+    return nullptr;
 }
 
 bool EnvironmentHandler::SetMemoryMaps(const retro_memory_map* memory_maps)

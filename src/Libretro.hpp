@@ -113,6 +113,21 @@ public:
     ~Libretro();
 
     void StartContent(godot::String root_directory, godot::String core_name, godot::String game_path);
+
+    /// Start a libretro SUBSYSTEM load: multi-file content a core takes as one
+    /// unit (an N64 cartridge with its 64DD disk, a linked Game Boy pair, a
+    /// Satellaview broadcast with its host cartridge).
+    ///
+    /// game_path keeps exactly the meaning it has in StartContent: it is the
+    /// identity path, and saves, save states, netplay hashing and achievements
+    /// all key off it. subsystem_paths is a SEPARATE ordered list, in the order
+    /// the core declared its roms, used for nothing but the load call itself.
+    ///
+    /// The ident and the file count are checked against what the core publishes,
+    /// which is only known once the core is already loading -- so a mismatch
+    /// arrives as a content load failure, not as a return value here.
+    void StartSubsystemContent(godot::String root_directory, godot::String core_name, godot::String game_path,
+                               godot::String subsystem_ident, const godot::PackedStringArray& subsystem_paths);
     void StopContent();
 
     // Link cable.

@@ -64,6 +64,23 @@ void Libretro::StartContent(String root_directory, String core_name, String game
     m_wrapper->StartContent(root_directory.utf8().get_data(), core_name.utf8().get_data(), game_path.utf8().get_data());
 }
 
+void Libretro::StartSubsystemContent(String root_directory, String core_name, String game_path,
+                                     String subsystem_ident, const PackedStringArray& subsystem_paths)
+{
+    // Same teardown contract as StartContent: the previous run owns the handlers
+    // this one would reuse.
+    if (!m_wrapper->StopEmulationThreadBounded(kStopBudgetMs))
+        AbandonWrapper();
+
+    std::vector<std::string> paths;
+    paths.reserve(static_cast<size_t>(subsystem_paths.size()));
+    for (int i = 0; i < subsystem_paths.size(); ++i)
+        paths.emplace_back(subsystem_paths[i].utf8().get_data());
+
+    m_wrapper->StartSubsystemContent(root_directory.utf8().get_data(), core_name.utf8().get_data(),
+                                     game_path.utf8().get_data(), subsystem_ident.utf8().get_data(), paths);
+}
+
 void Libretro::StopContent()
 {
     m_wrapper->StopContent();
@@ -503,6 +520,7 @@ void Libretro::_bind_methods()
 {
     ClassDB::bind_method(D_METHOD("ConnectOptionsReady", "callable", "flags"), &Libretro::ConnectOptionsReady, DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("StartContent", "root_directory", "core_name", "game_path"), &Libretro::StartContent);
+    ClassDB::bind_method(D_METHOD("StartSubsystemContent", "root_directory", "core_name", "game_path", "subsystem_ident", "subsystem_paths"), &Libretro::StartSubsystemContent);
     ClassDB::bind_method(D_METHOD("StopContent"), &Libretro::StopContent);
     ClassDB::bind_method(D_METHOD("LinkConnect", "other", "port", "other_port"), &Libretro::LinkConnect, DEFVAL(0u), DEFVAL(0u));
     ClassDB::bind_method(D_METHOD("LinkDisconnect", "port"), &Libretro::LinkDisconnect, DEFVAL(0u));
