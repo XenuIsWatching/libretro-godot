@@ -247,6 +247,17 @@ public:
     void FlushSramIfDirty(bool final_flush = false);
     void ApplySramSwap(const std::string& new_path);
 
+    /// The file a writable CONTENT medium is written back to, when the medium
+    /// itself is what the core mutates. A BS-X 8M Memory Pack is the case: the
+    /// .bs handed to the core IS the flash, so there is no separate save file
+    /// and no load step -- the content load already put the right bytes there.
+    void SetPackPath(const godot::String& path);
+    /// Emu thread: snapshot the pack as loaded, so the first dirty check has
+    /// something to compare against.
+    void SnapshotPack();
+    /// Emu thread: write the pack back over its own file iff it changed.
+    void FlushPackIfDirty(bool final_flush = false);
+
     /// Front-panel reset: retro_reset on the emulation thread, between frames.
     /// Nothing is unloaded and no thread is joined, so this cannot block the
     /// caller however the core manages its own threads.
@@ -687,6 +698,11 @@ public:
     std::vector<uint8_t> m_sram_shadow;
     int64_t m_sram_flush_counter = 0;
     bool m_removable_storage = false;
+
+    // Writable content (the BS-X memory pack). Set from the main thread before
+    // StartContent; the shadow is emulation-thread-only, as SRAM's is.
+    std::string m_pack_path;
+    std::vector<uint8_t> m_pack_shadow;
 
     std::string m_root_directory;
     std::string m_temp_directory;

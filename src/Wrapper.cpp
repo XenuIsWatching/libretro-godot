@@ -1272,6 +1272,86 @@ void Wrapper::ApplySramSwap(const std::string& new_path)
     Log("SRAM: swapped to " + (new_path.empty() ? std::string("<none>") : new_path));
 }
 
+/// snes9x's id for the BS-X 8M Memory Pack. Core-specific, so it is not in
+/// libretro.h; the value is fixed by the core's own header.
+static constexpr unsigned RETRO_MEMORY_SNES_BSX_PRAM = (2 << 8) | RETRO_MEMORY_SAVE_RAM;
+
+void Wrapper::SetPackPath(const godot::String& path)
+{
+    m_pack_path = path.utf8().get_data();
+}
+
+/// Emu thread: remember the pack as the content load left it.
+///
+/// There is deliberately no read from disk here, unlike SRAM. The pack IS the
+/// content -- the core was handed the .bs and loaded it into flash -- so reading
+/// the file back over it would at best be a no-op and at worst overwrite the
+/// medium with a stale copy of itself.
+void Wrapper::SnapshotPack()
+{
+    m_pack_shadow.clear();
+    if (m_pack_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PRAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PRAM);
+    if (pack == nullptr || size == 0)
+        return;
+    m_pack_shadow.assign(static_cast<uint8_t*>(pack), static_cast<uint8_t*>(pack) + size);
+    Log("Pack: watching " + std::to_string(size) + " bytes for " + m_pack_path);
+}
+
+/// Emu thread: write the pack back over its own file iff the core changed it.
+///
+/// Written to a temporary beside the target and renamed, because this overwrites
+/// the player's medium in place rather than a save file kept alongside it: a
+/// half-written pack is a destroyed one, and there is no other copy.
+void Wrapper::FlushPackIfDirty(bool final_flush)
+{
+    if (m_pack_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PRAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PRAM);
+    if (pack == nullptr || size == 0)
+        return;
+    if (m_pack_shadow.size() == size &&
+        std::memcmp(m_pack_shadow.data(), pack, size) == 0)
+        return;   // unchanged
+
+    std::error_code ec;
+    std::filesystem::path target(m_pack_path);
+    std::filesystem::path tmp = target;
+    tmp += ".part";
+    {
+        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+        if (!file)
+        {
+            LogError("Pack: cannot write " + tmp.string());
+            return;
+        }
+        file.write(static_cast<const char*>(pack), size);
+        if (!file)
+        {
+            file.close();
+            std::filesystem::remove(tmp, ec);
+            LogError("Pack: short write to " + tmp.string());
+            return;
+        }
+    }
+    std::filesystem::rename(tmp, target, ec);
+    if (ec)
+    {
+        std::filesystem::remove(tmp, ec);
+        LogError("Pack: cannot replace " + m_pack_path);
+        return;
+    }
+    m_pack_shadow.assign(static_cast<uint8_t*>(pack), static_cast<uint8_t*>(pack) + size);
+    Log("Pack: flushed " + std::to_string(size) + " bytes to " + m_pack_path);
+
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifySramFlushed(
+            godot::String(m_pack_path.c_str()), static_cast<int64_t>(size), final_flush);
+}
+
 void Wrapper::EmitSignalOnMainThread(const godot::StringName& signal_name, const godot::Array& args)
 {
     m_main_thread_commands_queue.enqueue(
@@ -2459,6 +2539,7 @@ void Wrapper::EmulationThreadLoop()
         {
             if (sram_active)
                 FlushSramIfDirty(true);
+                FlushPackIfDirty(true);
             m_sram_pending = godot::PackedByteArray();
             if (context_initialized)
                 m_video_handler->NotifyContextDestroy();
@@ -2870,6 +2951,10 @@ void Wrapper::EmulationThreadLoop()
     sram_active = true;
     m_sram_flush_counter = m_frame_counter.load(std::memory_order_relaxed);
 
+    // Writable content (a BS-X memory pack): the core already holds the bytes
+    // the .bs was loaded with, so this only records them for the dirty check.
+    SnapshotPack();
+
     // Fresh rollback bookkeeping for this content run (these members are
     // emulation-thread-only, so reset them here rather than in SetNetplay*).
     m_np_states.clear();
@@ -2944,6 +3029,7 @@ void Wrapper::EmulationThreadLoop()
             {
                 m_sram_flush_counter = fc;
                 FlushSramIfDirty();
+                FlushPackIfDirty();
             }
         }
 

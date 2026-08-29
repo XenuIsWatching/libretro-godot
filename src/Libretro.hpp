@@ -318,6 +318,10 @@ public:
     /// it hot-swaps (flush old, load new): a physical memory-card swap.
     /// Empty path = no persistence (PSX with no card seated).
     void SetSramPath(const godot::String& path);
+    /// The file a writable CONTENT medium is written back to -- a BS-X memory
+    /// pack, whose .bs IS the flash the core mutates. Unlike SetSramPath there
+    /// is no matching load: the content load already supplied the bytes.
+    void SetPackPath(const godot::String& path);
     /// Netplay: inject exact SRAM bytes applied at load instead of the file.
     void SetSramData(const godot::PackedByteArray& data);
     /// This machine saves to REMOVABLE media (a PSX memory card). With nothing
