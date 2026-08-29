@@ -4,13 +4,6 @@
 
 #include <godot_cpp/classes/global_constants.hpp>
 #include <godot_cpp/classes/os.hpp>
-#include <godot_cpp/classes/input.hpp>
-#include <godot_cpp/classes/input.hpp>
-#include <godot_cpp/classes/input_event_action.hpp>
-#include <godot_cpp/classes/input_event_mouse_motion.hpp>
-#include <godot_cpp/classes/input_event_mouse_button.hpp>
-#include <godot_cpp/classes/input_event_key.hpp>
-#include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/audio_stream_player3d.hpp>
 
 #include <filesystem>
@@ -57,12 +50,6 @@ Wrapper* CurrentThreadWrapper()
 {
     return t_current_wrapper;
 }
-
-static int16_t ToShort(float floatValue, int mul = 1)
-{
-    return static_cast<int16_t>(Math::clamp(Math::round(floatValue), static_cast<float>(INT16_MIN), static_cast<float>(INT16_MAX)) * mul);
-}
-
 // Locate a core inside <root>/cores. Android cores are conventionally named
 // "<name>_libretro_android.so" but not universally (azahar ships as plain
 // "azahar_libretro.so"), so try every convention the platform can use and take
@@ -666,80 +653,7 @@ void Wrapper::_process(double delta)
     if (newest_upload)
         newest_upload->Execute();
 
-    auto input = godot::Input::get_singleton();
-
-    // Only the instance the player is controlling should consume global input actions.
-    if (!m_input_enabled)
-        return;
-
-    uint32_t joypad_buttons = 0;
-
-    if (input->is_action_pressed("RETRO_JOYPAD_B"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_B);
-    if (input->is_action_pressed("RETRO_JOYPAD_Y"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_Y);
-    if (input->is_action_pressed("RETRO_JOYPAD_SELECT"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_SELECT);
-    if (input->is_action_pressed("RETRO_JOYPAD_START"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_START);
-    if (input->is_action_pressed("RETRO_JOYPAD_UP"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_UP);
-    if (input->is_action_pressed("RETRO_JOYPAD_DOWN"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_DOWN);
-    if (input->is_action_pressed("RETRO_JOYPAD_LEFT"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_LEFT);
-    if (input->is_action_pressed("RETRO_JOYPAD_RIGHT"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_RIGHT);
-    if (input->is_action_pressed("RETRO_JOYPAD_A"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_A);
-    if (input->is_action_pressed("RETRO_JOYPAD_X"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_X);
-    if (input->is_action_pressed("RETRO_JOYPAD_L"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_L);
-    if (input->is_action_pressed("RETRO_JOYPAD_R"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_R);
-    if (input->is_action_pressed("RETRO_JOYPAD_L2"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_L2);
-    if (input->is_action_pressed("RETRO_JOYPAD_R2"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_R2);
-    if (input->is_action_pressed("RETRO_JOYPAD_L3"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_L3);
-    if (input->is_action_pressed("RETRO_JOYPAD_R3"))
-        joypad_buttons |= (1 << RETRO_DEVICE_ID_JOYPAD_R3);
-
-    m_input_handler->SetJoypadButtonStates(0, joypad_buttons);
-
-    Vector2 analog_left = {};
-
-    if (input->get_action_strength("RETRO_ANALOG_LEFT_X_NEGATIVE"))
-        analog_left.x -= 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_LEFT_X_POSITIVE"))
-        analog_left.x += 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_LEFT_Y_POSITIVE"))
-        analog_left.y -= 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_LEFT_Y_NEGATIVE"))
-        analog_left.y += 1.0f;
-
-    if (analog_left.length_squared() > 1.0f)
-        analog_left = analog_left.normalized();
-
-    m_input_handler->SetAnalogLeft(0, ToShort(analog_left.x) * 0x7fff, ToShort(analog_left.y) * 0x7fff);
-
-    Vector2 analog_right = {};
-
-    if (input->get_action_strength("RETRO_ANALOG_RIGHT_X_NEGATIVE"))
-        analog_right.x -= 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_RIGHT_X_POSITIVE"))
-        analog_right.x += 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_RIGHT_Y_POSITIVE"))
-        analog_right.y -= 1.0f;
-    if (input->get_action_strength("RETRO_ANALOG_RIGHT_Y_NEGATIVE"))
-        analog_right.y += 1.0f;
-
-    if (analog_right.length_squared() > 1.0f)
-        analog_right = analog_right.normalized();
-
-    m_input_handler->SetAnalogRight(0, ToShort(analog_right.x) * 0x7fff, ToShort(analog_right.y) * 0x7fff);
+    PollDesktopInput();
 }
 
 Wrapper::~Wrapper()

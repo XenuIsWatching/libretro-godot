@@ -473,6 +473,7 @@ public:
     void FlushNetplayCrcs();
 
     void _process(double delta);
+    void PollDesktopInput();
 
 
     const std::string& GetRootDirectory() const { return m_root_directory; }
