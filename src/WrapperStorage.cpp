@@ -132,9 +132,14 @@ void Wrapper::ApplySramSwap(const std::string& new_path)
     Log("SRAM: swapped to " + (new_path.empty() ? std::string("<none>") : new_path));
 }
 
-/// snes9x's id for the BS-X 8M Memory Pack. Core-specific, so it is not in
-/// libretro.h; the value is fixed by the core's own header.
-static constexpr unsigned RETRO_MEMORY_SNES_BSX_PRAM = (2 << 8) | RETRO_MEMORY_SAVE_RAM;
+/// snes9x's id for the BS-X 8M Memory Pack: 1 MB of removable flash in the BS-X
+/// cartridge's own slot. Core-specific, so it is not in libretro.h.
+///
+/// Deliberately NOT index 2. That one is PRAM, which names the cartridge's
+/// 512 KB PSRAM -- a different chip, a different size, and not where a download
+/// is stored. The pack was read from there while nothing implemented the real
+/// PSRAM, which is right data behind a wrong label; both sides moved to 7.
+static constexpr unsigned RETRO_MEMORY_SNES_BSX_PACK = (7 << 8) | RETRO_MEMORY_SAVE_RAM;
 
 void Wrapper::SetPackPath(const godot::String& path)
 {
@@ -152,8 +157,8 @@ void Wrapper::SnapshotPack()
     m_pack_shadow.clear();
     if (m_pack_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
         return;
-    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PRAM);
-    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PRAM);
+    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PACK);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PACK);
     if (pack == nullptr || size == 0)
         return;
     m_pack_shadow.assign(static_cast<uint8_t*>(pack), static_cast<uint8_t*>(pack) + size);
@@ -169,8 +174,8 @@ void Wrapper::FlushPackIfDirty(bool final_flush)
 {
     if (m_pack_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
         return;
-    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PRAM);
-    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PRAM);
+    void* pack = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_BSX_PACK);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_BSX_PACK);
     if (pack == nullptr || size == 0)
         return;
     if (m_pack_shadow.size() == size &&
