@@ -439,6 +439,11 @@ void Libretro::NotifySramFlushed(const String& path, int64_t size, bool final_fl
     call_deferred("emit_signal", "sram_flushed", path, size, final_flush);
 }
 
+void Libretro::NotifyLedState(int32_t led, bool on)
+{
+    call_deferred("emit_signal", "led_state", static_cast<int64_t>(led), on);
+}
+
 void Libretro::NotifyContentLoadFailed(const String& reason)
 {
     call_deferred("emit_signal", "content_load_failed", reason);
@@ -608,6 +613,8 @@ void Libretro::_bind_methods()
         PropertyInfo(Variant::INT, "frame"),
         PropertyInfo(Variant::INT, "crc")));
     ADD_SIGNAL(MethodInfo("netplay_error", PropertyInfo(Variant::STRING, "message")));
+    ADD_SIGNAL(MethodInfo("led_state",
+        PropertyInfo(Variant::INT, "led"), PropertyInfo(Variant::BOOL, "on")));
     /// SAVE_RAM reached disk. Only fires when the dirty check found a change,
     /// so it is the real "the game saved" event, not a timer tick. `final` is
     /// the flush at core shutdown.

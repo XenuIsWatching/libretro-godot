@@ -407,6 +407,10 @@ public:
     /// disk, i.e. only when the dirty check found a change. `final` marks the
     /// flush at core shutdown, the last one for this run.
     void NotifySramFlushed(const godot::String& path, int64_t size, bool final_flush);
+    /// A lamp on the emulated machine changed. Cores report these through
+    /// RETRO_ENVIRONMENT_GET_LED_INTERFACE; the Satellaview's ACCESS lamp is the
+    /// one this project draws. `led` is the core's own index.
+    void NotifyLedState(int32_t led, bool on);
 
     /// Called from the emulation thread when the run could not start: the core
     /// would not load, the file was unreadable, or retro_load_game refused.

@@ -3175,6 +3175,15 @@ bool Wrapper::Shutdown()
 
 void Wrapper::LedInterfaceSetLedState(int32_t led, int32_t state)
 {
-    print_line_rich("[color=cyan][LedInterfaceSetLedState][/color] LED " + String::num_int64(led) + " set to " + (state ? "on" : "off"));
+    // Reported by the core from the emulated machine's own register, not
+    // inferred: the Satellaview's ACCESS lamp is $2194 bit 2. Edges only, so
+    // this is not a per-frame signal.
+    // Static libretro callback: the owning Wrapper comes from the thread-local,
+    // never from a global -- two Satellaviews in one room are two instances.
+    Wrapper* w = GetCurrentThreadWrapper();
+    if (w == nullptr)
+        return;
+    if (Libretro* node = w->LiveLibretroNode())
+        node->NotifyLedState(led, state != 0);
 }
 }
