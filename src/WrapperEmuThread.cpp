@@ -136,9 +136,17 @@ void Wrapper::EmulationThreadLoop()
         // including failures before the frame loop begins.
         if (game_loaded)
         {
+            // Braced to say what it already does. FlushPackIfDirty was never
+            // inside this `if` -- there were no braces -- and it is left outside
+            // rather than quietly brought in: it guards itself on an empty pack
+            // path, so the behaviour is unchanged and this is only the
+            // indentation catching up with the code.
             if (sram_active)
+            {
                 FlushSramIfDirty(true);
-                FlushPackIfDirty(true);
+                FlushSramBIfDirty(true);
+            }
+            FlushPackIfDirty(true);
             m_sram_pending = godot::PackedByteArray();
             if (context_initialized)
                 m_video_handler->NotifyContextDestroy();
@@ -547,6 +555,8 @@ void Wrapper::EmulationThreadLoop()
     // Battery save: fill SAVE_RAM from the cartridge/memory-card .srm (or the
     // netplay-injected bytes) before the first frame runs.
     LoadSramFromSource();
+    // The second cartridge, on the one adapter that holds two.
+    LoadSramBFromSource();
     sram_active = true;
     m_sram_flush_counter = m_frame_counter.load(std::memory_order_relaxed);
 
@@ -628,6 +638,7 @@ void Wrapper::EmulationThreadLoop()
             {
                 m_sram_flush_counter = fc;
                 FlushSramIfDirty();
+                FlushSramBIfDirty();
                 FlushPackIfDirty();
             }
         }

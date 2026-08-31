@@ -322,6 +322,9 @@ public:
     /// pack, whose .bs IS the flash the core mutates. Unlike SetSramPath there
     /// is no matching load: the content load already supplied the bytes.
     void SetPackPath(const godot::String& path);
+    /// The second cartridge's battery file, on a two-cartridge adapter.
+    /// See Wrapper::SetSramBPath for why it is a separate file.
+    void SetSramBPath(const godot::String& path);
     /// Netplay: inject exact SRAM bytes applied at load instead of the file.
     void SetSramData(const godot::PackedByteArray& data);
     /// This machine saves to REMOVABLE media (a PSX memory card). With nothing

@@ -258,6 +258,25 @@ public:
     /// Emu thread: write the pack back over its own file iff it changed.
     void FlushPackIfDirty(bool final_flush = false);
 
+    /// The file the SECOND cartridge's battery is kept in, on a machine that
+    /// holds two at once. Only the Sufami Turbo does.
+    ///
+    /// It needs a path of its own because the two saves are two REGIONS, not one
+    /// longer one: snes9x answers RETRO_MEMORY_SAVE_RAM with slot A's SRAM alone
+    /// and puts slot B's under a memory id of its own, 0x10000 further into the
+    /// same block and past the end of what SAVE_RAM reports. A frontend reading
+    /// only SAVE_RAM keeps half a linked pair's progress and loses the other
+    /// half without saying so -- which is what SD Ultra Battle means when it
+    /// reports that the B cassette's backup is not initialised, every launch.
+    ///
+    /// Ordinary save semantics, unlike SetPackPath: this file is read back into
+    /// the core at content load and written out again when it changes.
+    void SetSramBPath(const godot::String& path);
+    /// Emu thread: fill slot B's SRAM from its file, and snapshot it.
+    void LoadSramBFromSource();
+    /// Emu thread: write slot B's SRAM out iff it changed.
+    void FlushSramBIfDirty(bool final_flush = false);
+
     /// Front-panel reset: retro_reset on the emulation thread, between frames.
     /// Nothing is unloaded and no thread is joined, so this cannot block the
     /// caller however the core manages its own threads.
@@ -704,6 +723,12 @@ public:
     // StartContent; the shadow is emulation-thread-only, as SRAM's is.
     std::string m_pack_path;
     std::vector<uint8_t> m_pack_shadow;
+
+    // The second cartridge's battery, on a two-cartridge adapter. Same
+    // ownership rules as SRAM above: path from the main thread before
+    // StartContent, shadow touched only on the emulation thread.
+    std::string m_sram_b_path;
+    std::vector<uint8_t> m_sram_b_shadow;
 
     std::string m_root_directory;
     std::string m_temp_directory;

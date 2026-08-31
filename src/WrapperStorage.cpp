@@ -217,6 +217,88 @@ void Wrapper::FlushPackIfDirty(bool final_flush)
             godot::String(m_pack_path.c_str()), static_cast<int64_t>(size), final_flush);
 }
 
+/// snes9x's id for the SECOND cartridge in a Sufami Turbo. Core-specific, so it
+/// is not in libretro.h -- the core defines it in its own libretro.cpp, beside
+/// the A-slot id.
+///
+/// Note the A id is NOT used here, deliberately: the core answers it and plain
+/// RETRO_MEMORY_SAVE_RAM from the same switch case, so slot A is already covered
+/// by the ordinary SRAM path above and asking for it twice would write one
+/// cartridge's save to two files.
+static constexpr unsigned RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM = (4 << 8) | RETRO_MEMORY_SAVE_RAM;
+
+void Wrapper::SetSramBPath(const godot::String& path)
+{
+    m_sram_b_path = path.utf8().get_data();
+}
+
+/// Emu thread: fill slot B's SRAM from its file, then snapshot it for the dirty
+/// check. Silent and harmless on every machine that has no second cartridge --
+/// the core answers size 0 for the id and there is nothing to do.
+void Wrapper::LoadSramBFromSource()
+{
+    m_sram_b_shadow.clear();
+    if (m_sram_b_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    if (sram == nullptr || size == 0)
+    {
+        // Said out loud, because "no second save was written" has two very
+        // different causes and they look identical from outside: the core may
+        // have no such region at all, or the game may simply not have touched it
+        // yet. Only the first is a fault.
+        Log("SRAM B: core reports no second-cartridge region (nothing to save)");
+        return;
+    }
+    Log("SRAM B: watching " + std::to_string(size) + " bytes for " + m_sram_b_path);
+
+    if (std::filesystem::is_regular_file(m_sram_b_path))
+    {
+        std::ifstream file(m_sram_b_path, std::ios::binary | std::ios::ate);
+        if (file)
+        {
+            size_t file_size = static_cast<size_t>(file.tellg());
+            file.seekg(0, std::ios::beg);
+            size_t n = std::min(size, file_size);
+            file.read(reinterpret_cast<char*>(sram), n);
+            Log("SRAM B: loaded " + std::to_string(n) + " bytes from " + m_sram_b_path);
+        }
+    }
+    m_sram_b_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
+}
+
+/// Emu thread: write slot B's SRAM to its own file iff it changed.
+void Wrapper::FlushSramBIfDirty(bool final_flush)
+{
+    if (m_sram_b_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return;
+    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    if (sram == nullptr || size == 0)
+        return;
+    if (m_sram_b_shadow.size() == size &&
+        std::memcmp(m_sram_b_shadow.data(), sram, size) == 0)
+        return;   // unchanged
+
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(m_sram_b_path).parent_path(), ec);
+    std::ofstream file(m_sram_b_path, std::ios::binary | std::ios::trunc);
+    if (!file)
+    {
+        LogError("SRAM B: cannot write " + m_sram_b_path);
+        return;
+    }
+    file.write(static_cast<const char*>(sram), size);
+    file.close();
+    m_sram_b_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
+    Log("SRAM B: flushed " + std::to_string(size) + " bytes to " + m_sram_b_path);
+
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifySramFlushed(
+            godot::String(m_sram_b_path.c_str()), static_cast<int64_t>(size), final_flush);
+}
+
 void Wrapper::SetMemoryDescriptors(const retro_memory_map* memory_maps)
 {
     m_memory_descriptors.clear();

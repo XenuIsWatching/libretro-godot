@@ -269,6 +269,11 @@ void Libretro::SetSramPath(const godot::String& path)
 }
 
 
+void Libretro::SetSramBPath(const godot::String& path)
+{
+    m_wrapper->SetSramBPath(path);
+}
+
 void Libretro::SetPackPath(const godot::String& path)
 {
     m_wrapper->SetPackPath(path);
@@ -587,6 +592,7 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("GetAudioBrakeMs"), &Libretro::GetAudioBrakeMs);
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetPackPath", "path"), &Libretro::SetPackPath);
+    ClassDB::bind_method(D_METHOD("SetSramBPath", "path"), &Libretro::SetSramBPath);
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
     ClassDB::bind_method(D_METHOD("SetRemovableStorage", "removable"), &Libretro::SetRemovableStorage);
     ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);
