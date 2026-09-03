@@ -4,13 +4,12 @@
 // on a single port says which one it means.
 //
 // Not part of upstream libretro yet, and deliberately NOT patched into the
-// vendored external/libretro-common submodule, which tracks libretro/libretro-common
-// upstream and should stay updatable. The definitions live here instead, and the
-// block below is maintained byte-identically in Dolphin's
-// Source/Core/DolphinLibretro/SensorIndex.h so the two can be diffed directly.
+// vendored external/libretro-common submodule, which tracks upstream and should
+// stay updatable. The block below mirrors libretro/RetroArch#19453 and goes away
+// when that lands.
 //
-// Everything after the end marker is this frontend's own and is NOT mirrored:
-// the decode side, which a core never needs, and the assertions that keep the
+// Everything after it is this frontend's own and is NOT mirrored: the decode
+// side, which a core never needs, and the assertions that keep the
 // compatibility claim honest.
 
 #include <libretro.h>
@@ -19,66 +18,42 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * Sensor sub-device index (retroXR extension; no environment number needed).
- *
- * Deliberately one contiguous block rather than following libretro.h's usual
- * layout, so that this copy and Dolphin's can be diffed directly:
- *
- *   extract() { awk '/^\/\* -+$/{f=1} f{print} f&&/^\/\* --- end/{exit}' "$1"; }
- *   diff <(extract A) <(extract B)
- * ------------------------------------------------------------------------- */
-
-/* Some peripherals carry more than one sensor on a single controller port. A
- * Wii Remote with a Nunchuk is one player with two accelerometers; add
- * MotionPlus and it is two accelerometers and a gyroscope. Both belong to the
- * same player, so both have to arrive on that player's port, but the sensor
- * interface addresses exactly one accelerometer, one gyroscope and one
- * illuminance per port:
- *
- *   bool  set_sensor_state(unsigned port, enum retro_sensor_action action, unsigned rate);
- *   float get_sensor_input(unsigned port, unsigned id);
- *
- * A second port is not the answer, because ports mean players. Cores already
- * map port N to one emulated controller, and spending two ports on one player
- * would break player counts, port arbitration and every frontend's controller
- * UI.
- *
- * So carry a sub-device index in the high bits of the existing id, the same way
- * RETRO_DEVICE_SUBCLASS already encodes a subclass into a device id. Index 0 is
- * the controller itself and encodes to exactly the values in use today
- * (0 << 8 | id == id), so every existing core and frontend is bit for bit
- * unchanged. Index 1 and up are sub-devices, in whatever order the device type
- * implies: for a Wii Remote with a Nunchuk, index 0 is the remote and index 1
- * is the Nunchuk.
- *
- * This needs no new environment call and no capability flag, because the
- * existing contract already specifies the fallback. A core asks for index 1;
- * a frontend that does not implement this returns false from set_sensor_state
- * ("the given sensor is not available on the provided port") and 0 from
- * get_sensor_input ("will return 0 for invalid arguments"), and the core then
- * does exactly what it does today. Frontends that gain support need no core
- * changes to be useful, and vice versa.
- *
- * retro_sensor_action is an enum rather than a plain unsigned, so the
- * enable/disable call casts at the call site. RETRO_SENSOR_DUMMY = INT_MAX
- * already pins the underlying type to int, so an encoded value is in range and
- * well defined.
+/** @defgroup RETRO_SENSOR_SUBDEVICE Sensor Sub-Device Index
+ * @{
  */
-#define RETRO_SENSOR_INDEX_SHIFT   8
-#define RETRO_SENSOR_INDEX_MASK    ((1u << RETRO_SENSOR_INDEX_SHIFT) - 1u)
 
-/* The sub-device an encoded id or action names. 0 is the controller itself. */
-#define RETRO_SENSOR_INDEX(id)     ((unsigned)(id) >> RETRO_SENSOR_INDEX_SHIFT)
+/**
+ * The number of bits that a sub-device index is shifted by within a sensor ID
+ * or a \c retro_sensor_action.
+ *
+ * Addresses more than one sensor of the same kind on a single port.
+ * Index 0 denotes the controller itself and encodes to the values already in
+ * use (<tt>RETRO_SENSOR_SUBDEVICE(0, id) == id</tt>). Index 1 and above denote
+ * sub-devices, in whatever order the device type implies.
+ *
+ * @note \c retro_sensor_action is an enum, so an encoded action must be cast at
+ * the call site. \c RETRO_SENSOR_DUMMY pins the underlying type to \c int, so
+ * the encoded value is in range.
+ *
+ * @see RETRO_SENSOR_ID
+ * @see retro_sensor_action
+ */
+#define RETRO_SENSOR_INDEX_SHIFT 8
 
-/* The plain RETRO_SENSOR_* id or retro_sensor_action inside an encoded value. */
-#define RETRO_SENSOR_BASE(id)      ((unsigned)(id) & RETRO_SENSOR_INDEX_MASK)
+/** Mask of the bits below the sub-device index. */
+#define RETRO_SENSOR_INDEX_MASK ((1u << RETRO_SENSOR_INDEX_SHIFT) - 1u)
 
-/* Address a sensor on sub-device `index`. RETRO_SENSOR_ID(0, x) == x. */
-#define RETRO_SENSOR_ID(index, id) \
-    ((unsigned)((((unsigned)(index)) << RETRO_SENSOR_INDEX_SHIFT) | ((unsigned)(id))))
+/** Returns the sub-device index encoded in \c id; 0 is the controller itself. */
+#define RETRO_SENSOR_INDEX(id) ((unsigned)(id) >> RETRO_SENSOR_INDEX_SHIFT)
 
-/* --- end of the sensor sub-device index block ---------------------------- */
+/** Returns the sensor ID or action in \c id, without its sub-device index. */
+#define RETRO_SENSOR_BASE(id) ((unsigned)(id) & RETRO_SENSOR_INDEX_MASK)
+
+/** Addresses sensor \c id on sub-device \c index of a port. */
+#define RETRO_SENSOR_SUBDEVICE(index, id) \
+   ((unsigned)((((unsigned)(index)) << RETRO_SENSOR_INDEX_SHIFT) | ((unsigned)(id))))
+/** @} */
+
 
 #ifdef __cplusplus
 }
@@ -106,7 +81,7 @@ static inline bool RetroSensorSplit(unsigned encoded, unsigned max_index, unsign
 // the whole compatibility claim, so it is asserted here where it cannot drift
 // rather than left to a test somebody might not run.
 #define RETROXR_ASSERT_SENSOR_IDENTITY(x) \
-    static_assert(RETRO_SENSOR_ID(0, x) == (unsigned)(x), "index 0 must encode to today's value")
+    static_assert(RETRO_SENSOR_SUBDEVICE(0, x) == (unsigned)(x), "index 0 must encode to today's value")
 
 RETROXR_ASSERT_SENSOR_IDENTITY(RETRO_SENSOR_ACCELEROMETER_X);
 RETROXR_ASSERT_SENSOR_IDENTITY(RETRO_SENSOR_ACCELEROMETER_Y);
@@ -131,8 +106,8 @@ static_assert(RETRO_SENSOR_ILLUMINANCE < (1 << RETRO_SENSOR_INDEX_SHIFT), "");
 static_assert(RETRO_SENSOR_ILLUMINANCE_DISABLE < (1 << RETRO_SENSOR_INDEX_SHIFT), "");
 
 // A sub-device value must round-trip, which is what the two callbacks rely on.
-static_assert(RETRO_SENSOR_INDEX(RETRO_SENSOR_ID(1, RETRO_SENSOR_ACCELEROMETER_Z)) == 1u, "");
-static_assert(RETRO_SENSOR_BASE(RETRO_SENSOR_ID(1, RETRO_SENSOR_ACCELEROMETER_Z))
+static_assert(RETRO_SENSOR_INDEX(RETRO_SENSOR_SUBDEVICE(1, RETRO_SENSOR_ACCELEROMETER_Z)) == 1u, "");
+static_assert(RETRO_SENSOR_BASE(RETRO_SENSOR_SUBDEVICE(1, RETRO_SENSOR_ACCELEROMETER_Z))
                   == (unsigned)RETRO_SENSOR_ACCELEROMETER_Z, "");
 
 #endif
