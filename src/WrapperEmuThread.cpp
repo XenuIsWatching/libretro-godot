@@ -145,6 +145,7 @@ void Wrapper::EmulationThreadLoop()
             {
                 FlushSramIfDirty(true);
                 FlushSramBIfDirty(true);
+                FlushSramRegionsIfDirty(true);
             }
             FlushPackIfDirty(true);
             m_sram_pending = godot::PackedByteArray();
@@ -557,6 +558,9 @@ void Wrapper::EmulationThreadLoop()
     LoadSramFromSource();
     // The second cartridge, on the one adapter that holds two.
     LoadSramBFromSource();
+    // The Controller Paks last: LoadSramFromSource has just put the cartridge
+    // .srm's own copy of these bytes in place, and the pak files are the truth.
+    LoadSramRegionsFromSource();
     sram_active = true;
     m_sram_flush_counter = m_frame_counter.load(std::memory_order_relaxed);
 
@@ -619,6 +623,11 @@ void Wrapper::EmulationThreadLoop()
         if (!m_core_serialize_size_published && m_core_ran_frame)
             PublishCoreSerializeSize();
 
+        // A pak pushed into a controller mid-game binds on the next frame, not
+        // at the next flush tick: the check is one atomic read when nothing
+        // moved, and seating a pak is a thing done by hand.
+        ApplySramRegionSwaps();
+
         // Battery save: dirty-check flush roughly every 10 seconds of frames.
         //
         // The counter goes BACKWARDS: loading a savestate stores the state's own
@@ -639,6 +648,7 @@ void Wrapper::EmulationThreadLoop()
                 m_sram_flush_counter = fc;
                 FlushSramIfDirty();
                 FlushSramBIfDirty();
+                FlushSramRegionsIfDirty();
                 FlushPackIfDirty();
             }
         }

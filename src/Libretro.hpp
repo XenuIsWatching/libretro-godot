@@ -325,6 +325,17 @@ public:
     /// The second cartridge's battery file, on a two-cartridge adapter.
     /// See Wrapper::SetSramBPath for why it is a separate file.
     void SetSramBPath(const godot::String& path);
+
+    /// Bind one Controller Pak's 32 KiB slice of the single SAVE_RAM block both
+    /// N64 cores publish, to a file of its own. `index` is the libretro port.
+    void SetSramRegionPath(int index, const godot::String& path, int64_t offset, int64_t length);
+    void ClearSramRegion(int index);
+
+    /// The Game Boy cartridge in the Transfer Pak on one controller's port, and
+    /// where that cartridge's battery lives. Per PORT, unlike the `gb` subsystem
+    /// and the sidecar, which share one cartridge across all four paks.
+    void SetTransferPak(int port, const godot::String& rom_path, const godot::String& ram_path);
+    void ClearTransferPak(int port);
     /// Netplay: inject exact SRAM bytes applied at load instead of the file.
     void SetSramData(const godot::PackedByteArray& data);
     /// This machine saves to REMOVABLE media (a PSX memory card). With nothing

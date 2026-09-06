@@ -20,6 +20,7 @@
 #include <map>
 #include <set>
 #include <array>
+#include "TransferPakInterface.hpp"
 #include <deque>
 #include <iterator>
 #include <unordered_map>
@@ -276,6 +277,52 @@ public:
     void LoadSramBFromSource();
     /// Emu thread: write slot B's SRAM out iff it changed.
     void FlushSramBIfDirty(bool final_flush = false);
+
+    /// One Controller Pak's 32 KiB, bound to a file of its own inside the ONE
+    /// SAVE_RAM block both N64 cores publish. The paks are not separate memory
+    /// ids the way the Sufami Turbo's second cartridge is -- all four live in
+    /// the cartridge .srm at 0x800 + port * 0x8000 -- so a pak that travels
+    /// between controllers needs its bytes moved in and out of that slab by the
+    /// frontend at every seat and unseat. The core cannot: nx backs mempaks
+    /// with a read-only storage whose save is a no-op, so core-side writes never
+    /// persist and unplug_mempak moves nothing.
+    ///
+    /// `index` is the libretro port (0-3). An empty path unbinds, same as
+    /// ClearSramRegion.
+    void SetSramRegionPath(int index, const godot::String& path, int64_t offset, int64_t length);
+    void ClearSramRegion(int index);
+    /// Emu thread: overlay every bound region on top of SAVE_RAM. MUST run after
+    /// LoadSramFromSource, which fills the whole blob from the cartridge .srm
+    /// and would otherwise put stale pak bytes back over these.
+    void LoadSramRegionsFromSource();
+    /// Emu thread: write each bound region back to its own file iff it changed.
+    void FlushSramRegionsIfDirty(bool final_flush = false);
+    /// Emu thread: adopt any binding staged by SetSramRegionPath -- flush what
+    /// the port held, then fill SAVE_RAM from the new pak's file.
+    void ApplySramRegionSwaps();
+    void LoadSramRegion(int index);
+    void FlushSramRegionIfDirty(int index, bool final_flush = false);
+    /// The live SAVE_RAM window for one region, or nullptr when the core
+    /// has no such block or the region will not fit inside it.
+    uint8_t* SramRegionWindow(int index, size_t& out_len);
+
+    /// The Game Boy cartridge in the Transfer Pak on one controller's port, and
+    /// where that cartridge's battery lives. Answered to the core through
+    /// RETRO_ENVIRONMENT_GET_TRANSFER_PAK_INTERFACE, which is the only route
+    /// that is per PORT: the `gb` subsystem and the <rom>.gb sidecar both set
+    /// one pair of globals shared by all four paks.
+    ///
+    /// Setting a port bumps its generation, which is what makes the core re-read
+    /// a cartridge swapped while the pak stayed seated.
+    void SetTransferPak(int port, const godot::String& rom_path, const godot::String& ram_path);
+    void ClearTransferPak(int port);
+
+    /// Emu thread, called from the interface trampolines. The returned pointer
+    /// stays valid until the next call for the same port, which is the contract
+    /// the core copies under.
+    const char* TransferPakRomFor(unsigned port);
+    const char* TransferPakRamFor(unsigned port);
+    unsigned TransferPakGenerationFor(unsigned port);
 
     /// Front-panel reset: retro_reset on the emulation thread, between frames.
     /// Nothing is unloaded and no thread is joined, so this cannot block the
@@ -729,6 +776,36 @@ public:
     // StartContent, shadow touched only on the emulation thread.
     std::string m_sram_b_path;
     std::vector<uint8_t> m_sram_b_shadow;
+
+    // One Controller Pak per libretro port. path/offset/length are written from
+    // the main thread as paks are seated; the shadow is emulation-thread-only,
+    // exactly as SRAM's is.
+    struct SramRegion
+    {
+        std::string path;
+        size_t offset = 0;
+        size_t length = 0;
+        std::vector<uint8_t> shadow;
+    };
+    std::array<SramRegion, RETRO_TRANSFER_PAK_PORTS> m_sram_regions;
+    std::mutex m_sram_region_mutex;
+    // A pak seated by hand must take effect now, not at the next 600-frame
+    // flush tick, so the binding is staged here and adopted by the emulation
+    // thread at the top of the frame -- the same shape as the memory-card
+    // hot-swap, which cannot run on the caller's thread either.
+    std::array<SramRegion, RETRO_TRANSFER_PAK_PORTS> m_sram_region_pending;
+    std::array<bool, RETRO_TRANSFER_PAK_PORTS> m_sram_region_has_pending{};
+    std::atomic<bool> m_sram_region_dirty{false};
+
+    // Transfer Pak media, per port. Written from the main thread, read from the
+    // emulation thread by the interface trampolines, so the table is guarded and
+    // the returned strings are copied into views the emu thread alone owns.
+    std::array<std::string, RETRO_TRANSFER_PAK_PORTS> m_transfer_pak_rom;
+    std::array<std::string, RETRO_TRANSFER_PAK_PORTS> m_transfer_pak_ram;
+    std::array<unsigned, RETRO_TRANSFER_PAK_PORTS> m_transfer_pak_generation{};
+    std::array<std::string, RETRO_TRANSFER_PAK_PORTS> m_transfer_pak_rom_view;
+    std::array<std::string, RETRO_TRANSFER_PAK_PORTS> m_transfer_pak_ram_view;
+    std::mutex m_transfer_pak_mutex;
 
     std::string m_root_directory;
     std::string m_temp_directory;

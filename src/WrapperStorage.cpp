@@ -376,4 +376,216 @@ godot::Dictionary Wrapper::SnapshotMappedRam() const
     out["regions"] = regions;
     return out;
 }
+
+// -- Controller Paks: 32 KiB slices of the one SAVE_RAM block ----------------
+//
+// Ordering is the correctness constraint. LoadSramFromSource fills the WHOLE
+// blob from the cartridge .srm, pak bytes included, so every region must be
+// overlaid after it or a stale copy of the pak wins. FlushSramIfDirty then keeps
+// writing a duplicate of those bytes into the .srm, which is harmless only
+// because the overlay always runs last.
+
+void Wrapper::SetSramRegionPath(int index, const godot::String& path, int64_t offset, int64_t length)
+{
+    if (index < 0 || index >= RETRO_TRANSFER_PAK_PORTS)
+        return;
+    std::lock_guard<std::mutex> lock(m_sram_region_mutex);
+    SramRegion staged;
+    staged.path   = path.utf8().get_data();
+    staged.offset = offset > 0 ? static_cast<size_t>(offset) : 0;
+    staged.length = length > 0 ? static_cast<size_t>(length) : 0;
+    m_sram_region_pending[index]     = staged;
+    m_sram_region_has_pending[index] = true;
+    m_sram_region_dirty.store(true, std::memory_order_release);
+}
+
+void Wrapper::ClearSramRegion(int index)
+{
+    SetSramRegionPath(index, godot::String(), 0, 0);
+}
+
+void Wrapper::ApplySramRegionSwaps()
+{
+    if (!m_sram_region_dirty.exchange(false, std::memory_order_acq_rel))
+        return;
+
+    for (int i = 0; i < RETRO_TRANSFER_PAK_PORTS; ++i)
+    {
+        SramRegion staged;
+        {
+            std::lock_guard<std::mutex> lock(m_sram_region_mutex);
+            if (!m_sram_region_has_pending[i])
+                continue;
+            staged = m_sram_region_pending[i];
+            m_sram_region_has_pending[i] = false;
+        }
+        if (m_sram_regions[i].path == staged.path &&
+            m_sram_regions[i].offset == staged.offset &&
+            m_sram_regions[i].length == staged.length)
+            continue;
+
+        // Final for the outgoing pak: nothing writes to that file again for this
+        // seating, so a pak pulled mid-game keeps what was on it.
+        FlushSramRegionIfDirty(i, true);
+        m_sram_regions[i].path   = staged.path;
+        m_sram_regions[i].offset = staged.offset;
+        m_sram_regions[i].length = staged.length;
+        m_sram_regions[i].shadow.clear();
+        LoadSramRegion(i);
+        Log("PAK " + std::to_string(i) + ": bound " +
+            (staged.path.empty() ? std::string("<none>") : staged.path));
+    }
+}
+
+uint8_t* Wrapper::SramRegionWindow(int index, size_t& out_len)
+{
+    out_len = 0;
+    const SramRegion& r = m_sram_regions[index];
+    if (r.path.empty() || r.length == 0)
+        return nullptr;
+    if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+        return nullptr;
+    void* sram  = m_core->retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    if (sram == nullptr || size == 0)
+        return nullptr;
+    if (r.offset + r.length > size)
+    {
+        // Said out loud: a slip here does not error, it writes a perfectly valid
+        // pak image over the EEPROM or over the pak next door, and that is
+        // invisible from inside the game.
+        LogError("PAK " + std::to_string(index) + ": region " +
+                 std::to_string(r.offset) + "+" + std::to_string(r.length) +
+                 " does not fit in SAVE_RAM (" + std::to_string(size) + ")");
+        return nullptr;
+    }
+    out_len = r.length;
+    return static_cast<uint8_t*>(sram) + r.offset;
+}
+
+void Wrapper::LoadSramRegion(int index)
+{
+    size_t len = 0;
+    uint8_t* window = SramRegionWindow(index, len);
+    if (window == nullptr)
+        return;
+    SramRegion& r = m_sram_regions[index];
+
+    std::vector<uint8_t> bytes;
+    if (std::filesystem::is_regular_file(r.path))
+    {
+        std::ifstream file(r.path, std::ios::binary | std::ios::ate);
+        if (file)
+        {
+            std::streamsize on_disk = file.tellg();
+            file.seekg(0, std::ios::beg);
+            bytes.resize(static_cast<size_t>(on_disk));
+            file.read(reinterpret_cast<char*>(bytes.data()), on_disk);
+        }
+    }
+
+    if (bytes.empty())
+    {
+        // No image on disk. Leave whatever the cartridge .srm already held: a
+        // pak whose file has gone runs unbacked rather than wiping the port.
+        r.shadow.assign(window, window + len);
+        Log("PAK " + std::to_string(index) + ": no image at " + r.path + " (running unbacked)");
+        return;
+    }
+
+    size_t n = bytes.size() < len ? bytes.size() : len;
+    std::memcpy(window, bytes.data(), n);
+    r.shadow.assign(window, window + len);
+    Log("PAK " + std::to_string(index) + ": loaded " + std::to_string(n) + " bytes from " + r.path);
+}
+
+void Wrapper::LoadSramRegionsFromSource()
+{
+    for (int i = 0; i < RETRO_TRANSFER_PAK_PORTS; ++i)
+        LoadSramRegion(i);
+}
+
+void Wrapper::FlushSramRegionIfDirty(int index, bool final_flush)
+{
+    size_t len = 0;
+    uint8_t* window = SramRegionWindow(index, len);
+    if (window == nullptr)
+        return;
+    SramRegion& r = m_sram_regions[index];
+    if (r.shadow.size() == len && std::memcmp(r.shadow.data(), window, len) == 0)
+        return;   // unchanged
+
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(r.path).parent_path(), ec);
+    std::ofstream file(r.path, std::ios::binary | std::ios::trunc);
+    if (!file)
+    {
+        LogError("PAK " + std::to_string(index) + ": cannot write " + r.path);
+        return;
+    }
+    file.write(reinterpret_cast<const char*>(window), len);
+    file.close();
+    r.shadow.assign(window, window + len);
+    Log("PAK " + std::to_string(index) + ": flushed " + std::to_string(len) + " bytes to " + r.path);
+
+    if (Libretro* node = LiveLibretroNode())
+        node->NotifySramFlushed(
+            godot::String(r.path.c_str()), static_cast<int64_t>(len), final_flush);
+}
+
+void Wrapper::FlushSramRegionsIfDirty(bool final_flush)
+{
+    for (int i = 0; i < RETRO_TRANSFER_PAK_PORTS; ++i)
+        FlushSramRegionIfDirty(i, final_flush);
+}
+
+// -- Transfer Pak media, per port -------------------------------------------
+
+void Wrapper::SetTransferPak(int port, const godot::String& rom_path, const godot::String& ram_path)
+{
+    if (port < 0 || port >= RETRO_TRANSFER_PAK_PORTS)
+        return;
+    std::lock_guard<std::mutex> lock(m_transfer_pak_mutex);
+    std::string rom = rom_path.utf8().get_data();
+    std::string ram = ram_path.utf8().get_data();
+    if (m_transfer_pak_rom[port] == rom && m_transfer_pak_ram[port] == ram)
+        return;
+    m_transfer_pak_rom[port] = rom;
+    m_transfer_pak_ram[port] = ram;
+    // The core only re-reads a cartridge when the pak TYPE transitions, so a
+    // cartridge swapped while the pak stayed seated is invisible without this.
+    ++m_transfer_pak_generation[port];
+}
+
+void Wrapper::ClearTransferPak(int port)
+{
+    SetTransferPak(port, godot::String(), godot::String());
+}
+
+const char* Wrapper::TransferPakRomFor(unsigned port)
+{
+    if (port >= RETRO_TRANSFER_PAK_PORTS)
+        return nullptr;
+    std::lock_guard<std::mutex> lock(m_transfer_pak_mutex);
+    m_transfer_pak_rom_view[port] = m_transfer_pak_rom[port];
+    return m_transfer_pak_rom_view[port].empty() ? nullptr : m_transfer_pak_rom_view[port].c_str();
+}
+
+const char* Wrapper::TransferPakRamFor(unsigned port)
+{
+    if (port >= RETRO_TRANSFER_PAK_PORTS)
+        return nullptr;
+    std::lock_guard<std::mutex> lock(m_transfer_pak_mutex);
+    m_transfer_pak_ram_view[port] = m_transfer_pak_ram[port];
+    return m_transfer_pak_ram_view[port].empty() ? nullptr : m_transfer_pak_ram_view[port].c_str();
+}
+
+unsigned Wrapper::TransferPakGenerationFor(unsigned port)
+{
+    if (port >= RETRO_TRANSFER_PAK_PORTS)
+        return 0;
+    std::lock_guard<std::mutex> lock(m_transfer_pak_mutex);
+    return m_transfer_pak_generation[port];
+}
+
 }

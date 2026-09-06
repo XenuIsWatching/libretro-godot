@@ -149,6 +149,8 @@ static bool runloop_clear_all_thread_waits(uint32_t clear_threads, void* data)
     X(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE) \
     X(RETRO_ENVIRONMENT_GET_LINK_INTERFACE) \
     X(RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL) \
+    X(RETRO_ENVIRONMENT_GET_TRANSFER_PAK_INTERFACE) \
+    X(RETRO_ENVIRONMENT_GET_TRANSFER_PAK_INTERFACE_FINAL) \
     X(RETRO_ENVIRONMENT_GET_PLAYLIST_DIRECTORY) \
     X(RETRO_ENVIRONMENT_GET_FILE_BROWSER_START_DIRECTORY) \
     X(RETRO_ENVIRONMENT_RETROARCH_START_BLOCK) \
@@ -321,6 +323,8 @@ bool EnvironmentHandler::Callback(uint32_t cmd, void* data)
     // find the plain one if libretro ever assigns it.
     case RETRO_ENVIRONMENT_GET_LINK_INTERFACE:
     case RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL:                            return instance->m_environment_handler->GetLinkInterface(static_cast<retro_link_interface*>(data));
+    case RETRO_ENVIRONMENT_GET_TRANSFER_PAK_INTERFACE:
+    case RETRO_ENVIRONMENT_GET_TRANSFER_PAK_INTERFACE_FINAL:                     return instance->m_environment_handler->GetTransferPakInterface(static_cast<retro_transfer_pak_interface*>(data), instance);
     case RETRO_ENVIRONMENT_GET_PLAYLIST_DIRECTORY:                              return EnvironmentNotImplemented(cmd);
     case RETRO_ENVIRONMENT_GET_FILE_BROWSER_START_DIRECTORY:                    return EnvironmentNotImplemented(cmd);
     // custom environment commands
@@ -750,6 +754,45 @@ bool EnvironmentHandler::GetLinkInterface(retro_link_interface* link_interface)
     // it yet: with no peers the bus grants without bound, which is what lets a
     // core keep a single code path and still run standalone.
     *link_interface = *LinkCoordinator::Interface();
+    return true;
+}
+
+namespace
+{
+// The core calls these on the emulation thread while a pak is being populated.
+// frontend_data is the Wrapper that answered, so several cores in one process
+// each get their own table rather than sharing one set of globals -- which is
+// the whole reason this interface exists.
+const char* TransferPakRomTrampoline(void* frontend_data, unsigned port)
+{
+    return static_cast<Wrapper*>(frontend_data)->TransferPakRomFor(port);
+}
+
+const char* TransferPakRamTrampoline(void* frontend_data, unsigned port)
+{
+    return static_cast<Wrapper*>(frontend_data)->TransferPakRamFor(port);
+}
+
+unsigned TransferPakGenerationTrampoline(void* frontend_data, unsigned port)
+{
+    return static_cast<Wrapper*>(frontend_data)->TransferPakGenerationFor(port);
+}
+}
+
+bool EnvironmentHandler::GetTransferPakInterface(retro_transfer_pak_interface* iface, Wrapper* instance)
+{
+    if (!iface || !instance)
+    {
+        return false;
+    }
+
+    // Answered whether or not any pak is seated yet: a port with nothing in it
+    // returns NULL and the core treats that exactly as an empty pak, so the
+    // core keeps one code path and the frontend can seat a pak mid-game.
+    iface->frontend_data = instance;
+    iface->get_rom       = &TransferPakRomTrampoline;
+    iface->get_ram       = &TransferPakRamTrampoline;
+    iface->generation    = &TransferPakGenerationTrampoline;
     return true;
 }
 }

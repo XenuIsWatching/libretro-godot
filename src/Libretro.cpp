@@ -274,6 +274,30 @@ void Libretro::SetSramBPath(const godot::String& path)
     m_wrapper->SetSramBPath(path);
 }
 
+void Libretro::SetSramRegionPath(int index, const godot::String& path, int64_t offset, int64_t length)
+{
+    m_wrapper->SetSramRegionPath(index, path, offset, length);
+}
+
+
+void Libretro::ClearSramRegion(int index)
+{
+    m_wrapper->ClearSramRegion(index);
+}
+
+
+void Libretro::SetTransferPak(int port, const godot::String& rom_path, const godot::String& ram_path)
+{
+    m_wrapper->SetTransferPak(port, rom_path, ram_path);
+}
+
+
+void Libretro::ClearTransferPak(int port)
+{
+    m_wrapper->ClearTransferPak(port);
+}
+
+
 void Libretro::SetPackPath(const godot::String& path)
 {
     m_wrapper->SetPackPath(path);
@@ -593,6 +617,10 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetPackPath", "path"), &Libretro::SetPackPath);
     ClassDB::bind_method(D_METHOD("SetSramBPath", "path"), &Libretro::SetSramBPath);
+    ClassDB::bind_method(D_METHOD("SetSramRegionPath", "index", "path", "offset", "length"), &Libretro::SetSramRegionPath);
+    ClassDB::bind_method(D_METHOD("ClearSramRegion", "index"), &Libretro::ClearSramRegion);
+    ClassDB::bind_method(D_METHOD("SetTransferPak", "port", "rom_path", "ram_path"), &Libretro::SetTransferPak);
+    ClassDB::bind_method(D_METHOD("ClearTransferPak", "port"), &Libretro::ClearTransferPak);
     ClassDB::bind_method(D_METHOD("SetSramData", "data"), &Libretro::SetSramData);
     ClassDB::bind_method(D_METHOD("SetRemovableStorage", "removable"), &Libretro::SetRemovableStorage);
     ClassDB::bind_method(D_METHOD("RequestSramFlush"), &Libretro::RequestSramFlush);

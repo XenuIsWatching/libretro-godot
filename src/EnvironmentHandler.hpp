@@ -8,6 +8,7 @@
 #include <libretro.h>
 
 #include "LinkInterface.hpp"
+#include "TransferPakInterface.hpp"
 
 namespace Xenu
 {
@@ -115,5 +116,6 @@ private:
     bool GetThrottleState(retro_throttle_state* state);
     bool GetClearAllThreadWaitsCb(retro_environment_t* env);
     bool GetLinkInterface(retro_link_interface* link_interface);
+    bool GetTransferPakInterface(retro_transfer_pak_interface* iface, Wrapper* instance);
 };
 }
