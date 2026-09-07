@@ -552,6 +552,24 @@ void Wrapper::SetTransferPak(int port, const godot::String& rom_path, const godo
         return;
     m_transfer_pak_rom[port] = rom;
     m_transfer_pak_ram[port] = ram;
+
+    // The CORE opens this file, and it will not create the directory first: it
+    // calls write_to_file on the path we hand back and gives up. Every other
+    // save in this file is written by the frontend, which is why they all go
+    // through create_directories above -- this is the one path handed out for
+    // somebody else to open, so it is the one that has to be made ready here.
+    //
+    // Missed, the symptom is not a missing save. mupen64plus-core cannot write
+    // the cartridge's battery, so the pak reports itself unusable and the game
+    // says the Transfer Pak is not set properly and to check the connections --
+    // which reads like a seating bug in the room, not a mkdir.
+    if (!ram.empty())
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(ram).parent_path(), ec);
+        if (ec)
+            LogError("Transfer Pak: cannot create save directory for " + ram);
+    }
     // The core only re-reads a cartridge when the pak TYPE transitions, so a
     // cartridge swapped while the pak stayed seated is invisible without this.
     ++m_transfer_pak_generation[port];
