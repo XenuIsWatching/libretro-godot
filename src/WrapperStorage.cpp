@@ -570,9 +570,26 @@ void Wrapper::SetTransferPak(int port, const godot::String& rom_path, const godo
         if (ec)
             LogError("Transfer Pak: cannot create save directory for " + ram);
     }
-    // The core only re-reads a cartridge when the pak TYPE transitions, so a
-    // cartridge swapped while the pak stayed seated is invisible without this.
-    ++m_transfer_pak_generation[port];
+    // Only a swap made WHILE THE CORE IS RUNNING is a generation change.
+    //
+    // The core zeroes its own copy of these counters in retro_init and then
+    // signals a cartridge swap whenever ours disagrees. The initial set now
+    // happens BEFORE StartContent, so that the pak is present when the core
+    // first reads it -- but bumping there left the frontend on 1 against the
+    // core's 0, and the first poll after boot therefore reported a cartridge
+    // swap that never happened.
+    //
+    // That fires the delayed eject/insert underneath a game already reading the
+    // pak, and Pokemon Stadium answers a cartridge pulled mid-transfer with
+    // "The Transfer Pak is not set properly. Please turn the N64 Control Deck
+    // OFF and check all connections" -- which reads as a seating fault in the
+    // room and is actually this counter.
+    //
+    // A cartridge swapped while the pak stays seated still bumps, which is the
+    // case the counter exists for: the core only re-reads on a pak TYPE
+    // transition and would otherwise never notice.
+    if (m_running)
+        ++m_transfer_pak_generation[port];
 }
 
 void Wrapper::ClearTransferPak(int port)
