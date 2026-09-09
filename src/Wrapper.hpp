@@ -210,6 +210,12 @@ public:
     /// the session ships to the host for assembly.
     godot::PackedInt32Array TakeNetplayLocalRecords();
 
+    /// Core-specific ids for a machine's SECOND save region. libretro.h has one
+    /// save-RAM id, so a core that carries two publishes the other itself and
+    /// each picks its own number.
+    static constexpr unsigned SRAM_B_SUFAMI_TURBO = (4 << 8) | RETRO_MEMORY_SAVE_RAM;
+    static constexpr unsigned SRAM_B_PCSX_MEMCARD2 = (1 << 8) | RETRO_MEMORY_SAVE_RAM;
+
     // ── Battery saves (SRAM / RETRO_MEMORY_SAVE_RAM) ─────────────────────────
     // The frontend owns persistence: SRAM is loaded from m_sram_path right
     // after retro_load_game and flushed (dirty-checked) every ~10 s and at
@@ -272,11 +278,17 @@ public:
     ///
     /// Ordinary save semantics, unlike SetPackPath: this file is read back into
     /// the core at content load and written out again when it changes.
-    void SetSramBPath(const godot::String& path);
+    ///
+    /// `memory_id` says which region, because the id is the core's own and each
+    /// core picks a different number. Calling while running hot-swaps, as
+    /// SetSramPath does -- a PlayStation's second card can be pulled mid-game.
+    void SetSramBPath(const godot::String& path, unsigned memory_id = SRAM_B_SUFAMI_TURBO);
     /// Emu thread: fill slot B's SRAM from its file, and snapshot it.
     void LoadSramBFromSource();
     /// Emu thread: write slot B's SRAM out iff it changed.
     void FlushSramBIfDirty(bool final_flush = false);
+    /// Emu thread: flush the outgoing second region, then adopt a new one.
+    void ApplySramBSwap(const std::string& new_path, unsigned memory_id);
 
     /// One Controller Pak's 32 KiB, bound to a file of its own inside the ONE
     /// SAVE_RAM block both N64 cores publish. The paks are not separate memory
@@ -776,6 +788,7 @@ public:
     // StartContent, shadow touched only on the emulation thread.
     std::string m_sram_b_path;
     std::vector<uint8_t> m_sram_b_shadow;
+    unsigned m_sram_b_id = SRAM_B_SUFAMI_TURBO;
 
     // One Controller Pak per libretro port. path/offset/length are written from
     // the main thread as paks are seated; the shadow is emulation-thread-only,

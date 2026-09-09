@@ -115,6 +115,11 @@ void EmuThreadCommandSetSram::Execute(Wrapper& wrapper)
     wrapper.ApplySramSwap(m_path);
 }
 
+void EmuThreadCommandSetSramB::Execute(Wrapper& wrapper)
+{
+    wrapper.ApplySramBSwap(m_path, m_memory_id);
+}
+
 void EmuThreadCommandFlushSram::Execute(Wrapper& wrapper)
 {
     wrapper.FlushSramIfDirty();

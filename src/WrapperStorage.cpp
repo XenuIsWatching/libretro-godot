@@ -217,64 +217,82 @@ void Wrapper::FlushPackIfDirty(bool final_flush)
             godot::String(m_pack_path.c_str()), static_cast<int64_t>(size), final_flush);
 }
 
-/// snes9x's id for the SECOND cartridge in a Sufami Turbo. Core-specific, so it
-/// is not in libretro.h -- the core defines it in its own libretro.cpp, beside
-/// the A-slot id.
-///
-/// Note the A id is NOT used here, deliberately: the core answers it and plain
-/// RETRO_MEMORY_SAVE_RAM from the same switch case, so slot A is already covered
-/// by the ordinary SRAM path above and asking for it twice would write one
-/// cartridge's save to two files.
-static constexpr unsigned RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM = (4 << 8) | RETRO_MEMORY_SAVE_RAM;
+/// The A-slot id is deliberately never used for the Sufami Turbo: snes9x answers
+/// it and plain RETRO_MEMORY_SAVE_RAM from the same switch case, so slot A is
+/// already covered by the ordinary SRAM path above and asking for it twice would
+/// write one cartridge's save to two files. pcsx_rearmed is the same shape --
+/// SAVE_RAM is card 1, SRAM_B_PCSX_MEMCARD2 is card 2.
 
-void Wrapper::SetSramBPath(const godot::String& path)
+void Wrapper::SetSramBPath(const godot::String& path, unsigned memory_id)
 {
-    m_sram_b_path = path.utf8().get_data();
+    std::string p = path.utf8().get_data();
+    if (m_running)
+    {
+        m_emu_thread_commands_queue.enqueue(
+            std::make_unique<EmuThreadCommandSetSramB>(p, memory_id));
+        return;
+    }
+    m_sram_b_path = p;
+    m_sram_b_id = memory_id;
 }
 
-/// Emu thread: fill slot B's SRAM from its file, then snapshot it for the dirty
-/// check. Silent and harmless on every machine that has no second cartridge --
-/// the core answers size 0 for the id and there is nothing to do.
+/// Emu thread: fill the second region from its file, then snapshot it for the
+/// dirty check. Silent and harmless on every machine that has no second region
+/// -- the core answers size 0 for the id and there is nothing to do.
 void Wrapper::LoadSramBFromSource()
 {
     m_sram_b_shadow.clear();
-    if (m_sram_b_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
+    if (!m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
         return;
-    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
-    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    // No file and nothing removable to blank: this machine has no second region.
+    if (m_sram_b_path.empty() && !m_removable_storage)
+        return;
+    void* sram = m_core->retro_get_memory_data(m_sram_b_id);
+    size_t size = m_core->retro_get_memory_size(m_sram_b_id);
     if (sram == nullptr || size == 0)
     {
         // Said out loud, because "no second save was written" has two very
         // different causes and they look identical from outside: the core may
         // have no such region at all, or the game may simply not have touched it
         // yet. Only the first is a fault.
-        Log("SRAM B: core reports no second-cartridge region (nothing to save)");
+        Log("SRAM B: core reports no second region (nothing to save)");
         return;
     }
-    Log("SRAM B: watching " + std::to_string(size) + " bytes for " + m_sram_b_path);
 
-    if (std::filesystem::is_regular_file(m_sram_b_path))
+    if (!m_sram_b_path.empty())
     {
-        std::ifstream file(m_sram_b_path, std::ios::binary | std::ios::ate);
-        if (file)
+        Log("SRAM B: watching " + std::to_string(size) + " bytes for " + m_sram_b_path);
+        if (std::filesystem::is_regular_file(m_sram_b_path))
         {
-            size_t file_size = static_cast<size_t>(file.tellg());
-            file.seekg(0, std::ios::beg);
-            size_t n = std::min(size, file_size);
-            file.read(reinterpret_cast<char*>(sram), n);
-            Log("SRAM B: loaded " + std::to_string(n) + " bytes from " + m_sram_b_path);
+            std::ifstream file(m_sram_b_path, std::ios::binary | std::ios::ate);
+            if (file)
+            {
+                size_t file_size = static_cast<size_t>(file.tellg());
+                file.seekg(0, std::ios::beg);
+                size_t n = std::min(size, file_size);
+                file.read(reinterpret_cast<char*>(sram), n);
+                Log("SRAM B: loaded " + std::to_string(n) + " bytes from " + m_sram_b_path);
+            }
         }
+    }
+    else
+    {
+        // Same rule as SAVE_RAM's: an empty slot must report unformatted media,
+        // not the formatted card pcsx_rearmed hands back when the frontend
+        // supplies nothing.
+        std::memset(sram, 0, size);
+        Log("SRAM B: no removable media seated - region blanked");
     }
     m_sram_b_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
 }
 
-/// Emu thread: write slot B's SRAM to its own file iff it changed.
+/// Emu thread: write the second region to its own file iff it changed.
 void Wrapper::FlushSramBIfDirty(bool final_flush)
 {
     if (m_sram_b_path.empty() || !m_core || !m_core->retro_get_memory_data || !m_core->retro_get_memory_size)
         return;
-    void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
-    size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SNES_SUFAMI_TURBO_B_RAM);
+    void* sram = m_core->retro_get_memory_data(m_sram_b_id);
+    size_t size = m_core->retro_get_memory_size(m_sram_b_id);
     if (sram == nullptr || size == 0)
         return;
     if (m_sram_b_shadow.size() == size &&
@@ -297,6 +315,16 @@ void Wrapper::FlushSramBIfDirty(bool final_flush)
     if (Libretro* node = LiveLibretroNode())
         node->NotifySramFlushed(
             godot::String(m_sram_b_path.c_str()), static_cast<int64_t>(size), final_flush);
+}
+
+/// Emu thread: second-region hot-swap, the mirror of ApplySramSwap.
+void Wrapper::ApplySramBSwap(const std::string& new_path, unsigned memory_id)
+{
+    FlushSramBIfDirty(true);
+    m_sram_b_path = new_path;
+    m_sram_b_id = memory_id;
+    LoadSramBFromSource();
+    Log("SRAM B: swapped to " + (new_path.empty() ? std::string("<none>") : new_path));
 }
 
 void Wrapper::SetMemoryDescriptors(const retro_memory_map* memory_maps)

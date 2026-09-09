@@ -140,6 +140,22 @@ private:
     std::string m_path;
 };
 
+/// Hot-swap of the SECOND save region's file (a PlayStation's slot-2 card).
+class EmuThreadCommandSetSramB : public EmuThreadCommand
+{
+public:
+    EmuThreadCommandSetSramB(std::string path, unsigned memory_id)
+        : m_path(std::move(path)), m_memory_id(memory_id)
+    {
+    }
+
+    void Execute(Wrapper& wrapper) override;
+
+private:
+    std::string m_path;
+    unsigned m_memory_id;
+};
+
 /// Dirty-check flush of SRAM to its backing file, on demand.
 class EmuThreadCommandFlushSram : public EmuThreadCommand
 {

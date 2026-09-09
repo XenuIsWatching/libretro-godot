@@ -322,9 +322,12 @@ public:
     /// pack, whose .bs IS the flash the core mutates. Unlike SetSramPath there
     /// is no matching load: the content load already supplied the bytes.
     void SetPackPath(const godot::String& path);
-    /// The second cartridge's battery file, on a two-cartridge adapter.
-    /// See Wrapper::SetSramBPath for why it is a separate file.
-    void SetSramBPath(const godot::String& path);
+    /// The second save region's file, on a machine that carries two: a Sufami
+    /// Turbo's B cartridge or a PlayStation's slot-2 memory card. `memory_id` is
+    /// the core's own id for that region -- SRAM_B_SUFAMI_TURBO or
+    /// SRAM_B_PCSX_MEMCARD2. See Wrapper::SetSramBPath for why it is a separate
+    /// file.
+    void SetSramBPath(const godot::String& path, int64_t memory_id);
 
     /// Bind one Controller Pak's 32 KiB slice of the single SAVE_RAM block both
     /// N64 cores publish, to a file of its own. `index` is the libretro port.

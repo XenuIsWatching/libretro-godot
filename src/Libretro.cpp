@@ -269,9 +269,9 @@ void Libretro::SetSramPath(const godot::String& path)
 }
 
 
-void Libretro::SetSramBPath(const godot::String& path)
+void Libretro::SetSramBPath(const godot::String& path, int64_t memory_id)
 {
-    m_wrapper->SetSramBPath(path);
+    m_wrapper->SetSramBPath(path, static_cast<unsigned>(memory_id));
 }
 
 void Libretro::SetSramRegionPath(int index, const godot::String& path, int64_t offset, int64_t length)
@@ -616,7 +616,14 @@ void Libretro::_bind_methods()
     ClassDB::bind_method(D_METHOD("GetAudioBrakeMs"), &Libretro::GetAudioBrakeMs);
     ClassDB::bind_method(D_METHOD("SetSramPath", "path"), &Libretro::SetSramPath);
     ClassDB::bind_method(D_METHOD("SetPackPath", "path"), &Libretro::SetPackPath);
-    ClassDB::bind_method(D_METHOD("SetSramBPath", "path"), &Libretro::SetSramBPath);
+    ClassDB::bind_method(D_METHOD("SetSramBPath", "path", "memory_id"), &Libretro::SetSramBPath,
+        DEFVAL(static_cast<int64_t>(Wrapper::SRAM_B_SUFAMI_TURBO)));
+    // Named so a caller passes a region rather than a magic number; each core
+    // publishes its own id for a second save region.
+    ClassDB::bind_integer_constant(get_class_static(), StringName(),
+        "SRAM_B_SUFAMI_TURBO", Wrapper::SRAM_B_SUFAMI_TURBO);
+    ClassDB::bind_integer_constant(get_class_static(), StringName(),
+        "SRAM_B_PCSX_MEMCARD2", Wrapper::SRAM_B_PCSX_MEMCARD2);
     ClassDB::bind_method(D_METHOD("SetSramRegionPath", "index", "path", "offset", "length"), &Libretro::SetSramRegionPath);
     ClassDB::bind_method(D_METHOD("ClearSramRegion", "index"), &Libretro::ClearSramRegion);
     ClassDB::bind_method(D_METHOD("SetTransferPak", "port", "rom_path", "ram_path"), &Libretro::SetTransferPak);
