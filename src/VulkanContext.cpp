@@ -1054,6 +1054,7 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
         m_current_vk_image = VK_NULL_HANDLE;
         m_wait_semaphores.clear();
         m_new_image_pending = true;
+        m_image_retracted   = true;
         return;
     }
 
@@ -1075,6 +1076,7 @@ void VulkanContext::SetImage(const retro_vulkan_image* image,
     if (n_sems > 0)
         m_wait_semaphores.assign(sems, sems + n_sems);
     m_new_image_pending         = true;
+    m_image_retracted           = false;
 }
 
 VulkanContext::FrameWork VulkanContext::TakeFrameWork(
@@ -1093,6 +1095,7 @@ VulkanContext::FrameWork VulkanContext::TakeFrameWork(
     work.command_buffers.swap(m_pending_command_buffers);
     work.signal_semaphore = m_signal_semaphore;
     work.newly_published  = m_new_image_pending;
+    work.image_retracted  = m_image_retracted;
     m_signal_semaphore    = VK_NULL_HANDLE;
     m_new_image_pending   = false;
     return work;
@@ -1286,7 +1289,20 @@ bool VulkanContext::ReadbackToPixels(uint32_t width, uint32_t height, PackedByte
 
     if (image == VK_NULL_HANDLE)
     {
-        LogError("VulkanContext::ReadbackToPixels: no current image set");
+        // A core that RETRACTED its image is blanking the field on purpose, and
+        // says so by calling set_image(nullptr) before the refresh. LRPS2 does
+        // it whenever the PS2's PCRTC has nothing to merge - around every video
+        // mode change, which for Ace Combat 04 is 7% of frames - so logging it
+        // per frame buries the run. Only a refresh with no image the core never
+        // published at all is a protocol error, and that is worth one line.
+        const bool retracted = work.image_retracted;
+        if (!retracted && !m_logged_no_image)
+        {
+            m_logged_no_image = true;
+            LogWarning("VulkanContext::ReadbackToPixels: video_refresh with no "
+                       "image set and none retracted; keeping the last frame. "
+                       "Further occurrences are not logged.");
+        }
         SubmitFrameCompletionLocked(std::move(work), image, layout, range, src_family);
         return false;
     }

@@ -66,6 +66,9 @@ private:
         std::vector<VkCommandBuffer> command_buffers;
         VkSemaphore                 signal_semaphore = VK_NULL_HANDLE;
         bool                        newly_published  = false;
+        /// The core registered a NULL image for this frame - it is asking for a
+        /// blanked field, not failing to publish one. See ReadbackToPixels.
+        bool                        image_retracted  = false;
     };
 
     bool CreateStagingBuffer(VkDeviceSize size);
@@ -149,6 +152,10 @@ private:
     std::vector<VkSemaphore>     m_wait_semaphores;
     std::vector<VkCommandBuffer> m_pending_command_buffers;
     bool                         m_new_image_pending = false;
+    /// Set by SetImage(nullptr), cleared when a real image arrives. A PS2 whose
+    /// PCRTC has nothing to merge blanks the field this way (LRPS2's
+    /// GSDeviceVK::PresentRect), so it is ordinary traffic rather than a fault.
+    bool                         m_image_retracted   = false;
     VkSemaphore             m_signal_semaphore         = VK_NULL_HANDLE;
 
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
@@ -167,6 +174,9 @@ private:
     /// is 0 and would otherwise read as "already warned".
     mutable int64_t m_warned_format = -1;
     bool m_logged_src_queue_family    = false;
+    /// A refresh with no image the core never retracted is a protocol error, and
+    /// worth exactly one line rather than one per frame.
+    bool m_logged_no_image            = false;
 #ifdef _WIN32
     void* m_hidden_hwnd = nullptr;
 #endif
