@@ -89,6 +89,8 @@ private:
 
     uint32_t m_performance_level = 0;
     std::string m_system_directory;
+    bool m_system_directory_announced = false;
+    bool m_save_directory_announced = false;
     std::string m_save_directory;
     std::string m_core_assets_directory;
     retro_vfs_interface m_vfs_interface;

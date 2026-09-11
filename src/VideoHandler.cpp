@@ -446,7 +446,11 @@ bool VideoHandler::ReinitHwRenderContext(int32_t width, int32_t height)
 bool VideoHandler::InitHwRenderContext(int32_t width, int32_t height)
 {
     if (!m_context_reset)
+    {
+        Log("Software rendering: core requested no hardware context (" +
+            std::to_string(width) + "x" + std::to_string(height) + ")");
         return true;
+    }
 
 #ifdef _WIN32
     if (m_hw_context_type == RETRO_HW_CONTEXT_D3D11)

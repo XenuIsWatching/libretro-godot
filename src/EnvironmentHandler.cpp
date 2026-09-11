@@ -10,6 +10,8 @@
 #include <libretro_vulkan.h>
 
 #include <filesystem>
+#include <mutex>
+#include <unordered_set>
 
 #define VFS_FRONTEND
 #include <vfs/vfs_implementation.h>
@@ -188,12 +190,46 @@ static bool EnvironmentUnknown(uint32_t cmd)
     return false;
 }
 
+/// Cores that keep their own saves (bsnes, the PS2 cores) reach disk through
+/// this call and nowhere else, so it is the only place a frontend can learn
+/// where such a save went. Said once per path: bsnes reopens save.ram on a
+/// timer and a line per reopen would bury everything else.
+static libretro_vfs_implementation_file* VfsFileOpenLogged(const char* path, unsigned mode, unsigned hints)
+{
+    libretro_vfs_implementation_file* file = retro_vfs_file_open_impl(path, mode, hints);
+    if (path && (mode & RETRO_VFS_FILE_ACCESS_WRITE))
+    {
+        static std::mutex s_mutex;
+        static std::unordered_set<std::string> s_seen;
+        bool first = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            first = s_seen.insert(path).second;
+        }
+        if (first)
+        {
+            if (file)
+                Log(std::string("VFS: core opened for writing ") + path +
+                    ((mode & RETRO_VFS_FILE_ACCESS_UPDATE_EXISTING) ? " (update)" : " (truncate)"));
+            else
+                LogWarning(std::string("VFS: core failed to open for writing ") + path);
+        }
+    }
+    else if (!file && path && (hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS) == 0)
+    {
+        // A read that fails is usually a missing BIOS or disc; mostly harmless
+        // (cores probe optional files), so it is a plain line and not an error.
+        Log(std::string("VFS: core could not open ") + path);
+    }
+    return file;
+}
+
 EnvironmentHandler::EnvironmentHandler()
 {
     m_vfs_interface =
     {
         retro_vfs_file_get_path_impl,
-        retro_vfs_file_open_impl,
+        VfsFileOpenLogged,
         retro_vfs_file_close_impl,
         retro_vfs_file_size_impl,
         retro_vfs_file_tell_impl,
@@ -372,6 +408,11 @@ bool EnvironmentHandler::GetSystemDirectory(const char** directory)
         }
     }
 
+    if (!m_system_directory_announced)
+    {
+        m_system_directory_announced = true;
+        Log("System directory handed to core: " + m_system_directory);
+    }
     *directory = m_system_directory.c_str();
     return true;
 }
@@ -395,6 +436,11 @@ bool EnvironmentHandler::GetSaveDirectory(const char** directory)
         }
     }
 
+    if (!m_save_directory_announced)
+    {
+        m_save_directory_announced = true;
+        Log("Save directory handed to core: " + m_save_directory);
+    }
     *directory = m_save_directory.c_str();
     return true;
 }
@@ -679,20 +725,42 @@ uint32_t EnvironmentHandler::GetDiskImageCount() const
 
 bool EnvironmentHandler::SetDiskEjected(bool ejected)
 {
+    bool ok = false;
     if (m_disk_control_ext_callback.set_eject_state)
-        return m_disk_control_ext_callback.set_eject_state(ejected);
-    if (m_disk_control_callback.set_eject_state)
-        return m_disk_control_callback.set_eject_state(ejected);
-    return false;
+        ok = m_disk_control_ext_callback.set_eject_state(ejected);
+    else if (m_disk_control_callback.set_eject_state)
+        ok = m_disk_control_callback.set_eject_state(ejected);
+    else
+    {
+        LogWarning("Disk control: core has no set_eject_state");
+        return false;
+    }
+    if (ok)
+        Log(std::string("Disk control: tray ") + (ejected ? "opened" : "closed"));
+    else
+        LogWarning(std::string("Disk control: core refused to ") + (ejected ? "open" : "close") + " the tray");
+    return ok;
 }
 
 bool EnvironmentHandler::SetDiskImageIndex(uint32_t index)
 {
+    bool ok = false;
     if (m_disk_control_ext_callback.set_image_index)
-        return m_disk_control_ext_callback.set_image_index(index);
-    if (m_disk_control_callback.set_image_index)
-        return m_disk_control_callback.set_image_index(index);
-    return false;
+        ok = m_disk_control_ext_callback.set_image_index(index);
+    else if (m_disk_control_callback.set_image_index)
+        ok = m_disk_control_callback.set_image_index(index);
+    else
+    {
+        LogWarning("Disk control: core has no set_image_index");
+        return false;
+    }
+    if (ok)
+        Log("Disk control: image index " + std::to_string(index) + " of " +
+            std::to_string(GetDiskImageCount()) + " selected");
+    else
+        LogWarning("Disk control: core refused image index " + std::to_string(index) +
+                   " (" + std::to_string(GetDiskImageCount()) + " images)");
+    return ok;
 }
 
 bool EnvironmentHandler::ReplaceDiskImage(uint32_t index, const std::string& path)
@@ -700,11 +768,22 @@ bool EnvironmentHandler::ReplaceDiskImage(uint32_t index, const std::string& pat
     // Disc cores are need_fullpath, so a path-only game info suffices (this is
     // what RetroArch's "Load New Disc" sends for such cores).
     retro_game_info info = { path.c_str(), nullptr, 0, nullptr };
+    bool ok = false;
     if (m_disk_control_ext_callback.replace_image_index)
-        return m_disk_control_ext_callback.replace_image_index(index, &info);
-    if (m_disk_control_callback.replace_image_index)
-        return m_disk_control_callback.replace_image_index(index, &info);
-    return false;
+        ok = m_disk_control_ext_callback.replace_image_index(index, &info);
+    else if (m_disk_control_callback.replace_image_index)
+        ok = m_disk_control_callback.replace_image_index(index, &info);
+    else
+    {
+        LogWarning("Disk control: core has no replace_image_index");
+        return false;
+    }
+    if (ok)
+        Log("Disk control: image " + std::to_string(index) + " replaced with " + path);
+    else
+        LogWarning("Disk control: core refused to replace image " + std::to_string(index) +
+                   " with " + path);
+    return ok;
 }
 
 bool EnvironmentHandler::GetThrottleState(retro_throttle_state* state)

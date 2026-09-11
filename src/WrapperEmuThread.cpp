@@ -151,10 +151,18 @@ void Wrapper::EmulationThreadLoop()
             m_sram_pending = godot::PackedByteArray();
             if (context_initialized)
                 m_video_handler->NotifyContextDestroy();
+            // Each call announced BEFORE it is made: a core that will not unwind
+            // (Dolphin is one) hangs inside it, and the last line says which.
+            Log("Teardown: retro_unload_game...");
             m_core->retro_unload_game();
+            Log("Teardown: retro_unload_game returned");
         }
         if (core_initialized)
+        {
+            Log("Teardown: retro_deinit...");
             m_core->retro_deinit();
+            Log("Teardown: retro_deinit returned");
+        }
 
         SetCurrentThreadWrapper(nullptr);
         Log("Libretro thread stopped.");

@@ -18,14 +18,25 @@ void EmuThreadCommandSaveState::Execute(Wrapper& wrapper)
         {
             buffer.resize(static_cast<int64_t>(size));
             ok = wrapper.m_core->retro_serialize(buffer.ptrw(), size);
+            if (!ok)
+                LogWarning("SaveState: core refused retro_serialize (" + std::to_string(size) +
+                           " bytes) at frame " + std::to_string(frame));
         }
+        else
+        {
+            LogWarning("SaveState: core reports serialize_size 0 at frame " + std::to_string(frame));
+        }
+    }
+    else
+    {
+        LogWarning("SaveState: core does not export retro_serialize");
     }
 
     if (!ok)
-    {
-        LogWarning("SaveState failed (core does not support serialization?)");
         buffer = godot::PackedByteArray();
-    }
+    else
+        Log("SaveState: " + std::to_string(buffer.size()) + " bytes captured at frame " +
+            std::to_string(frame));
 
     godot::Array args;
     args.append(buffer);
@@ -41,11 +52,23 @@ void EmuThreadCommandSaveState::Abandon(Wrapper& wrapper)
 void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
 {
     bool ok = false;
-    if (wrapper.m_core && wrapper.m_core->retro_unserialize && m_data.size() > 0)
+    if (!wrapper.m_core || !wrapper.m_core->retro_unserialize)
+        LogWarning("LoadState: core does not export retro_unserialize");
+    else if (m_data.size() == 0)
+        LogWarning("LoadState: empty state buffer, nothing to restore");
+    else
+    {
         ok = wrapper.m_core->retro_unserialize(m_data.ptr(), static_cast<size_t>(m_data.size()));
+        if (!ok)
+            LogWarning("LoadState: core refused retro_unserialize (" + std::to_string(m_data.size()) +
+                       " bytes) for frame " + std::to_string(m_frame));
+    }
 
     if (ok)
     {
+        Log("LoadState: " + std::to_string(m_data.size()) + " bytes restored, frame counter " +
+            std::to_string(wrapper.m_frame_counter.load(std::memory_order_relaxed)) + " -> " +
+            std::to_string(m_frame) + "; netplay schedule and disc schedule reset");
         // Restart the netplay schedule from the state's frame, including the
         // rollback bookkeeping (this runs on the emulation thread, which owns
         // the states/used/crc structures).
@@ -59,10 +82,6 @@ void EmuThreadCommandLoadState::Execute(Wrapper& wrapper)
         wrapper.m_np_local_records.clear();
         wrapper.m_disc_schedule.clear();
         wrapper.m_frame_counter.store(m_frame, std::memory_order_relaxed);
-    }
-    else
-    {
-        LogWarning("LoadState failed");
     }
 
     godot::Array args;

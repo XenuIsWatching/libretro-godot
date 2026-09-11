@@ -21,14 +21,17 @@ void Wrapper::SetSramPath(const godot::String& path)
     {
         // Hot-swap on the emulation thread (memory-card insert/remove).
         m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandSetSram>(p));
+        Log("SRAM: hot-swap queued to " + (p.empty() ? std::string("<none>") : p));
         return;
     }
     m_sram_path = p;
+    Log("SRAM: path set to " + (p.empty() ? std::string("<none>") : p));
 }
 
 void Wrapper::SetSramData(const godot::PackedByteArray& data)
 {
     m_sram_pending = data;
+    Log("SRAM: " + std::to_string(data.size()) + " injected bytes pending for the next content load");
 }
 
 void Wrapper::SetRemovableStorage(bool removable)
@@ -39,7 +42,11 @@ void Wrapper::SetRemovableStorage(bool removable)
 void Wrapper::RequestSramFlush()
 {
     if (m_core && m_running)
+    {
         m_emu_thread_commands_queue.enqueue(std::make_unique<EmuThreadCommandFlushSram>());
+        return;
+    }
+    Log("SRAM: flush requested with no running core - nothing to flush");
 }
 
 /// Emu thread: fill SAVE_RAM from the pending bytes (netplay) or the backing
@@ -52,7 +59,15 @@ void Wrapper::LoadSramFromSource()
     void* sram = m_core->retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
     size_t size = m_core->retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
     if (sram == nullptr || size == 0)
+    {
+        // A path with no region behind it is the bsnes shape: the core saves
+        // through its own VFS and nothing written here will ever reach disk.
+        if (!m_sram_path.empty() || m_sram_pending.size() > 0)
+            LogWarning("SRAM: core exposes no SAVE_RAM region - " +
+                       (m_sram_path.empty() ? std::string("injected bytes dropped")
+                                            : m_sram_path + " will never be written"));
         return;
+    }
 
     if (m_sram_pending.size() > 0)
     {
@@ -70,8 +85,24 @@ void Wrapper::LoadSramFromSource()
             file.seekg(0, std::ios::beg);
             size_t n = std::min(size, file_size);
             file.read(reinterpret_cast<char*>(sram), n);
-            Log("SRAM: loaded " + std::to_string(n) + " bytes from " + m_sram_path);
+            if (!file)
+                LogError("SRAM: short read from " + m_sram_path + " (" +
+                         std::to_string(file.gcount()) + " of " + std::to_string(n) + " bytes)");
+            else
+                Log("SRAM: loaded " + std::to_string(n) + " bytes from " + m_sram_path);
+            if (file_size != size)
+                LogWarning("SRAM: " + m_sram_path + " is " + std::to_string(file_size) +
+                           " bytes but the core's region is " + std::to_string(size));
         }
+        else
+        {
+            LogError("SRAM: cannot open " + m_sram_path + " for reading");
+        }
+    }
+    else if (!m_sram_path.empty())
+    {
+        Log("SRAM: no file yet at " + m_sram_path + " (fresh save, " +
+            std::to_string(size) + " byte region)");
     }
     else if (m_removable_storage)
     {
@@ -98,10 +129,18 @@ void Wrapper::FlushSramIfDirty(bool final_flush)
         return;
     if (m_sram_shadow.size() == size &&
         std::memcmp(m_sram_shadow.data(), sram, size) == 0)
-        return;   // unchanged
+    {
+        // Only said at shutdown: the periodic check runs every 600 frames and
+        // "unchanged" is its normal answer.
+        if (final_flush)
+            Log("SRAM: unchanged since last flush, " + m_sram_path + " left as is");
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(m_sram_path).parent_path(), ec);
+    if (ec)
+        LogWarning("SRAM: cannot create directory for " + m_sram_path + " - " + ec.message());
     std::ofstream file(m_sram_path, std::ios::binary | std::ios::trunc);
     if (!file)
     {
@@ -110,8 +149,17 @@ void Wrapper::FlushSramIfDirty(bool final_flush)
     }
     file.write(static_cast<const char*>(sram), size);
     file.close();
+    if (!file)
+    {
+        // The shadow is deliberately NOT updated: the next check sees the same
+        // dirty bytes and tries again rather than believing a truncated file.
+        LogError("SRAM: short write to " + m_sram_path + " (" + std::to_string(size) +
+                 " bytes wanted); will retry on the next flush");
+        return;
+    }
     m_sram_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
-    Log("SRAM: flushed " + std::to_string(size) + " bytes to " + m_sram_path);
+    Log("SRAM: flushed " + std::to_string(size) + " bytes to " + m_sram_path +
+        (final_flush ? " (final)" : ""));
 
     // Closed above so the file is complete on disk before anyone is told about
     // it; a listener that uploads must never read a half-written save.
@@ -180,7 +228,11 @@ void Wrapper::FlushPackIfDirty(bool final_flush)
         return;
     if (m_pack_shadow.size() == size &&
         std::memcmp(m_pack_shadow.data(), pack, size) == 0)
-        return;   // unchanged
+    {
+        if (final_flush)
+            Log("Pack: unchanged, " + m_pack_path + " left as is");
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::path target(m_pack_path);
@@ -210,7 +262,8 @@ void Wrapper::FlushPackIfDirty(bool final_flush)
         return;
     }
     m_pack_shadow.assign(static_cast<uint8_t*>(pack), static_cast<uint8_t*>(pack) + size);
-    Log("Pack: flushed " + std::to_string(size) + " bytes to " + m_pack_path);
+    Log("Pack: flushed " + std::to_string(size) + " bytes to " + m_pack_path +
+        (final_flush ? " (final)" : ""));
 
     if (Libretro* node = LiveLibretroNode())
         node->NotifySramFlushed(
@@ -230,10 +283,14 @@ void Wrapper::SetSramBPath(const godot::String& path, unsigned memory_id)
     {
         m_emu_thread_commands_queue.enqueue(
             std::make_unique<EmuThreadCommandSetSramB>(p, memory_id));
+        Log("SRAM B: hot-swap queued to " + (p.empty() ? std::string("<none>") : p) +
+            " (memory id " + std::to_string(memory_id) + ")");
         return;
     }
     m_sram_b_path = p;
     m_sram_b_id = memory_id;
+    Log("SRAM B: path set to " + (p.empty() ? std::string("<none>") : p) +
+        " (memory id " + std::to_string(memory_id) + ")");
 }
 
 /// Emu thread: fill the second region from its file, then snapshot it for the
@@ -271,8 +328,22 @@ void Wrapper::LoadSramBFromSource()
                 file.seekg(0, std::ios::beg);
                 size_t n = std::min(size, file_size);
                 file.read(reinterpret_cast<char*>(sram), n);
-                Log("SRAM B: loaded " + std::to_string(n) + " bytes from " + m_sram_b_path);
+                if (!file)
+                    LogError("SRAM B: short read from " + m_sram_b_path);
+                else
+                    Log("SRAM B: loaded " + std::to_string(n) + " bytes from " + m_sram_b_path);
+                if (file_size != size)
+                    LogWarning("SRAM B: " + m_sram_b_path + " is " + std::to_string(file_size) +
+                               " bytes but the core's region is " + std::to_string(size));
             }
+            else
+            {
+                LogError("SRAM B: cannot open " + m_sram_b_path + " for reading");
+            }
+        }
+        else
+        {
+            Log("SRAM B: no file yet at " + m_sram_b_path + " (fresh save)");
         }
     }
     else
@@ -297,10 +368,16 @@ void Wrapper::FlushSramBIfDirty(bool final_flush)
         return;
     if (m_sram_b_shadow.size() == size &&
         std::memcmp(m_sram_b_shadow.data(), sram, size) == 0)
-        return;   // unchanged
+    {
+        if (final_flush)
+            Log("SRAM B: unchanged since last flush, " + m_sram_b_path + " left as is");
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(m_sram_b_path).parent_path(), ec);
+    if (ec)
+        LogWarning("SRAM B: cannot create directory for " + m_sram_b_path + " - " + ec.message());
     std::ofstream file(m_sram_b_path, std::ios::binary | std::ios::trunc);
     if (!file)
     {
@@ -309,8 +386,14 @@ void Wrapper::FlushSramBIfDirty(bool final_flush)
     }
     file.write(static_cast<const char*>(sram), size);
     file.close();
+    if (!file)
+    {
+        LogError("SRAM B: short write to " + m_sram_b_path + "; will retry on the next flush");
+        return;
+    }
     m_sram_b_shadow.assign(static_cast<uint8_t*>(sram), static_cast<uint8_t*>(sram) + size);
-    Log("SRAM B: flushed " + std::to_string(size) + " bytes to " + m_sram_b_path);
+    Log("SRAM B: flushed " + std::to_string(size) + " bytes to " + m_sram_b_path +
+        (final_flush ? " (final)" : ""));
 
     if (Libretro* node = LiveLibretroNode())
         node->NotifySramFlushed(
@@ -509,6 +592,15 @@ void Wrapper::LoadSramRegion(int index)
             file.seekg(0, std::ios::beg);
             bytes.resize(static_cast<size_t>(on_disk));
             file.read(reinterpret_cast<char*>(bytes.data()), on_disk);
+            if (!file)
+            {
+                LogError("PAK " + std::to_string(index) + ": short read from " + r.path);
+                bytes.clear();
+            }
+        }
+        else
+        {
+            LogError("PAK " + std::to_string(index) + ": cannot open " + r.path + " for reading");
         }
     }
 
@@ -525,6 +617,9 @@ void Wrapper::LoadSramRegion(int index)
     std::memcpy(window, bytes.data(), n);
     r.shadow.assign(window, window + len);
     Log("PAK " + std::to_string(index) + ": loaded " + std::to_string(n) + " bytes from " + r.path);
+    if (bytes.size() != len)
+        LogWarning("PAK " + std::to_string(index) + ": " + r.path + " is " +
+                   std::to_string(bytes.size()) + " bytes but the region is " + std::to_string(len));
 }
 
 void Wrapper::LoadSramRegionsFromSource()
@@ -541,10 +636,17 @@ void Wrapper::FlushSramRegionIfDirty(int index, bool final_flush)
         return;
     SramRegion& r = m_sram_regions[index];
     if (r.shadow.size() == len && std::memcmp(r.shadow.data(), window, len) == 0)
-        return;   // unchanged
+    {
+        if (final_flush)
+            Log("PAK " + std::to_string(index) + ": unchanged, " + r.path + " left as is");
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(r.path).parent_path(), ec);
+    if (ec)
+        LogWarning("PAK " + std::to_string(index) + ": cannot create directory for " + r.path +
+                   " - " + ec.message());
     std::ofstream file(r.path, std::ios::binary | std::ios::trunc);
     if (!file)
     {
@@ -553,8 +655,15 @@ void Wrapper::FlushSramRegionIfDirty(int index, bool final_flush)
     }
     file.write(reinterpret_cast<const char*>(window), len);
     file.close();
+    if (!file)
+    {
+        LogError("PAK " + std::to_string(index) + ": short write to " + r.path +
+                 "; will retry on the next flush");
+        return;
+    }
     r.shadow.assign(window, window + len);
-    Log("PAK " + std::to_string(index) + ": flushed " + std::to_string(len) + " bytes to " + r.path);
+    Log("PAK " + std::to_string(index) + ": flushed " + std::to_string(len) + " bytes to " + r.path +
+        (final_flush ? " (final)" : ""));
 
     if (Libretro* node = LiveLibretroNode())
         node->NotifySramFlushed(
@@ -580,6 +689,8 @@ void Wrapper::SetTransferPak(int port, const godot::String& rom_path, const godo
         return;
     m_transfer_pak_rom[port] = rom;
     m_transfer_pak_ram[port] = ram;
+    Log("Transfer Pak " + std::to_string(port) + ": rom=" + (rom.empty() ? std::string("<none>") : rom) +
+        " ram=" + (ram.empty() ? std::string("<none>") : ram));
 
     // The CORE opens this file, and it will not create the directory first: it
     // calls write_to_file on the path we hand back and gives up. Every other
